@@ -31,20 +31,28 @@
 
 ## Currently working setup steps
 0. Create azure_config.env from the azure_config.env.template file, fill in desired params, leave auto-marked params blank.
+02. Run data creation scripts:
+```bash
+uv run python3 generate_alert_stream.py
+uv run python3 generate_routing_data.py
+uv run python3 generate_tickets.py
+uv run python3 generate_topology_data.py
+```
 1. Run deployment scripts: 
 ```bash
 azd up -e myenvname (This will name both the env and the resource group)
 uv run python3 create_runbook_indexer.py
 uv run python3 create_tickets_indexer.py
 uv run python3 provision_lakehouse.py
-uv run python3 provision_ontology.py # (to confirm if working)
+uv run python3 provision_eventhouse.py
+uv run python3 provision_ontology.py
 ```
 2. Manually create anomaly detectors
 3. Manually create agents using the prompts in /data/prompts
 
 ## TO DO - Automation Tasks 
 1. ~~Bug fix provision_ontology.py - Why doesn't graph materialize?~~
-2. Auto fill eventhouse tables
+2. ~~Auto fill eventhouse tables~~
 3. Auto create fabric data agents for telemetry and graph
 4. Auto create anomaly detectors 
 5. Automatically define multi-agent workflow (using yaml rather than pure python SDK)
