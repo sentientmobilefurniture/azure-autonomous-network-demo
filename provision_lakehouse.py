@@ -1,13 +1,13 @@
 """
-Provision Fabric Workspace with Lakehouse and Eventhouse, upload data.
+Provision Fabric Workspace with Lakehouse, upload data.
 
 Automates Step 1.4 from the implementation plan:
   1. Create Fabric workspace and attach capacity
   2. Create Lakehouse (NetworkTopologyLH)
-  3. Create Eventhouse (NetworkTelemetryEH_3117)
-  4. Upload CSVs to Lakehouse Files via OneLake
-  5. Load each CSV into a managed delta table via Lakehouse Tables API
-  6. Ingest AlertStream + LinkTelemetry into Eventhouse KQL DB
+  3. Upload CSVs to Lakehouse Files via OneLake
+  4. Load each CSV into a managed delta table via Lakehouse Tables API
+
+For Eventhouse provisioning, see provision_eventhouse.py.
 
 Prerequisites:
   - Fabric capacity deployed (Step 1.3 via azd up)
@@ -16,10 +16,9 @@ Prerequisites:
   - azure_config.env populated
 
 Usage:
-  uv run provision_fabric.py
+  uv run provision_lakehouse.py
 """
 
-import json
 import os
 import sys
 import time
@@ -42,11 +41,9 @@ WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
 CAPACITY_ID = os.getenv("FABRIC_CAPACITY_ID", "")  # UUID of Fabric capacity
 
 LAKEHOUSE_NAME = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
-EVENTHOUSE_NAME = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH_3117")
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 LAKEHOUSE_CSV_DIR = os.path.join(DATA_DIR, "lakehouse")
-EVENTHOUSE_CSV_DIR = os.path.join(DATA_DIR, "eventhouse")
 
 # CSV files to upload to Lakehouse → load as delta tables
 LAKEHOUSE_TABLES = [
@@ -60,12 +57,6 @@ LAKEHOUSE_TABLES = [
     "DimSLAPolicy",
     "FactMPLSPathHops",
     "FactServiceDependency",
-]
-
-# CSV files to ingest into Eventhouse KQL DB
-EVENTHOUSE_TABLES = [
-    "AlertStream",
-    "LinkTelemetry",
 ]
 
 
@@ -182,40 +173,6 @@ class FabricClient:
         )
         return self._wait_for_lro(r, f"Create Lakehouse '{name}'")
 
-    # --- Eventhouse ---
-
-    def find_eventhouse(self, workspace_id: str, name: str) -> dict | None:
-        r = requests.get(f"{FABRIC_API}/workspaces/{workspace_id}/eventhouses", headers=self.headers)
-        r.raise_for_status()
-        for item in r.json().get("value", []):
-            if item["displayName"] == name:
-                return item
-        return None
-
-    def create_eventhouse(self, workspace_id: str, name: str) -> dict:
-        body = {"displayName": name, "description": f"Eventhouse for {WORKSPACE_NAME}"}
-        r = requests.post(
-            f"{FABRIC_API}/workspaces/{workspace_id}/eventhouses", headers=self.headers, json=body
-        )
-        return self._wait_for_lro(r, f"Create Eventhouse '{name}'")
-
-    # --- KQL Database ---
-
-    def find_kql_database(self, workspace_id: str, eventhouse_id: str) -> dict | None:
-        """Find the default KQL database created with the Eventhouse."""
-        r = requests.get(
-            f"{FABRIC_API}/workspaces/{workspace_id}/kqlDatabases", headers=self.headers
-        )
-        r.raise_for_status()
-        for db in r.json().get("value", []):
-            # The default KQL DB has the same name as the Eventhouse
-            props = db.get("properties", {})
-            if props.get("parentEventhouseItemId") == eventhouse_id:
-                return db
-        # Fallback: return first one
-        dbs = r.json().get("value", [])
-        return dbs[0] if dbs else None
-
     # --- Lakehouse Table Loading ---
 
     def load_table(
@@ -260,40 +217,6 @@ def upload_csvs_to_onelake(
         print(f"  ✓ Uploaded {name}.csv → OneLake Files/")
 
 
-def upload_and_ingest_eventhouse(
-    workspace_name: str, eventhouse_name: str, csv_dir: str, file_names: list[str]
-):
-    """Upload CSV files to Eventhouse KQL DB via OneLake or print KQL ingest commands."""
-    print("\n  To ingest data into Eventhouse KQL DB, run these KQL commands")
-    print("  in the KQL Queryset (or use the Eventhouse UI to upload CSV):\n")
-
-    for name in file_names:
-        file_path = os.path.join(csv_dir, f"{name}.csv")
-        if not os.path.exists(file_path):
-            print(f"  ⚠ Skipping {name}.csv — file not found")
-            continue
-
-        # Read header to generate table schema
-        with open(file_path) as f:
-            header = f.readline().strip().split(",")
-
-        # Generate .create table command
-        # Infer basic types from known columns
-        type_map = {
-            "AlertId": "string", "Timestamp": "datetime", "SourceNodeId": "string",
-            "SourceNodeType": "string", "AlertType": "string", "Severity": "string",
-            "Description": "string", "OpticalPowerDbm": "real", "BitErrorRate": "real",
-            "CPUUtilPct": "real", "PacketLossPct": "real",
-            "LinkId": "string", "UtilizationPct": "real", "LatencyMs": "real",
-        }
-        columns = ", ".join(f"{col}: {type_map.get(col, 'string')}" for col in header)
-
-        print(f"  // --- {name} ---")
-        print(f"  .create table {name} ({columns})\n")
-
-    print("  Then use 'Get data' > 'Local file' in the Eventhouse UI to upload each CSV.\n")
-
-
 def main():
     client = FabricClient()
 
@@ -332,35 +255,13 @@ def main():
     lakehouse_id = lh["id"]
 
     # ------------------------------------------------------------------
-    # 3. Eventhouse
-    # ------------------------------------------------------------------
-    print(f"\n--- Eventhouse: {EVENTHOUSE_NAME} ---")
-
-    eh = client.find_eventhouse(workspace_id, EVENTHOUSE_NAME)
-    if eh:
-        print(f"  ✓ Eventhouse already exists: {eh['id']}")
-    else:
-        eh = client.create_eventhouse(workspace_id, EVENTHOUSE_NAME)
-        print(f"  ✓ Eventhouse created: {eh['id']}")
-
-    eventhouse_id = eh["id"]
-
-    # Get KQL DB info
-    kql_db = client.find_kql_database(workspace_id, eventhouse_id)
-    if kql_db:
-        print(f"  ✓ KQL Database: {kql_db['displayName']} ({kql_db['id']})")
-        query_uri = kql_db.get("properties", {}).get("queryServiceUri", "")
-        if query_uri:
-            print(f"  ✓ Query URI: {query_uri}")
-
-    # ------------------------------------------------------------------
-    # 4. Upload CSVs to Lakehouse Files/
+    # 3. Upload CSVs to Lakehouse Files/
     # ------------------------------------------------------------------
     print(f"\n--- Uploading CSVs to Lakehouse OneLake ---")
     upload_csvs_to_onelake(WORKSPACE_NAME, LAKEHOUSE_NAME, LAKEHOUSE_CSV_DIR, LAKEHOUSE_TABLES)
 
     # ------------------------------------------------------------------
-    # 5. Load each CSV into managed delta table
+    # 4. Load each CSV into managed delta table
     # ------------------------------------------------------------------
     print(f"\n--- Loading CSVs into managed delta tables ---")
     for table_name in LAKEHOUSE_TABLES:
@@ -369,33 +270,21 @@ def main():
         print(f"  ✓ Loaded table: {table_name}")
 
     # ------------------------------------------------------------------
-    # 6. Eventhouse data ingestion
-    # ------------------------------------------------------------------
-    print(f"\n--- Eventhouse data ingestion ---")
-    upload_and_ingest_eventhouse(
-        WORKSPACE_NAME, EVENTHOUSE_NAME, EVENTHOUSE_CSV_DIR, EVENTHOUSE_TABLES
-    )
-
-    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     print("=" * 60)
     print("✅ Fabric provisioning complete!")
     print(f"   Workspace : {WORKSPACE_NAME} ({workspace_id})")
     print(f"   Lakehouse : {LAKEHOUSE_NAME} ({lakehouse_id})")
-    print(f"   Eventhouse: {EVENTHOUSE_NAME} ({eventhouse_id})")
     print("=" * 60)
+    print("\n  Next: run 'uv run provision_eventhouse.py' for Eventhouse setup")
 
     # Save IDs to azure_config.env
     env_file = os.path.join(os.path.dirname(__file__), "azure_config.env")
     env_additions = {
         "FABRIC_WORKSPACE_ID": workspace_id,
         "FABRIC_LAKEHOUSE_ID": lakehouse_id,
-        "FABRIC_EVENTHOUSE_ID": eventhouse_id,
     }
-    if kql_db:
-        env_additions["FABRIC_KQL_DB_ID"] = kql_db["id"]
-        env_additions["FABRIC_KQL_DB_NAME"] = kql_db["displayName"]
 
     if os.path.exists(env_file):
         with open(env_file) as f:

@@ -178,7 +178,7 @@ TICKETS_CONTAINER_NAME=$TICKETS_CONT
 FABRIC_SKU=$FABRIC_SKU_VAL
 AZURE_FABRIC_ADMIN=$FABRIC_ADMIN_VAL
 
-# --- Fabric resource names (USER: edit before running provision_fabric.py) ---
+# --- Fabric resource names (USER: edit before running provision_lakehouse.py) ---
 FABRIC_WORKSPACE_NAME=$FABRIC_WS
 FABRIC_LAKEHOUSE_NAME=$LAKEHOUSE
 FABRIC_EVENTHOUSE_NAME=$EVENTHOUSE

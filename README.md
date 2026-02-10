@@ -31,17 +31,16 @@
 
 ## Currently working setup steps
 0. Create azure_config.env from the azure_config.env.template file, fill in desired params, leave auto-marked params blank.
-1. Run: 
+1. Run deployment scripts: 
 ```bash
 azd up -e myenvname (This will name both the env and the resource group)
 uv run python3 create_runbook_indexer.py
 uv run python3 create_tickets_indexer.py
-uv run python3 provision_fabric.py
+uv run python3 provision_lakehouse.py
 uv run python3 provision_ontology.py # (to confirm if working)
 ```
-2. Automatically create ontology
-3. Manually create anomaly detectors
-4. Manually create agents using the prompts in /data/prompts
+2. Manually create anomaly detectors
+3. Manually create agents using the prompts in /data/prompts
 
 ## TO DO - Automation Tasks 
 1. ~~Bug fix provision_ontology.py - Why doesn't graph materialize?~~

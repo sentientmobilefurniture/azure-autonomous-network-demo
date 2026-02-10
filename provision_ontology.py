@@ -9,7 +9,7 @@ Creates the NetworkTopologyOntology item with:
   - 7 relationship types with contextualizations (edge data bindings)
 
 Prerequisites:
-  - provision_fabric.py has run (workspace, lakehouse, eventhouse exist)
+  - provision_lakehouse.py + provision_eventhouse.py have run
   - azure_config.env populated with FABRIC_WORKSPACE_ID, FABRIC_LAKEHOUSE_ID, etc.
   - Lakehouse tables loaded (managed delta tables)
   - Eventhouse tables created and ingested (AlertStream, LinkTelemetry)
@@ -657,7 +657,7 @@ def build_definition_parts(
 
 
 # ---------------------------------------------------------------------------
-# Fabric API client (reuses pattern from provision_fabric.py)
+# Fabric API client (reuses pattern from provision_lakehouse.py)
 # ---------------------------------------------------------------------------
 
 class FabricClient:
@@ -802,7 +802,7 @@ def main():
         missing.append("FABRIC_EVENTHOUSE_ID")
     if missing:
         print(f"✗ Missing env vars: {', '.join(missing)}")
-        print("  Run provision_fabric.py first and populate azure_config.env")
+        print("  Run provision_lakehouse.py first and populate azure_config.env")
         sys.exit(1)
 
     client = FabricClient()
