@@ -31,17 +31,30 @@
 
 ## Currently working setup steps
 0. Create azure_config.env from the azure_config.env.template file, fill in desired params, leave auto-marked params blank.
-1. azd up -e myenvname (This will name both the env and the resource group)
-2. uv run python3 create_runbook_indexer.py
-3. uv run python3 create_tickets_indexer.py
-4. uv run python3 provision_fabric.py
-5. uv run python3 provision_ontology.py (to test if working)
-5. Manually create ontology in Microsoft Fabric UI, manually create fabric data agents, manually upload eventhouse telemetry
-6. Manually create anomaly detectors
-7. Manually create agents using the prompts in /data/prompts
+1. Run: 
+```bash
+azd up -e myenvname (This will name both the env and the resource group)
+uv run python3 create_runbook_indexer.py
+uv run python3 create_tickets_indexer.py
+uv run python3 provision_fabric.py
+uv run python3 provision_ontology.py # (to confirm if working)
+```
+2. Manually create ontology in Microsoft Fabric UI, manually create fabric data agents, manually upload eventhouse telemetry
+3. Manually create anomaly detectors
+4. Manually create agents using the prompts in /data/prompts
 
 ## TO DO - Automation Tasks 
-1. Bug fix provision_ontology.py - Why doesn't graph materialize? - also automate eventhouse population 
+1. Bug fix provision_ontology.py - Why doesn't graph materialize? - also automate eventhouse population  - also figure out this error and whether graph refresh is even necessary:
+```
+--- Refreshing graph model ---
+  Found graph model: NetworkTopologyOntologyAuto2_graph_0d708515724d403e9adc6e88599d69b1 (21d22d4a-a8c3-4982-9bf6-d063f1f1adeb)
+  Triggering refresh (this may take a few minutes)...
+  ✗ Could not find a valid job type for graph refresh
+    Tried: ['Refresh', 'GraphRefresh', 'RunGraph', 'Ingestion', 'DefaultJob']
+    Manually refresh: Workspace → graph model → ... → Schedule → Refresh now
+  ⚠ Graph refresh may have failed — check Fabric portal
+    Workspace → graph model → ... → Schedule → Refresh now
+```
 2. Auto create fabric data agents for telemetry and graph
 3. Auto create anomaly detectors 
 4. Automatically define multi-agent workflow (using yaml rather than pure python SDK)
@@ -56,7 +69,10 @@
 1. Create simulator environment 
 2. At push of a button, trigger alert storm, see results 
 3. Agent should trigger some corrective action (Dummy API request)
-4. (Extra Credit) Dummy API response does something to a simulated network infra (Seems unnecessary lol)
+
+## TO DO - Extra Credit
+1. Dummy API response does something to a simulated network infra (Seems unnecessary lol)
+2. Linking time series data to an entity does something 
 
 ---
 

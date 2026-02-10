@@ -40,7 +40,7 @@ LAKEHOUSE_ID = os.getenv("FABRIC_LAKEHOUSE_ID", "")
 EVENTHOUSE_ID = os.getenv("FABRIC_EVENTHOUSE_ID", "")
 KQL_DB_NAME = os.getenv("FABRIC_KQL_DB_NAME", "")
 
-ONTOLOGY_NAME = "NetworkTopologyOntologyAuto2"
+ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,21 +83,17 @@ ET_SLA_POLICY = 1000000000008
 
 # Property IDs — CoreRouter
 P_ROUTER_ID = 2000000000001
-P_ROUTER_NAME = 2000000000002
 P_ROUTER_CITY = 2000000000003
 P_ROUTER_REGION = 2000000000004
 P_ROUTER_VENDOR = 2000000000005
 P_ROUTER_MODEL = 2000000000006
-P_ROUTER_STATUS = 2000000000007
 
 # Property IDs — TransportLink (static)
 P_LINK_ID = 2000000000011
-P_LINK_NAME = 2000000000012
 P_LINK_TYPE = 2000000000013
 P_CAPACITY_GBPS = 2000000000014
 P_SOURCE_ROUTER_ID = 2000000000015
 P_TARGET_ROUTER_ID = 2000000000016
-P_LINK_STATUS = 2000000000017
 # TransportLink (time-series)
 P_TL_TIMESTAMP = 2000000000018
 P_TL_UTIL_PCT = 2000000000019
@@ -107,18 +103,14 @@ P_TL_LATENCY = 2000000000022
 
 # Property IDs — AggSwitch
 P_SWITCH_ID = 2000000000031
-P_SWITCH_NAME = 2000000000032
 P_SWITCH_CITY = 2000000000033
 P_UPLINK_ROUTER_ID = 2000000000034
-P_SWITCH_STATUS = 2000000000035
 
 # Property IDs — BaseStation
 P_STATION_ID = 2000000000041
-P_STATION_NAME = 2000000000042
 P_STATION_TYPE = 2000000000043
 P_STATION_AGG_SWITCH = 2000000000044
 P_STATION_CITY = 2000000000045
-P_STATION_STATUS = 2000000000046
 
 # Property IDs — BGPSession
 P_SESSION_ID = 2000000000051
@@ -126,22 +118,17 @@ P_PEER_A_ROUTER = 2000000000052
 P_PEER_B_ROUTER = 2000000000053
 P_AS_NUMBER_A = 2000000000054
 P_AS_NUMBER_B = 2000000000055
-P_BGP_STATUS = 2000000000056
 
 # Property IDs — MPLSPath
 P_PATH_ID = 2000000000061
-P_PATH_NAME = 2000000000062
 P_PATH_TYPE = 2000000000063
-P_PATH_STATUS = 2000000000064
 
 # Property IDs — Service
 P_SERVICE_ID = 2000000000071
-P_SERVICE_NAME = 2000000000072
 P_SERVICE_TYPE = 2000000000073
 P_CUSTOMER_NAME = 2000000000074
 P_CUSTOMER_COUNT = 2000000000075
 P_ACTIVE_USERS = 2000000000076
-P_SERVICE_STATUS = 2000000000077
 
 # Property IDs — SLAPolicy
 P_SLA_POLICY_ID = 2000000000081
@@ -171,17 +158,15 @@ ENTITY_TYPES = [
         "baseEntityTypeId": None,
         "name": "CoreRouter",
         "entityIdParts": [str(P_ROUTER_ID)],
-        "displayNamePropertyId": str(P_ROUTER_NAME),
+        "displayNamePropertyId": str(P_ROUTER_ID),
         "namespaceType": "Custom",
         "visibility": "Visible",
         "properties": [
             prop(P_ROUTER_ID, "RouterId"),
-            prop(P_ROUTER_NAME, "RouterName"),
-            prop(P_ROUTER_CITY, "RouterCity"),
-            prop(P_ROUTER_REGION, "RouterRegion"),
-            prop(P_ROUTER_VENDOR, "RouterVendor"),
-            prop(P_ROUTER_MODEL, "RouterModel"),
-            prop(P_ROUTER_STATUS, "RouterStatus"),
+            prop(P_ROUTER_CITY, "City"),
+            prop(P_ROUTER_REGION, "Region"),
+            prop(P_ROUTER_VENDOR, "Vendor"),
+            prop(P_ROUTER_MODEL, "Model"),
         ],
         "timeseriesProperties": [],
     },
@@ -191,17 +176,15 @@ ENTITY_TYPES = [
         "baseEntityTypeId": None,
         "name": "TransportLink",
         "entityIdParts": [str(P_LINK_ID)],
-        "displayNamePropertyId": str(P_LINK_NAME),
+        "displayNamePropertyId": str(P_LINK_ID),
         "namespaceType": "Custom",
         "visibility": "Visible",
         "properties": [
             prop(P_LINK_ID, "LinkId"),
-            prop(P_LINK_NAME, "LinkName"),
             prop(P_LINK_TYPE, "LinkType"),
             prop(P_CAPACITY_GBPS, "CapacityGbps", "BigInt"),
             prop(P_SOURCE_ROUTER_ID, "SourceRouterId"),
             prop(P_TARGET_ROUTER_ID, "TargetRouterId"),
-            prop(P_LINK_STATUS, "LinkStatus"),
         ],
         "timeseriesProperties": [
             prop(P_TL_TIMESTAMP, "TLTimestamp", "DateTime"),
@@ -217,15 +200,13 @@ ENTITY_TYPES = [
         "baseEntityTypeId": None,
         "name": "AggSwitch",
         "entityIdParts": [str(P_SWITCH_ID)],
-        "displayNamePropertyId": str(P_SWITCH_NAME),
+        "displayNamePropertyId": str(P_SWITCH_ID),
         "namespaceType": "Custom",
         "visibility": "Visible",
         "properties": [
             prop(P_SWITCH_ID, "SwitchId"),
-            prop(P_SWITCH_NAME, "SwitchName"),
-            prop(P_SWITCH_CITY, "SwitchCity"),
+            prop(P_SWITCH_CITY, "City"),
             prop(P_UPLINK_ROUTER_ID, "UplinkRouterId"),
-            prop(P_SWITCH_STATUS, "SwitchStatus"),
         ],
         "timeseriesProperties": [],
     },
@@ -235,16 +216,14 @@ ENTITY_TYPES = [
         "baseEntityTypeId": None,
         "name": "BaseStation",
         "entityIdParts": [str(P_STATION_ID)],
-        "displayNamePropertyId": str(P_STATION_NAME),
+        "displayNamePropertyId": str(P_STATION_ID),
         "namespaceType": "Custom",
         "visibility": "Visible",
         "properties": [
             prop(P_STATION_ID, "StationId"),
-            prop(P_STATION_NAME, "StationName"),
             prop(P_STATION_TYPE, "StationType"),
-            prop(P_STATION_AGG_SWITCH, "StationAggSwitchId"),
-            prop(P_STATION_CITY, "StationCity"),
-            prop(P_STATION_STATUS, "StationStatus"),
+            prop(P_STATION_AGG_SWITCH, "AggSwitchId"),
+            prop(P_STATION_CITY, "City"),
         ],
         "timeseriesProperties": [],
     },
@@ -263,7 +242,6 @@ ENTITY_TYPES = [
             prop(P_PEER_B_ROUTER, "PeerBRouterId"),
             prop(P_AS_NUMBER_A, "ASNumberA", "BigInt"),
             prop(P_AS_NUMBER_B, "ASNumberB", "BigInt"),
-            prop(P_BGP_STATUS, "BGPStatus"),
         ],
         "timeseriesProperties": [],
     },
@@ -273,14 +251,12 @@ ENTITY_TYPES = [
         "baseEntityTypeId": None,
         "name": "MPLSPath",
         "entityIdParts": [str(P_PATH_ID)],
-        "displayNamePropertyId": str(P_PATH_NAME),
+        "displayNamePropertyId": str(P_PATH_ID),
         "namespaceType": "Custom",
         "visibility": "Visible",
         "properties": [
             prop(P_PATH_ID, "PathId"),
-            prop(P_PATH_NAME, "PathName"),
             prop(P_PATH_TYPE, "PathType"),
-            prop(P_PATH_STATUS, "PathStatus"),
         ],
         "timeseriesProperties": [],
     },
@@ -290,17 +266,15 @@ ENTITY_TYPES = [
         "baseEntityTypeId": None,
         "name": "Service",
         "entityIdParts": [str(P_SERVICE_ID)],
-        "displayNamePropertyId": str(P_SERVICE_NAME),
+        "displayNamePropertyId": str(P_SERVICE_ID),
         "namespaceType": "Custom",
         "visibility": "Visible",
         "properties": [
             prop(P_SERVICE_ID, "ServiceId"),
-            prop(P_SERVICE_NAME, "ServiceName"),
             prop(P_SERVICE_TYPE, "ServiceType"),
             prop(P_CUSTOMER_NAME, "CustomerName"),
             prop(P_CUSTOMER_COUNT, "CustomerCount", "BigInt"),
             prop(P_ACTIVE_USERS, "ActiveUsers", "BigInt"),
-            prop(P_SERVICE_STATUS, "ServiceStatus"),
         ],
         "timeseriesProperties": [],
     },
@@ -347,7 +321,6 @@ def lakehouse_binding(seed: str, table: str, bindings: list[tuple[str, int]]) ->
                 "workspaceId": WORKSPACE_ID,
                 "itemId": LAKEHOUSE_ID,
                 "sourceTableName": table,
-                "sourceSchema": "dbo",
             },
         },
     }
@@ -389,42 +362,34 @@ def build_static_bindings() -> dict[int, list[dict]]:
         ET_CORE_ROUTER: [
             lakehouse_binding("CoreRouter-static", "DimCoreRouter", [
                 ("RouterId", P_ROUTER_ID),
-                ("RouterName", P_ROUTER_NAME),
                 ("City", P_ROUTER_CITY),
                 ("Region", P_ROUTER_REGION),
                 ("Vendor", P_ROUTER_VENDOR),
                 ("Model", P_ROUTER_MODEL),
-                ("Status", P_ROUTER_STATUS),
             ]),
         ],
         ET_TRANSPORT_LINK: [
             lakehouse_binding("TransportLink-static", "DimTransportLink", [
                 ("LinkId", P_LINK_ID),
-                ("LinkName", P_LINK_NAME),
                 ("LinkType", P_LINK_TYPE),
                 ("CapacityGbps", P_CAPACITY_GBPS),
                 ("SourceRouterId", P_SOURCE_ROUTER_ID),
                 ("TargetRouterId", P_TARGET_ROUTER_ID),
-                ("Status", P_LINK_STATUS),
             ]),
         ],
         ET_AGG_SWITCH: [
             lakehouse_binding("AggSwitch-static", "DimAggSwitch", [
                 ("SwitchId", P_SWITCH_ID),
-                ("SwitchName", P_SWITCH_NAME),
                 ("City", P_SWITCH_CITY),
                 ("UplinkRouterId", P_UPLINK_ROUTER_ID),
-                ("Status", P_SWITCH_STATUS),
             ]),
         ],
         ET_BASE_STATION: [
             lakehouse_binding("BaseStation-static", "DimBaseStation", [
                 ("StationId", P_STATION_ID),
-                ("StationName", P_STATION_NAME),
                 ("StationType", P_STATION_TYPE),
                 ("AggSwitchId", P_STATION_AGG_SWITCH),
                 ("City", P_STATION_CITY),
-                ("Status", P_STATION_STATUS),
             ]),
         ],
         ET_BGP_SESSION: [
@@ -434,26 +399,21 @@ def build_static_bindings() -> dict[int, list[dict]]:
                 ("PeerBRouterId", P_PEER_B_ROUTER),
                 ("ASNumberA", P_AS_NUMBER_A),
                 ("ASNumberB", P_AS_NUMBER_B),
-                ("Status", P_BGP_STATUS),
             ]),
         ],
         ET_MPLS_PATH: [
             lakehouse_binding("MPLSPath-static", "DimMPLSPath", [
                 ("PathId", P_PATH_ID),
-                ("PathName", P_PATH_NAME),
                 ("PathType", P_PATH_TYPE),
-                ("Status", P_PATH_STATUS),
             ]),
         ],
         ET_SERVICE: [
             lakehouse_binding("Service-static", "DimService", [
                 ("ServiceId", P_SERVICE_ID),
-                ("ServiceName", P_SERVICE_NAME),
                 ("ServiceType", P_SERVICE_TYPE),
                 ("CustomerName", P_CUSTOMER_NAME),
                 ("CustomerCount", P_CUSTOMER_COUNT),
                 ("ActiveUsers", P_ACTIVE_USERS),
-                ("Status", P_SERVICE_STATUS),
             ]),
         ],
         ET_SLA_POLICY: [
@@ -827,74 +787,6 @@ class FabricClient:
                 return item
         return None
 
-    def refresh_graph(self, workspace_id: str, graph_item_id: str, timeout: int = 600):
-        """Trigger an on-demand graph refresh via the Job Scheduler API.
-
-        Tries multiple job type names since the Graph item type doesn't use
-        'DefaultJob'. Falls back to listing existing job instances to discover
-        the correct job type.
-        """
-        # Try to discover the correct job type from existing job instances
-        job_type = None
-        r = requests.get(
-            f"{FABRIC_API}/workspaces/{workspace_id}/items/{graph_item_id}/jobs/instances",
-            headers=self.headers,
-        )
-        if r.status_code == 200:
-            for inst in r.json().get("value", []):
-                jt = inst.get("jobType", "")
-                if jt:
-                    job_type = jt
-                    print(f"  Discovered job type from history: {job_type}")
-                    break
-
-        # If no history, try common job type names
-        candidates = [job_type] if job_type else []
-        candidates += ["Refresh", "GraphRefresh", "RunGraph", "Ingestion", "DefaultJob"]
-        # Deduplicate while preserving order
-        seen = set()
-        candidates = [c for c in candidates if c and c not in seen and not seen.add(c)]
-
-        for jt in candidates:
-            r = requests.post(
-                f"{FABRIC_API}/workspaces/{workspace_id}/items/{graph_item_id}/jobs/{jt}/instances",
-                headers=self.headers,
-            )
-            if r.status_code == 202:
-                print(f"  Job type '{jt}' accepted (202)")
-                location = r.headers.get("Location", "")
-                retry_after = int(r.headers.get("Retry-After", "30"))
-                if location:
-                    elapsed = 0
-                    while elapsed < timeout:
-                        time.sleep(retry_after)
-                        elapsed += retry_after
-                        pr = requests.get(location, headers=self.headers)
-                        if pr.status_code == 200:
-                            status = pr.json().get("status", "")
-                            if status == "Completed":
-                                return pr.json()
-                            if status in ("Failed", "Cancelled"):
-                                print(f"  ✗ Graph refresh {status}: {pr.text}")
-                                return None
-                        elif pr.status_code == 404:
-                            pass
-                    print(f"  ⚠ Graph refresh still running after {timeout}s — check status in portal")
-                return r.headers
-            elif r.status_code == 400 and "InvalidJobType" in r.text:
-                continue  # Try next candidate
-            elif r.status_code in (200, 201):
-                return r.json() if r.text else {}
-            else:
-                print(f"  ✗ Job type '{jt}': {r.status_code} — {r.text}")
-                return None
-
-        print(f"  ✗ Could not find a valid job type for graph refresh")
-        print(f"    Tried: {candidates}")
-        print(f"    Manually refresh: Workspace → graph model → ... → Schedule → Refresh now")
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -971,24 +863,23 @@ def main():
         print(f"  ✓ Ontology created: {ontology_id}")
 
     # ------------------------------------------------------------------
-    # 6. Refresh the underlying graph model
+    # 6. Verify graph model was auto-created
     # ------------------------------------------------------------------
-    print("\n--- Refreshing graph model ---")
+    # Note: GraphModel items do NOT support the Job Scheduler API.
+    # The graph is automatically built/refreshed when the ontology is
+    # created or its definition is updated — no separate refresh needed.
+    print("\n--- Checking graph model ---")
     graph_item = client.find_graph_model(WORKSPACE_ID, ONTOLOGY_NAME)
     if graph_item:
         graph_id = graph_item["id"]
         graph_name = graph_item["displayName"]
-        print(f"  Found graph model: {graph_name} ({graph_id})")
-        print(f"  Triggering refresh (this may take a few minutes)...")
-        result = client.refresh_graph(WORKSPACE_ID, graph_id)
-        if result is not None:
-            print(f"  ✓ Graph refresh completed")
-        else:
-            print(f"  ⚠ Graph refresh may have failed — check Fabric portal")
-            print(f"    Workspace → graph model → ... → Schedule → Refresh now")
+        print(f"  ✓ Graph model exists: {graph_name} ({graph_id})")
+        print(f"    Graph is auto-refreshed by ontology create/update.")
+        print(f"    If data looks stale, refresh manually in Fabric portal:")
+        print(f"    Workspace → {graph_name} → ... → Refresh now")
     else:
-        print(f"  ⚠ Could not find graph model item in workspace")
-        print(f"    Manually refresh: Workspace → graph model → ... → Schedule → Refresh now")
+        print(f"  ⚠ Graph model not yet visible — it may take a moment to appear")
+        print(f"    Check Fabric portal: Workspace → look for graph model item")
 
     # ------------------------------------------------------------------
     # Summary
