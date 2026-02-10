@@ -39,26 +39,17 @@ uv run python3 create_tickets_indexer.py
 uv run python3 provision_fabric.py
 uv run python3 provision_ontology.py # (to confirm if working)
 ```
-2. Manually create ontology in Microsoft Fabric UI, manually create fabric data agents, manually upload eventhouse telemetry
+2. Automatically create ontology
 3. Manually create anomaly detectors
 4. Manually create agents using the prompts in /data/prompts
 
 ## TO DO - Automation Tasks 
-1. Bug fix provision_ontology.py - Why doesn't graph materialize? - also automate eventhouse population  - also figure out this error and whether graph refresh is even necessary:
-```
---- Refreshing graph model ---
-  Found graph model: NetworkTopologyOntologyAuto2_graph_0d708515724d403e9adc6e88599d69b1 (21d22d4a-a8c3-4982-9bf6-d063f1f1adeb)
-  Triggering refresh (this may take a few minutes)...
-  ✗ Could not find a valid job type for graph refresh
-    Tried: ['Refresh', 'GraphRefresh', 'RunGraph', 'Ingestion', 'DefaultJob']
-    Manually refresh: Workspace → graph model → ... → Schedule → Refresh now
-  ⚠ Graph refresh may have failed — check Fabric portal
-    Workspace → graph model → ... → Schedule → Refresh now
-```
-2. Auto create fabric data agents for telemetry and graph
-3. Auto create anomaly detectors 
-4. Automatically define multi-agent workflow (using yaml rather than pure python SDK)
-5. Test multi-agent workflow programmatically 
+1. ~~Bug fix provision_ontology.py - Why doesn't graph materialize?~~
+2. Auto fill eventhouse tables
+3. Auto create fabric data agents for telemetry and graph
+4. Auto create anomaly detectors 
+5. Automatically define multi-agent workflow (using yaml rather than pure python SDK)
+6. Test multi-agent workflow programmatically 
 
 ## TO DO - Demo Structuring  
 1. Deploy MCP server 
