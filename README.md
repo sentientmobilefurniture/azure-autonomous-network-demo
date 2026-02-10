@@ -1,6 +1,6 @@
 # Sydney Fiber Cut Demo 
 
-> **CONFIRMATION NEEDED **Tip: Sweden Central may be faster due to less regional contention, but this is anecdotal and needs more observation. Expect 30-90 minutes for the graph to become queryable, and for all entities to finish indexing. This wait is normal for now.**
+> **CONFIRMATION NEEDED **Tip: Ontology is a preview feature and may exhibit unexpected behaviors. Sweden Central may be faster due to less regional contention, but this is anecdotal and needs more observation. Expect 30-90 minutes for the graph to become queryable, and for all entities to finish indexing. This wait is normal for now. If you are anxious, scheduling a graph refresh may help as one is triggered whenever the ontology is updated.**
 
 ## Azure Services Used 
 
