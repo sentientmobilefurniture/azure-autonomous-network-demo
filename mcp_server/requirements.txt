@@ -1,0 +1,4 @@
+azure-functions
+azure-identity
+azure-kusto-data
+azure-search-documents
