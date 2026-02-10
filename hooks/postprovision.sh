@@ -19,34 +19,54 @@ echo "  RG      : $RG"
 echo "============================================"
 
 # --------------------------------------------------------------------------
+# 0. Wait for RBAC propagation (Storage Blob Data Contributor)
+#    Role assignments created in the same deployment can take minutes to
+#    propagate. Retry the first upload until it succeeds or we give up.
+# --------------------------------------------------------------------------
+upload_with_retry() {
+  local container="$1"
+  local source_dir="$2"
+  local max_attempts=6
+  local wait_secs=30
+
+  for attempt in $(seq 1 $max_attempts); do
+    echo "  Attempt $attempt/$max_attempts — uploading to '$container'..."
+    if az storage blob upload-batch \
+        --destination "$container" \
+        --account-name "$STORAGE_ACCOUNT" \
+        --source "$source_dir" \
+        --auth-mode login \
+        --overwrite \
+        --only-show-errors 2>/dev/null; then
+      echo "  ✓ $container uploaded"
+      return 0
+    fi
+
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      echo "  ⏳ RBAC not yet propagated — waiting ${wait_secs}s..."
+      sleep "$wait_secs"
+    fi
+  done
+
+  echo "  ✗ Failed to upload to '$container' after $max_attempts attempts."
+  echo "    RBAC may still be propagating. Run postprovision manually:"
+  echo "    azd hooks run postprovision"
+  return 1
+}
+
+# --------------------------------------------------------------------------
 # 1. Upload runbook markdown files to blob storage
 # --------------------------------------------------------------------------
 echo ""
 echo "Uploading runbooks to blob container 'runbooks'..."
-az storage blob upload-batch \
-  --destination runbooks \
-  --account-name "$STORAGE_ACCOUNT" \
-  --source "$PROJECT_ROOT/data/runbooks" \
-  --auth-mode login \
-  --overwrite \
-  --only-show-errors
-
-echo "  ✓ Runbooks uploaded"
+upload_with_retry "runbooks" "$PROJECT_ROOT/data/runbooks"
 
 # --------------------------------------------------------------------------
 # 2. Upload historical ticket .txt files to blob storage
 # --------------------------------------------------------------------------
 echo ""
 echo "Uploading tickets to blob container 'tickets'..."
-az storage blob upload-batch \
-  --destination tickets \
-  --account-name "$STORAGE_ACCOUNT" \
-  --source "$PROJECT_ROOT/data/tickets" \
-  --auth-mode login \
-  --overwrite \
-  --only-show-errors
-
-echo "  ✓ Tickets uploaded"
+upload_with_retry "tickets" "$PROJECT_ROOT/data/tickets"
 
 # --------------------------------------------------------------------------
 # 3. Populate azure_config.env for downstream scripts

@@ -1,4 +1,4 @@
-/# Sydney Fiber Cut Demo 
+# Sydney Fiber Cut Demo 
 
 ## Azure Services Used 
 
@@ -15,10 +15,11 @@
 
 ## Target Demo flow
 
-1. GraphExplorerAgent in Foundry connects to FabricDataAgent and uses it to explore graph 
+1. GraphExplorerAgent in Foundry connects to Fabric ontology via fabric data agent and uses it to navigate network topology.
 2. RunbookKBAgent in Foundry looks at historical runbooks for guidance on what to do in certain scenarios. (connected to runbooks-index)
 3. HistoricalTicketAgent looks at old tickets to find similar scenarios (connected to tickets-index)
-4. Orchestrator agent receives a prompt about latency spiking to 9999ms in Sydney-Melbourne-Fibre-Pair-01. First it tries to discover blast radius using the graphexploreragent, then tries to diagnose using historicaltickets, then tries to recommend a solution current runbooks using the runbookkbagent (Connected to GraphExplorerAgent, RunbookKBAgent, HistoricalTicketAgent)
+4. TelemetryAgent looks at telemetry stored in Fabric EventHouse and uses it to retrieve metrics and observational evidence. 
+5. Orchestrator agent receives alert storm prompt (/data/prompts/alert_storm.md), runs diagnosis flow in (/home/hanchoong/projects/autonomous-network-demo/data/prompts/orchestrator_agent.md) 
 
 ## Current Implementation State 
 
@@ -35,9 +36,9 @@
 3. uv run python3 create_tickets_indexer.py
 4. uv run python3 provision_fabric.py
 5. uv run python3 provision_ontology.py (to test if working)
-5. Manually create ontology in Microsoft Fabric UI, manually create fabric data agent 
-6. Manually create anomaly detector
-7. Manually create other agents
+5. Manually create ontology in Microsoft Fabric UI, manually create fabric data agents
+6. Manually create anomaly detectors
+7. Manually create agents using the prompts in /data/prompts
 
 ## Items yet to be done
 1. Haven't wired up anomaly detector
