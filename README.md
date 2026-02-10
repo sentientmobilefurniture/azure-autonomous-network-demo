@@ -36,13 +36,27 @@
 3. uv run python3 create_tickets_indexer.py
 4. uv run python3 provision_fabric.py
 5. uv run python3 provision_ontology.py (to test if working)
-5. Manually create ontology in Microsoft Fabric UI, manually create fabric data agents
+5. Manually create ontology in Microsoft Fabric UI, manually create fabric data agents, manually upload eventhouse telemetry
 6. Manually create anomaly detectors
 7. Manually create agents using the prompts in /data/prompts
 
-## Items yet to be done
-1. Haven't wired up anomaly detector
-2. Haven't wired up multi-agent flow 
+## TO DO - Automation Tasks 
+1. Bug fix provision_ontology.py - Why doesn't graph materialize? - also automate eventhouse population 
+2. Auto create fabric data agents for telemetry and graph
+3. Auto create anomaly detectors 
+4. Automatically define multi-agent workflow (using yaml rather than pure python SDK)
+5. Test multi-agent workflow programmatically 
+
+## TO DO - Demo Structuring  
+1. Deploy MCP server 
+2. Switch tickets to CosmosDB, connect to cosmosdb 
+3. 
+
+## TO DO - Demo Completion 
+1. Create simulator environment 
+2. At push of a button, trigger alert storm, see results 
+3. Agent should trigger some corrective action (Dummy API request)
+4. (Extra Credit) Dummy API response does something to a simulated network infra (Seems unnecessary lol)
 
 ---
 
