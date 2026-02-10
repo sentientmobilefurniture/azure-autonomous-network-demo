@@ -48,13 +48,14 @@ uv run python3 provision_eventhouse.py
 uv run python3 provision_ontology.py
 ```
 2. Manually create anomaly detectors
-3. Manually create agents using the prompts in /data/prompts
+3. Manually create fabric data agents using the prompts in /data/prompts (Because not yet support)
+4. Manually create foundry agents and link them (NEXT TASK is to figure this out via YAML)
 
 ## TO DO - Automation Tasks 
 1. ~~Bug fix provision_ontology.py - Why doesn't graph materialize?~~
 2. ~~Auto fill eventhouse tables~~
-3. Auto create fabric data agents for telemetry and graph
-4. Auto create anomaly detectors 
+3. (HOLD) Auto create fabric data agents for telemetry and graph
+4. (HOLD) Auto create anomaly detectors 
 5. Automatically define multi-agent workflow (using yaml rather than pure python SDK)
 6. Test multi-agent workflow programmatically 
 
@@ -63,7 +64,7 @@ uv run python3 provision_ontology.py
 2. Switch tickets to CosmosDB, connect to cosmosdb 
 3. 
 
-## TO DO - Demo Completion 
+## TO DO - Demo Completion - Frontend time
 1. Create simulator environment 
 2. At push of a button, trigger alert storm, see results 
 3. Agent should trigger some corrective action (Dummy API request)
