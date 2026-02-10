@@ -379,7 +379,32 @@ def main():
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 3. Create KQL tables
+    # 3. Enable Python 3.11.7 plugin (manual step)
+    # ------------------------------------------------------------------
+    print(f"\n--- Python Plugin Check ---")
+    print("  ⚠  The Python 3.11.7 language extension must be enabled on the")
+    print("     Eventhouse before the anomaly detector will work.")
+    print()
+    print("  To enable it:")
+    print("    1. Open Fabric portal → Workspace → select the Eventhouse")
+    print("    2. Click 'Eventhouse' in the ribbon → 'Plugins'")
+    print("    3. Toggle 'Python language extension' to ON")
+    print("    4. Select Python 3.11.7 image → click 'Done'")
+    print()
+    print("  Note: Enabling the plugin may take a few minutes and consumes")
+    print("        additional compute resources.")
+    print()
+    confirm = input("  Have you enabled the Python 3.11.7 plugin? [y/N/skip]: ").strip().lower()
+    if confirm == "skip":
+        print("  ⚠ Skipping — anomaly detector queries will fail until enabled.")
+    elif confirm not in ("y", "yes"):
+        print("  ✗ Please enable the plugin and re-run this script.")
+        sys.exit(1)
+    else:
+        print("  ✓ Python plugin confirmed.")
+
+    # ------------------------------------------------------------------
+    # 4. Create KQL tables
     # ------------------------------------------------------------------
     print(f"\n--- Creating KQL tables ---")
 
@@ -392,14 +417,14 @@ def main():
     create_kql_tables(kusto_client, db_name)
 
     # ------------------------------------------------------------------
-    # 4. Ingest CSV data
+    # 5. Ingest CSV data
     # ------------------------------------------------------------------
     print(f"\n--- Ingesting CSV data ---")
 
     ingest_csv_files(query_uri, db_name)
 
     # ------------------------------------------------------------------
-    # 5. Verify row counts
+    # 6. Verify row counts
     # ------------------------------------------------------------------
     print(f"\n--- Verifying ingestion ---")
 
@@ -417,7 +442,7 @@ def main():
             print(f"  ⚠ {table_name}: could not verify — {e}")
 
     # ------------------------------------------------------------------
-    # 6. Update azure_config.env
+    # 7. Update azure_config.env
     # ------------------------------------------------------------------
     env_updates = {
         "FABRIC_EVENTHOUSE_ID": eventhouse_id,

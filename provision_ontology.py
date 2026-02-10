@@ -186,13 +186,7 @@ ENTITY_TYPES = [
             prop(P_SOURCE_ROUTER_ID, "SourceRouterId"),
             prop(P_TARGET_ROUTER_ID, "TargetRouterId"),
         ],
-        "timeseriesProperties": [
-            prop(P_TL_TIMESTAMP, "TLTimestamp", "DateTime"),
-            prop(P_TL_UTIL_PCT, "UtilizationPct", "Double"),
-            prop(P_TL_OPT_POWER, "TLOpticalPowerDbm", "Double"),
-            prop(P_TL_BER, "TLBitErrorRate", "Double"),
-            prop(P_TL_LATENCY, "TLLatencyMs", "Double"),
-        ],
+        "timeseriesProperties": [],
     },
     {
         "id": str(ET_AGG_SWITCH),
