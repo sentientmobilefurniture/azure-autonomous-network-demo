@@ -184,8 +184,8 @@ class OrchestratorEventHandler(AgentEventHandler):
                         output_raw = getattr(ca, 'output', None) or ca.get('output', None)
                         if output_raw:
                             output_str = str(output_raw)
-                            if len(output_str) > 500:
-                                output_str = output_str[:500] + "…"
+                            if len(output_str) > 1500:
+                                output_str = output_str[:1500] + "…"
                             print(f"      {C_DIM}Response:{C_RESET} {output_str}", flush=True)
                     elif tc_type_str == "fabric_dataagent":
                         print(f"\n    {C_CYAN}↳ FabricDataAgent{C_RESET} {C_DIM}({duration}{tokens}){C_RESET}", flush=True)
