@@ -150,6 +150,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
         def on_thread_run(self, run):
             s = run.status
             status = s.value if hasattr(s, "value") else str(s)
+            logger.info("on_thread_run: status=%s", status)
 
             if status == "completed" and run.usage:
                 self.total_tokens = getattr(run.usage, "total_tokens", 0) or 0
@@ -174,9 +175,12 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             status = s.value if hasattr(s, "value") else str(s)
             t = step.type
             step_type = t.value if hasattr(t, "value") else str(t)
+            logger.info("on_run_step: id=%s status=%s type=%s", step.id, status, step_type)
 
             if status == "in_progress" and step.id not in self.step_starts:
                 self.step_starts[step.id] = time.time()
+                # Emit an early "thinking" event so UI shows activity
+                _put("step_thinking", {"agent": "Orchestrator", "status": "calling sub-agent..."})
 
             elif status == "completed" and step_type == "tool_calls":
                 start = self.step_starts.get(step.id, self.t0)
@@ -231,6 +235,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     if len(response) > 2000:
                         response = response[:2000] + "…"
 
+                    logger.info("Emitting step %d: agent=%s duration=%s", self.ui_step, agent_name, duration)
                     _put("step_start", {"step": self.ui_step, "agent": agent_name})
                     _put("step_complete", {
                         "step": self.ui_step,

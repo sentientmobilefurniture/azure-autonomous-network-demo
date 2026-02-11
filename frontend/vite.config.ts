@@ -6,6 +6,17 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api/alert': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        // SSE: disable response buffering so events stream in real-time
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['cache-control'] = 'no-cache';
+            proxyRes.headers['x-accel-buffering'] = 'no';
+          });
+        },
+      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,

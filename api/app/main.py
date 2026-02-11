@@ -3,13 +3,13 @@ FastAPI backend for Autonomous Network NOC Demo.
 
 Serves:
   - REST API at /api/* (alert submission, agent listing)
-  - MCP server at /mcp (Streamable HTTP for Foundry/Copilot clients)
   - Health check at /health
 
 Run locally:
   cd api && uv run uvicorn app.main:app --reload --port 8000
 """
 
+import logging
 import os
 
 from dotenv import load_dotenv
@@ -17,6 +17,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import alert, agents
+
+# Configure logging so app.* loggers emit INFO
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("app").setLevel(logging.DEBUG)
 
 # Load project-level config (CORS_ORIGINS, etc.)
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "azure_config.env"))

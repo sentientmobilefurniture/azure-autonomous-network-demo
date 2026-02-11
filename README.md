@@ -178,6 +178,81 @@ azd deploy fabric-query-api
 This rebuilds the Docker image in ACR (`remoteBuild: true`) and updates the
 Container App revision. No need to re-run `azd up` for code-only changes.
 
+---
+
+## Troubleshooting
+
+### Viewing Container App logs
+
+When agents return `HTTP 400` or other errors, check the `fabric-query-api`
+container logs for the raw request body and Fabric error:
+
+```bash
+# Recent logs (last 50 lines)
+az containerapp logs show \
+  --name <CONTAINER_APP_NAME> \
+  --resource-group <RESOURCE_GROUP> \
+  --type console \
+  --tail 50
+
+# Follow logs in real-time
+az containerapp logs show \
+  --name <CONTAINER_APP_NAME> \
+  --resource-group <RESOURCE_GROUP> \
+  --type console \
+  --follow
+```
+
+The logging middleware logs every incoming POST body and flags 4xx+ responses.
+Look for lines like:
+
+```
+INFO  Incoming POST /query/graph — body=b'{"query": "MATCH ..."}'
+WARNING  Response 400 for POST /query/graph
+```
+
+Common GQL 400 causes:
+- **Property not found** — the GQL property name doesn't match the ontology
+  property name (see "Ontology naming rules" below).
+- **Relationship direction wrong** — GQL edge traversal `->` vs `<-` doesn't
+  match the ontology relationship source/target definition.
+- **Entity type not found** — typing mistake in the node label (e.g., `SlaPolicy`
+  instead of `SLAPolicy`).
+
+### Ontology property naming rules
+
+**GQL queries must use ontology property names, NOT Lakehouse column names.**
+
+The Fabric graph model exposes properties by the names defined in
+`provision_ontology.py` via `prop(id, "PropertyName")`. These names may differ
+from the underlying Lakehouse CSV column names. The binding maps CSV columns to
+property IDs (integers), and the property ID maps to a property name.
+
+Example:
+
+```
+# Lakehouse CSV column     →  Ontology property name  →  GQL usage
+# "ServiceId"              →  "ServiceId"              →  sla.ServiceId
+# "Tier"                   →  "Tier"                   →  sla.Tier
+```
+
+When adding new entity types or properties:
+1. **Match property names to CSV column names** wherever possible to avoid
+   confusion. Only rename when there's a genuine ambiguity (e.g., both
+   `Service.ServiceId` and `SLAPolicy.ServiceId` — but in GQL, properties are
+   entity-scoped so this isn't actually ambiguous).
+2. **Update the agent prompt** in `data/prompts/foundry_graph_explorer_agent_v2.md`
+   with the exact property names from the ontology definition.
+3. **Test the GQL query** directly against `/query/graph` before provisioning
+   agents — a 400 from Fabric will include the available property names in the
+   error message.
+
+### Debug endpoint
+
+Set `DEBUG_ENDPOINTS=1` as an env var on the Container App to enable `/debug/raw-gql`,
+which returns the raw Fabric API response without normalization. Useful for
+diagnosing GQL issues. Disabled by default in production.
+
 ## TODO
 
 ### Automation
@@ -196,7 +271,9 @@ Container App revision. No need to re-run `azd up` for code-only changes.
 - [x] Wire real orchestrator into SSE endpoint
 - [x] Deploy fabric-query-api to Azure Container Apps
 - [x] Test independent graph querying
-- [ ] Fix unreliable behavior
+- [x] Fix unreliable behavior - Ontology/Data file mismatch + confusing prompt spec - Fixed
+- [x] Verify that v2 architecture works with current UI
+- [ ] Fix event streaming not working
 - [ ] Deploy main API to Azure Container Apps
 - [ ] Deploy frontend to Azure Static Web Apps
 

@@ -24,6 +24,7 @@ Run locally:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
 import time
@@ -32,6 +33,7 @@ from datetime import datetime, timezone
 import requests as http_requests
 from azure.identity import DefaultAzureCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+from azure.kusto.data.exceptions import KustoServiceError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -48,6 +50,21 @@ app = FastAPI(
 
 logger = logging.getLogger("fabric-query-api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+@app.on_event("startup")
+async def _validate_config():
+    """Log warnings for missing env vars at startup."""
+    missing = []
+    for var in ("FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID",
+                "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME"):
+        if not os.getenv(var):
+            missing.append(var)
+    if missing:
+        logger.warning(
+            "Missing env vars (will rely on request body values): %s",
+            ", ".join(missing),
+        )
 
 
 @app.middleware("http")
@@ -181,6 +198,7 @@ def _execute_gql(
 # ---------------------------------------------------------------------------
 
 _kusto_client: KustoClient | None = None
+_kusto_client_uri: str = ""
 
 
 def _make_kusto_client(uri: str) -> KustoClient:
@@ -189,10 +207,12 @@ def _make_kusto_client(uri: str) -> KustoClient:
     return KustoClient(kcsb)
 
 
-def _get_kusto_client() -> KustoClient:
-    global _kusto_client
-    if _kusto_client is None and EVENTHOUSE_QUERY_URI:
-        _kusto_client = _make_kusto_client(EVENTHOUSE_QUERY_URI)
+def _get_kusto_client(uri: str) -> KustoClient:
+    """Return a cached KustoClient if the URI matches, otherwise create a new one."""
+    global _kusto_client, _kusto_client_uri
+    if _kusto_client is None or uri != _kusto_client_uri:
+        _kusto_client = _make_kusto_client(uri)
+        _kusto_client_uri = uri
     return _kusto_client
 
 
@@ -204,7 +224,7 @@ def _execute_kql(
     """Execute a KQL query and return structured results."""
     uri = eventhouse_query_uri or EVENTHOUSE_QUERY_URI
     db = kql_db_name or KQL_DB_NAME
-    client = _get_kusto_client() if not eventhouse_query_uri else _make_kusto_client(uri)
+    client = _get_kusto_client(uri)
     response = client.execute(db, query)
     primary = response.primary_results[0] if response.primary_results else None
     if primary is None:
@@ -248,7 +268,7 @@ async def query_graph(req: GraphQueryRequest):
     gm = req.graph_model_id or GRAPH_MODEL_ID
     if not ws or not gm:
         raise HTTPException(status_code=400, detail="workspace_id and graph_model_id are required (via request body or env vars)")
-    result = _execute_gql(req.query, workspace_id=ws, graph_model_id=gm)
+    result = await asyncio.to_thread(_execute_gql, req.query, workspace_id=ws, graph_model_id=gm)
 
     # Normalise Fabric API response
     # The API may return {"status": "...", "result": {"columns": [...], "data": [...]}}
@@ -276,23 +296,26 @@ async def query_telemetry(req: TelemetryQueryRequest):
     if not uri or not db:
         raise HTTPException(status_code=400, detail="eventhouse_query_uri and kql_db_name are required (via request body or env vars)")
     try:
-        result = _execute_kql(req.query, eventhouse_query_uri=uri, kql_db_name=db)
+        result = await asyncio.to_thread(_execute_kql, req.query, eventhouse_query_uri=uri, kql_db_name=db)
+    except KustoServiceError as e:
+        raise HTTPException(status_code=400, detail=f"KQL query error: {e}")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"KQL query error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"KQL backend error: {type(e).__name__}: {e}")
     return TelemetryQueryResponse(columns=result["columns"], rows=result["rows"])
 
 
 @app.get("/health", summary="Health check")
 async def health():
-    return {"status": "ok", "service": "fabric-query-api", "version": "0.2.0"}
+    return {"status": "ok", "service": "fabric-query-api", "version": app.version}
 
 
-@app.post("/debug/raw-gql", summary="Debug: raw GQL response")
-async def debug_raw_gql(req: GraphQueryRequest):
-    """Return the raw Fabric API response for debugging."""
-    ws = req.workspace_id or WORKSPACE_ID
-    gm = req.graph_model_id or GRAPH_MODEL_ID
-    if not ws or not gm:
-        raise HTTPException(status_code=400, detail="workspace_id and graph_model_id required")
-    result = _execute_gql(req.query, workspace_id=ws, graph_model_id=gm)
-    return result
+if os.getenv("DEBUG_ENDPOINTS") == "1":
+    @app.post("/debug/raw-gql", summary="Debug: raw GQL response")
+    async def debug_raw_gql(req: GraphQueryRequest):
+        """Return the raw Fabric API response for debugging."""
+        ws = req.workspace_id or WORKSPACE_ID
+        gm = req.graph_model_id or GRAPH_MODEL_ID
+        if not ws or not gm:
+            raise HTTPException(status_code=400, detail="workspace_id and graph_model_id required")
+        result = await asyncio.to_thread(_execute_gql, req.query, workspace_id=ws, graph_model_id=gm)
+        return result

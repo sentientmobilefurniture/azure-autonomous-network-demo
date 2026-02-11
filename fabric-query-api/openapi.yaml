@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: Fabric Query API
-  version: "0.1.0"
+  version: "0.3.0"
   description: |
     Micro-API for executing GQL and KQL queries against Microsoft Fabric.
     Used by Foundry agents via OpenApiTool.

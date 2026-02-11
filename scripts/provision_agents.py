@@ -116,7 +116,7 @@ def load_prompt(filename: str) -> tuple[str, str]:
 
 # ── OpenAPI tool helpers ────────────────────────────────────────────
 
-def _load_openapi_spec(config: dict) -> dict:
+def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
     """Load the OpenAPI spec from disk and substitute all placeholders.
 
     Placeholders replaced:
@@ -125,6 +125,9 @@ def _load_openapi_spec(config: dict) -> dict:
       {graph_model_id}        — GraphModel item GUID
       {eventhouse_query_uri}  — Kusto query URI
       {kql_db_name}           — KQL database name
+
+    If *keep_path* is given (e.g. "/query/graph"), all other paths are
+    removed from the spec so the agent only sees its own endpoint.
     """
     raw = OPENAPI_SPEC_FILE.read_text(encoding="utf-8")
     replacements = {
@@ -136,12 +139,18 @@ def _load_openapi_spec(config: dict) -> dict:
     }
     for placeholder, value in replacements.items():
         raw = raw.replace(placeholder, value)
-    return yaml.safe_load(raw)
+    spec = yaml.safe_load(raw)
+
+    # Filter to a single endpoint when requested
+    if keep_path and "paths" in spec:
+        spec["paths"] = {k: v for k, v in spec["paths"].items() if k == keep_path}
+
+    return spec
 
 
 def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
-    """Build an OpenApiTool for the /query/graph endpoint."""
-    spec = _load_openapi_spec(config)
+    """Build an OpenApiTool for the /query/graph endpoint only."""
+    spec = _load_openapi_spec(config, keep_path="/query/graph")
     return OpenApiTool(
         name="query_graph",
         spec=spec,
@@ -151,8 +160,8 @@ def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
 
 
 def _make_telemetry_openapi_tool(config: dict) -> OpenApiTool:
-    """Build an OpenApiTool for the /query/telemetry endpoint."""
-    spec = _load_openapi_spec(config)
+    """Build an OpenApiTool for the /query/telemetry endpoint only."""
+    spec = _load_openapi_spec(config, keep_path="/query/telemetry")
     return OpenApiTool(
         name="query_telemetry",
         spec=spec,

@@ -195,15 +195,15 @@ SLA commitments governing services. Not all services have an SLA policy.
 | Column | Type | Purpose | Example Value |
 |---|---|---|---|
 | **SLAPolicyId** | String | **Primary key.** | `SLA-ACME-GOLD` |
-| SLAServiceId | String | The governed service (FK → Service.ServiceId). | `VPN-ACME-CORP` |
+| ServiceId | String | The governed service (FK → Service.ServiceId). | `VPN-ACME-CORP` |
 | AvailabilityPct | Double | Uptime commitment percentage. | `99.99` |
 | MaxLatencyMs | Integer | Maximum allowed latency in milliseconds. | `15` |
 | PenaltyPerHourUSD | Integer | Financial penalty per hour of breach in USD. | `50000` |
-| SLATier | String | SLA tier. Values: `GOLD`, `SILVER`, `STANDARD`. | `GOLD` |
+| Tier | String | SLA tier. Values: `GOLD`, `SILVER`, `STANDARD`. | `GOLD` |
 
 **All instances:**
 
-| SLAPolicyId | SLAServiceId | AvailabilityPct | MaxLatencyMs | PenaltyPerHourUSD | SLATier |
+| SLAPolicyId | ServiceId | AvailabilityPct | MaxLatencyMs | PenaltyPerHourUSD | Tier |
 |---|---|---|---|---|---|
 | SLA-ACME-GOLD | VPN-ACME-CORP | 99.99 | 15 | 50000 | GOLD |
 | SLA-BIGBANK-SILVER | VPN-BIGBANK | 99.95 | 20 | 25000 | SILVER |
@@ -272,7 +272,7 @@ An SLA policy governs a service.
 ```gql
 MATCH (sla:SLAPolicy)-[:governed_by]->(svc:Service)
 WHERE svc.ServiceId = "VPN-ACME-CORP"
-RETURN sla.SLAPolicyId, sla.SLATier, sla.PenaltyPerHourUSD
+RETURN sla.SLAPolicyId, sla.Tier, sla.PenaltyPerHourUSD
 ```
 
 ### peers_over: BGPSession → CoreRouter
@@ -306,7 +306,7 @@ MATCH (mp:MPLSPath)-[:routes_via]->(tl:TransportLink),
       (sla:SLAPolicy)-[:governed_by]->(svc)
 WHERE tl.LinkId = "LINK-SYD-MEL-FIBRE-01"
 RETURN tl.LinkId, mp.PathId, svc.ServiceId, svc.CustomerName,
-       sla.SLAPolicyId, sla.SLATier, sla.PenaltyPerHourUSD
+       sla.SLAPolicyId, sla.Tier, sla.PenaltyPerHourUSD
 ```
 
 ### 2-hop: router → switches → base stations

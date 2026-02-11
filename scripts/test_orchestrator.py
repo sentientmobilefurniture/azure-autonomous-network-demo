@@ -238,12 +238,28 @@ def run_alert(alert_text: str, quiet: bool = False):
         handler = OrchestratorEventHandler(agent_names)
         print(f"\n{'-' * 72}")
 
-        with agents.runs.stream(
-            thread_id=thread.id,
-            agent_id=orchestrator_id,
-            event_handler=handler,
-        ) as stream:
-            stream.until_done()
+        try:
+            with agents.runs.stream(
+                thread_id=thread.id,
+                agent_id=orchestrator_id,
+                event_handler=handler,
+            ) as stream:
+                stream.until_done()
+        except json.JSONDecodeError as e:
+            # SDK bug: _failsafe_deserialize crashes on empty error body
+            print(f"\n  {C_RED}SDK JSONDecodeError (likely rate-limited or transient API error){C_RESET}")
+            print(f"  {C_DIM}{e}{C_RESET}")
+            print(f"  Retrying in 5 seconds...")
+            time.sleep(5)
+            handler = OrchestratorEventHandler(agent_names)
+            thread = agents.threads.create()
+            agents.messages.create(thread_id=thread.id, role="user", content=alert_text)
+            with agents.runs.stream(
+                thread_id=thread.id,
+                agent_id=orchestrator_id,
+                event_handler=handler,
+            ) as stream:
+                stream.until_done()
 
         # Print the full response
         print(f"\n{'=' * 72}")
