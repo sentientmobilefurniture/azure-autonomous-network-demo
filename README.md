@@ -390,14 +390,14 @@ diagnosing GQL issues. Disabled by default in production.
 - [x] Format query and response text with markdown
 - [x] Query Fabric graph directly (GQL via REST API)
 - [x] Create and test graph query tool — FunctionTool PoC → OpenApiTool production
-- [ ] Evaluate Neo4j as alternative graph backend (Fabric F8 capacity too fragile for concurrent agent calls)
+- [ ] **Neo4j graph backend** — Replace Fabric GraphModel with Neo4j for demo. Enables real-time graph mutations from the UI (add/remove nodes, trigger faults, visualize topology live). Cypher ≈ GQL. Fabric remains the production-scale story; Neo4j is the interactive demo story.
+- [ ] Real-time graph visualization in UI (D3-force / Neovis.js over Bolt websockets)
+- [ ] Click on a node, select a particular type of error or scenario, trigger it!
 - [ ] Cache common GQL queries (Redis / embedding cache)
 - [ ] Link telemetry from all agents rather than just the orchestrator
 - [ ] MCP server tools
 - [ ] CosmosDB for tickets
 - [ ] Corrective action API
-- [ ] Live visualization of the graph directly in the UI
-- [ ] Click on a node, select a particular type of error or scenario, trigger it!
 - [ ] Expand data complexity and size to more closely model real world
 - [ ] Play by play commentary on each step of the demo
 - [ ] Better and more readable formatting of demo output
