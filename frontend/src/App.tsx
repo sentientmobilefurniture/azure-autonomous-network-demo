@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import ReactMarkdown from 'react-markdown';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 
 interface StepEvent {
   step: number;
@@ -9,6 +10,11 @@ interface StepEvent {
   duration?: string;
   query?: string;
   response?: string;
+}
+
+interface ThinkingState {
+  agent: string;
+  status: string;
 }
 
 // Animation variants
@@ -41,53 +47,85 @@ export default function App() {
     '14:31:14.259 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down'
   );
   const [steps, setSteps] = useState<StepEvent[]>([]);
+  const [thinking, setThinking] = useState<ThinkingState | null>(null);
   const [finalMessage, setFinalMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
   const [running, setRunning] = useState(false);
+  const [runStarted, setRunStarted] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
 
   const submitAlert = async () => {
+    // Abort any previous run
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
     setSteps([]);
+    setThinking(null);
     setFinalMessage('');
+    setErrorMessage('');
     setRunning(true);
+    setRunStarted(false);
 
     try {
-      const res = await fetch('/api/alert', {
+      await fetchEventSource('/api/alert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: alert }),
-      });
+        signal: ctrl.signal,
 
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) return;
+        onopen: async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        },
 
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE events from buffer
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        let currentEvent = '';
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            currentEvent = line.slice(6).trim();
-          } else if (line.startsWith('data:')) {
-            const data = JSON.parse(line.slice(5).trim());
-            if (currentEvent === 'step_complete') {
-              setSteps((prev: StepEvent[]) => [...prev, data as StepEvent]);
-            } else if (currentEvent === 'message') {
-              setFinalMessage(data.text);
-            } else if (currentEvent === 'error') {
-              setFinalMessage(`**Error:** ${data.message}`);
+        onmessage: (ev) => {
+          if (!ev.event || !ev.data) return;
+          try {
+            const data = JSON.parse(ev.data);
+            switch (ev.event) {
+              case 'run_start':
+                setRunStarted(true);
+                break;
+              case 'step_thinking':
+                setThinking(data as ThinkingState);
+                break;
+              case 'step_start':
+                setThinking({ agent: data.agent, status: 'processing...' });
+                break;
+              case 'step_complete':
+                setThinking(null);
+                setSteps((prev) => [...prev, data as StepEvent]);
+                break;
+              case 'message':
+                setThinking(null);
+                setFinalMessage(data.text);
+                break;
+              case 'run_complete':
+                setThinking(null);
+                break;
+              case 'error':
+                setThinking(null);
+                setErrorMessage(data.message);
+                break;
             }
+          } catch (parseErr) {
+            console.warn('Failed to parse SSE data:', ev.data, parseErr);
           }
-        }
-      }
-    } catch (err) {
-      console.error('SSE error:', err);
+        },
+
+        onerror: (err) => {
+          console.error('SSE error:', err);
+          // Don't retry — just let it close
+          throw err;
+        },
+
+        // Keep the connection open until the server closes it
+        openWhenHidden: true,
+      });
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      console.error('SSE stream error:', err);
     } finally {
       setRunning(false);
     }
@@ -132,6 +170,24 @@ export default function App() {
           {running ? 'Running...' : 'Send Alert'}
         </motion.button>
       </motion.div>
+
+      {/* Running indicator */}
+      <AnimatePresence>
+        {running && runStarted && steps.length === 0 && !thinking && (
+          <motion.div
+            className="glass-card p-6 mb-6"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.3 }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="animate-pulse h-2 w-2 rounded-full bg-brand" />
+              <span className="text-sm text-text-secondary">Orchestrator is starting...</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Steps Timeline */}
       <AnimatePresence>
@@ -178,6 +234,73 @@ export default function App() {
                 </motion.div>
               ))}
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Thinking indicator */}
+      <AnimatePresence>
+        {thinking && (
+          <motion.div
+            className="glass-card p-4 mb-6"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex gap-1">
+                <div className="animate-bounce h-1.5 w-1.5 rounded-full bg-brand" style={{ animationDelay: '0ms' }} />
+                <div className="animate-bounce h-1.5 w-1.5 rounded-full bg-brand" style={{ animationDelay: '150ms' }} />
+                <div className="animate-bounce h-1.5 w-1.5 rounded-full bg-brand" style={{ animationDelay: '300ms' }} />
+              </div>
+              <span className="text-sm text-text-secondary">
+                {thinking.agent} — {thinking.status}
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Error banner */}
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div
+            className="glass-card p-5 mb-6 border border-status-error/30"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.25 }}
+          >
+            <div className="flex items-start gap-3">
+              <span className="text-status-error text-lg leading-none mt-0.5">!</span>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-status-error mb-1">Agent run interrupted</p>
+                <p className="text-xs text-text-muted">
+                  {errorMessage.includes('404')
+                    ? 'A backend data source returned 404 — the Fabric graph model may still be refreshing after an ontology update. This usually resolves within 30–45 minutes.'
+                    : errorMessage.includes('429')
+                      ? 'Rate-limited by Azure AI. Wait a moment and retry.'
+                      : errorMessage.includes('400')
+                        ? 'A backend query returned an error. The graph schema or data may not match the query.'
+                        : `The orchestrator encountered an error: ${errorMessage.slice(0, 200)}`
+                  }
+                </p>
+                {steps.length > 0 && (
+                  <p className="text-xs text-text-muted mt-1">
+                    {steps.length} step{steps.length > 1 ? 's' : ''} completed before the error — results shown above.
+                  </p>
+                )}
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="mt-3 px-4 py-1.5 text-xs font-medium rounded-md bg-brand hover:bg-brand-hover text-white"
+                  onClick={submitAlert}
+                >
+                  Retry
+                </motion.button>
+              </div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

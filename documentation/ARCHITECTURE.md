@@ -4,6 +4,11 @@
 * azure-ai-projects-py
 * fastapi-router-py
 * frontend-ui-dark-ts
+/home/hanchoong/references/skills/.github/skills/azure-ai-projects-py
+/home/hanchoong/references/skills/.github/skills/hosted-agents-v2-py
+/home/hanchoong/references/skills/.github/skills/mcp-builder
+/home/hanchoong/references/skills/.github/skills/azure-appconfiguration-py
+/home/hanchoong/references/skills/.github/skills/azure-containerregistry-py
 
 ## System Overview
 
@@ -30,13 +35,20 @@ by a distinct data source in Microsoft Fabric or Azure AI Search.
               │ GraphExplorer   │   │ Telemetry    │ │ RunbookKB    │  │ HistoricalTicket│
               │ Agent           │   │ Agent        │ │ Agent        │  │ Agent           │
               └────────┬────────┘   └──────┬───────┘ └──────┬───────┘  └────────┬────────┘
-                       │ FabricTool         │ FabricTool     │ AI Search         │ AI Search
+                       │ OpenApiTool       │ OpenApiTool     │ AI Search         │ AI Search
                        ▼                    ▼                ▼                   ▼
-              ┌──────────────┐   ┌───────────────┐  ┌──────────────┐  ┌──────────────────┐
-              │ Fabric       │   │ Fabric        │  │ runbooks-    │  │ tickets-         │
-              │ Ontology +   │   │ Eventhouse    │  │ index        │  │ index            │
-              │ Lakehouse    │   │ (KQL/AlertDB) │  │ (hybrid)     │  │ (hybrid)         │
-              └──────────────┘   └───────────────┘  └──────────────┘  └──────────────────┘
+              ┌──────────────────┐   ┌──────────────────┐  ┌──────────────┐  ┌──────────────────┐
+              │ fabric-query-api │   │ fabric-query-api │  │ runbooks-    │  │ tickets-         │
+              │ POST /query/     │   │ POST /query/     │  │ index        │  │ index            │
+              │ graph (GQL)      │   │ telemetry (KQL)  │  │ (hybrid)     │  │ (hybrid)         │
+              └────────┬─────────┘   └────────┬─────────┘  └──────────────┘  └──────────────────┘
+                       │                      │
+                       ▼                      ▼
+              ┌──────────────┐   ┌───────────────┐
+              │ Fabric       │   │ Fabric        │
+              │ GraphModel   │   │ Eventhouse    │
+              │ (GQL API)    │   │ (KQL/Kusto)   │
+              └──────────────┘   └───────────────┘
 ```
 
 ---
@@ -58,6 +70,8 @@ by a distinct data source in Microsoft Fabric or Azure AI Search.
 │       ├── search.bicep        # Azure AI Search
 │       ├── storage.bicep       # Storage account + blob containers
 │       ├── fabric.bicep        # Fabric capacity (F-SKU)
+│       ├── container-apps-environment.bicep  # Log Analytics + ACR + Managed Environment
+│       ├── container-app.bicep              # Generic Container App (managed identity)
 │       └── roles.bicep         # RBAC assignments
 │
 ├── hooks/                      # azd lifecycle hooks
@@ -84,6 +98,11 @@ by a distinct data source in Microsoft Fabric or Azure AI Search.
 │   ├── provision_agents.py     # Create all 5 Foundry agents (orchestrator + 4 sub-agents)
 │   ├── test_orchestrator.py    # CLI test — stream orchestrator run with metadata
 │   ├── test_fabric_agent.py    # CLI test — query a single Fabric Data Agent
+│   ├── test_gql_query.py       # CLI test — GQL queries against Fabric GraphModel API
+│   ├── test_kql_query.py       # CLI test — KQL queries against Fabric Eventhouse
+│   ├── test_fabric_query_api.py # Deployment smoke test for fabric-query-api
+│   ├── assign_fabric_role.py   # Grant Container App identity Fabric workspace access
+│   ├── test_function_tool.py   # PoC — Foundry agent with FunctionTool (archived)
 │   ├── check_status.py         # Inspect Fabric workspace items and job status
 │   └── agent_ids.json          # Output: provisioned agent IDs
 │
@@ -96,6 +115,12 @@ by a distinct data source in Microsoft Fabric or Azure AI Search.
 │       │   └── agents.py       # GET /api/agents → list of agent metadata
 │       └── mcp/
 │           └── server.py       # FastMCP tool stubs (query_eventhouse, search_tickets, …)
+│
+├── fabric-query-api/           # Fabric data proxy — Container App micro-service
+│   ├── main.py                 # FastAPI app: POST /query/graph, POST /query/telemetry
+│   ├── pyproject.toml          # Python deps (fastapi, uvicorn, azure-identity, azure-kusto-data)
+│   ├── Dockerfile              # python:3.11-slim, uv for deps, port 8100
+│   └── openapi.yaml            # OpenAPI 3.0.3 spec — consumed by OpenApiTool agents
 │
 ├── frontend/                   # React SPA
 │   ├── package.json
@@ -149,8 +174,55 @@ sub-agents via Foundry's `ConnectedAgentTool`. Each sub-agent is scoped to one
 data source and has its own system prompt. This keeps each agent focused and
 testable independently.
 
-Fabric data access uses `FabricTool` — the agent SDK's native mechanism for
-querying Fabric Data Agents (Lakehouse ontology, Eventhouse KQL).
+### Fabric data access: OpenApiTool + fabric-query-api (V2)
+
+GraphExplorerAgent and TelemetryAgent access Microsoft Fabric through a dedicated
+Container App micro-service (`fabric-query-api`) rather than the Fabric Data Agent
+(`FabricTool`). This change was driven by a key constraint: `ConnectedAgentTool`
+sub-agents run server-side on Foundry and cannot execute client-side `FunctionTool`
+callbacks. `OpenApiTool` makes server-side REST calls, so it works natively.
+
+**fabric-query-api** is a lightweight FastAPI service with two endpoints:
+- `POST /query/graph` — executes GQL against the Fabric GraphModel REST API
+- `POST /query/telemetry` — executes KQL against Fabric Eventhouse via Kusto SDK
+
+The service authenticates to Fabric using `DefaultAzureCredential` (system-assigned
+managed identity in production). Each agent receives an `OpenApiTool` configured
+with the service's OpenAPI spec (`fabric-query-api/openapi.yaml`), and Foundry
+calls the endpoints directly at runtime.
+
+**Why not FabricTool?** FabricTool requires a Fabric Data Agent connected as a
+"Connected Resource" in AI Foundry — a manual portal step that cannot be automated.
+It also only supports delegated user identities, not managed identities. The
+OpenApiTool approach eliminates both limitations and provides full control over
+query construction (GQL/KQL) and error handling (429 retry, etc.).
+
+### Fabric identity and role assignment
+
+The `fabric-query-api` Container App authenticates to the Fabric REST API using
+its system-assigned managed identity (via `DefaultAzureCredential`). For this to
+work, the identity must be a member of the Fabric workspace.
+
+`scripts/assign_fabric_role.py` automates this:
+1. Reads `FABRIC_WORKSPACE_ID` and `FABRIC_QUERY_API_PRINCIPAL_ID` from `azure_config.env`
+2. Calls `GET /v1/workspaces/{id}/roleAssignments` to check if the principal already has a role
+3. If not, calls `POST /v1/workspaces/{id}/roleAssignments` to add it as **Contributor**
+
+The script is idempotent — re-running it skips if the assignment already exists.
+It must run after both `azd up` (which creates the Container App identity) and
+`provision_lakehouse.py` (which creates the Fabric workspace).
+
+### Deployment: `azd up` and `azd deploy`
+
+`azd up` runs the full infrastructure + service deployment cycle:
+1. `preprovision.sh` syncs `azure_config.env` → azd environment variables
+2. Bicep provisions all Azure resources (including Container Apps Environment + ACR)
+3. `azd deploy` builds and deploys `fabric-query-api` (Docker image built in ACR via `remoteBuild`)
+4. `postprovision.sh` uploads data to blob, writes deployment outputs to `azure_config.env`
+
+For code-only changes to `fabric-query-api`, use `azd deploy fabric-query-api`
+without re-running the full `azd up`. This rebuilds the container image and
+creates a new Container App revision (~60 seconds).
 
 ### SSE event protocol
 
@@ -241,12 +313,14 @@ it's user-set or auto-populated.
 | `FABRIC_KQL_DB_NAME` | populate_fabric_config | scripts/_config.py |
 | `EVENTHOUSE_QUERY_URI` | populate_fabric_config | scripts (provision_eventhouse — Kusto ingestion) |
 | **Fabric Data Agents** | | |
-| `GRAPH_DATA_AGENT_ID` | collect_fabric_agents | scripts (provision_agents) |
-| `TELEMETRY_DATA_AGENT_ID` | collect_fabric_agents | scripts (provision_agents) |
+| `GRAPH_DATA_AGENT_ID` | collect_fabric_agents | (legacy — unused in V2) |
+| `TELEMETRY_DATA_AGENT_ID` | collect_fabric_agents | (legacy — unused in V2) |
 | `FABRIC_DATA_AGENT_API_VERSION` | user (default ok) | scripts (test_fabric_agent) |
-| **Fabric connections** | | |
-| `GRAPH_FABRIC_CONNECTION_NAME` | user (manual) | scripts (provision_agents) |
-| `TELEMETRY_FABRIC_CONNECTION_NAME` | user (manual) | scripts (provision_agents) |
+| **fabric-query-api** | | |
+| `FABRIC_QUERY_API_URI` | postprovision (azd output) | scripts (provision_agents) |
+| `FABRIC_QUERY_API_PRINCIPAL_ID` | postprovision (azd output) | scripts (assign_fabric_role) |
+| `FABRIC_GRAPH_MODEL_ID` | provision_ontology | fabric-query-api (env var) |
+| `FABRIC_ONTOLOGY_ID` | provision_ontology | scripts |
 
 ### Config files beyond azure_config.env
 
@@ -270,14 +344,23 @@ it's user-set or auto-populated.
 
 ```
 azure_config.env → preprovision.sh → azd up (Bicep) → postprovision.sh → azure_config.env
-                                                        ├─ uploads runbooks/ → blob → create_runbook_indexer.py → AI Search
-                                                        └─ uploads tickets/  → blob → create_tickets_indexer.py → AI Search
+                                       │                ├─ uploads runbooks/ → blob → create_runbook_indexer.py → AI Search
+                                       │                └─ uploads tickets/  → blob → create_tickets_indexer.py → AI Search
+                                       │
+                                       ├─ Container Apps Environment (ACR + Log Analytics)
+                                       └─ fabric-query-api Container App (deployed by azd deploy)
+
 provision_lakehouse.py ─── CSV topology data ──────────▶ Fabric Lakehouse
 provision_eventhouse.py ── CSV telemetry data ─────────▶ Fabric Eventhouse (KQL)
 provision_ontology.py ──── ontology definition ────────▶ Fabric Ontology (graph index)
 populate_fabric_config.py ── discovers IDs ────────────▶ azure_config.env
-collect_fabric_agents.py ── discovers agent IDs ───────▶ azure_config.env
+assign_fabric_role.py ──── grants managed identity ────▶ Fabric workspace Contributor
 provision_agents.py ──── creates 5 Foundry agents ─────▶ agent_ids.json
+  ├─ GraphExplorerAgent   (OpenApiTool → fabric-query-api /query/graph)
+  ├─ TelemetryAgent       (OpenApiTool → fabric-query-api /query/telemetry)
+  ├─ RunbookKBAgent       (AzureAISearchTool → runbooks-index)
+  ├─ HistoricalTicketAgent(AzureAISearchTool → tickets-index)
+  └─ Orchestrator         (ConnectedAgentTool → all 4 above)
 ```
 
 ### Runtime flow (per alert)
@@ -299,10 +382,13 @@ User types alert → Frontend POST /api/alert
 | Component | Local | Production |
 |-----------|-------|------------|
 | API | `uvicorn :8000` | Azure Container Apps |
+| fabric-query-api | `uvicorn :8100` | Azure Container Apps (via `azd deploy`) |
 | Frontend | Vite dev server `:5173` | Azure Static Web Apps |
 | Infra | n/a | `azd up` → Azure |
 
-Production deployment config is stubbed in `azure.yaml` (commented-out `services` block).
+Production deployment uses `azd up` for infrastructure and `azd deploy` for
+services. The `fabric-query-api` service is configured with `remoteBuild: true`
+in `azure.yaml` so Docker images are built in ACR (cross-platform safe).
 CORS_ORIGINS must be updated to the production frontend URL before deploying.
 
 ---
@@ -312,7 +398,8 @@ CORS_ORIGINS must be updated to the production frontend URL before deploying.
 | Package | Version | Notes |
 |---------|---------|-------|
 | `azure-ai-projects` | `>=1.0.0,<2.0.0` | v2 has breaking API changes |
-| `azure-ai-agents` | `1.2.0b6` | Required for `FabricTool`, `ConnectedAgentTool` |
+| `azure-ai-agents` | `1.2.0b6` | `OpenApiTool`, `ConnectedAgentTool`, `AzureAISearchTool` |
+| `azure-kusto-data` | `>=4.6.0` | KQL queries against Eventhouse |
 | `fastapi` | `>=0.115` | ASGI framework |
 | `sse-starlette` | `>=2.0` | SSE responses |
 | `mcp[cli]` | `>=1.9.0` | FastMCP server framework |

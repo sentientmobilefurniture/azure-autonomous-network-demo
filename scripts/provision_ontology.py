@@ -305,11 +305,11 @@ ENTITY_TYPES = [
         "visibility": "Visible",
         "properties": [
             prop(P_SLA_POLICY_ID, "SLAPolicyId"),
-            prop(P_SLA_SERVICE_ID, "SLAServiceId"),
+            prop(P_SLA_SERVICE_ID, "ServiceId"),
             prop(P_AVAILABILITY_PCT, "AvailabilityPct", "Double"),
             prop(P_MAX_LATENCY_MS, "MaxLatencyMs", "BigInt"),
             prop(P_PENALTY_PER_HOUR, "PenaltyPerHourUSD", "BigInt"),
-            prop(P_SLA_TIER, "SLATier"),
+            prop(P_SLA_TIER, "Tier"),
         ],
         "timeseriesProperties": [],
     },
@@ -928,13 +928,6 @@ def main():
     for key, value in env_updates.items():
         print(f"    {key}={value}")
 
-    print("\n  Next steps (manual — Step 2.6):")
-    print("    1. Open Fabric portal → workspace → + New item → Data agent")
-    print("    2. Name: NetworkOntologyAgent")
-    print("    3. Add data source → select NetworkTopologyOntology")
-    print("    4. Paste instructions from data/prompts/data_agent_instructions.md")
-    print("    5. Test: 'What services depend on LINK-SYD-MEL-FIBRE-01?'")
-    print()
 
 
 if __name__ == "__main__":

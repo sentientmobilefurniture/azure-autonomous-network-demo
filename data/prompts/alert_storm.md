@@ -1,3 +1,4 @@
+AlertId,Timestamp,SourceNodeId,SourceNodeType,AlertType,Severity,Description,OpticalPowerDbm,BitErrorRate,CPUUtilPct,PacketLossPct
 ALT-20260206-003229,2026-02-06T14:31:14.077Z,MOB-5G-MEL-3011,Service,SERVICE_DEGRADATION,WARNING,Backhaul degradation — voice quality MOS below threshold,-2.9,6.462e-12,66.2,16.23    
 ALT-20260206-003677,2026-02-06T14:31:14.124Z,MOB-5G-SYD-2042,Service,SERVICE_DEGRADATION,WARNING,Backhaul degradation — voice quality MOS below threshold,-2.7,1.973e-12,49.6,21.98    
 ALT-20260206-003626,2026-02-06T14:31:14.133Z,VPN-ACME-CORP,Service,SERVICE_DEGRADATION,CRITICAL,VPN tunnel unreachable — primary MPLS path down,-3.1,3.616e-12,59.4,23.0    

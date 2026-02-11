@@ -52,19 +52,20 @@ decisions, data flow diagrams, and the configuration signpost.
 
 ## Target Demo flow
 
-1. GraphExplorerAgent in Foundry connects to Fabric ontology via fabric data agent (NetworkQueryAgent) and uses it to navigate network topology.
-2. RunbookKBAgent in Foundry looks at historical runbooks for guidance on what to do in certain scenarios. (connected to runbooks-index)
-3. HistoricalTicketAgent looks at old tickets to find similar scenarios (connected to tickets-index)
-4. TelemetryAgent connects to telemetry stored in Fabric EventHouse via fabric data agent (TelemetryQueryAgent) and uses it to retrieve metrics and observational evidence. 
-5. Orchestrator agent receives alert storm prompt (/data/prompts/alert_storm.md), runs diagnosis flow in (/home/hanchoong/projects/autonomous-network-demo/data/prompts/orchestrator_agent.md). Is connected to GraphExplorerAgent, RunbookKBAgent, HistoricalTicketAgent, TelemetryAgent
+1. **GraphExplorerAgent** queries the Fabric ontology graph via `OpenApiTool` → `fabric-query-api` `/query/graph` (GQL). Navigates network topology (routers, switches, links, base stations).
+2. **RunbookKBAgent** searches historical runbooks for remediation guidance (`AzureAISearchTool` → `runbooks-index`).
+3. **HistoricalTicketAgent** finds similar past incidents (`AzureAISearchTool` → `tickets-index`).
+4. **TelemetryAgent** retrieves metrics and alert evidence via `OpenApiTool` → `fabric-query-api` `/query/telemetry` (KQL).
+5. **Orchestrator** receives an alert storm, delegates to all four agents via `ConnectedAgentTool`, correlates findings, and produces a diagnosis with recommended actions.
 
-## Current Implementation State 
+## Current Implementation State
 
-1. azd up to deploy azure services works okay 
-2. provision fabric and create indexer scripts work okay
-3. fabric data agent works fine 
-4. foundry agent can call fabric data agent
-5. Foundry agent can call other agents 
+1. `azd up` deploys Azure infra (AI Foundry, AI Search, Storage, Fabric Capacity, Container Apps)
+2. `azd deploy fabric-query-api` builds & deploys the Fabric query micro-service to Container Apps
+3. Fabric provisioning scripts create workspace, lakehouse, eventhouse, and ontology
+4. `assign_fabric_role.py` grants the Container App managed identity Fabric workspace access
+5. `provision_agents.py` creates all 5 Foundry agents with OpenApiTool + AzureAISearchTool
+6. Multi-agent orchestrator flow tested end-to-end
 
 ## Setup
 
@@ -94,7 +95,17 @@ cd ../..
 azd up -e myenvname    # Names both the azd env and the resource group
 ```
 
-This deploys AI Foundry, AI Search, Storage, and Fabric Capacity via Bicep.
+This deploys:
+- AI Foundry (account + project + GPT deployment)
+- Azure AI Search
+- Storage account + blob containers
+- Fabric Capacity (F-SKU)
+- Container Apps Environment (ACR + Log Analytics)
+- fabric-query-api Container App (system-assigned managed identity)
+
+`postprovision.sh` runs automatically — uploads runbook/ticket data to blob storage
+and writes deployment outputs (including `FABRIC_QUERY_API_URI` and
+`FABRIC_QUERY_API_PRINCIPAL_ID`) to `azure_config.env`.
 
 ### 3. Provision data stores
 
@@ -106,27 +117,37 @@ uv run python scripts/provision_eventhouse.py
 uv run python scripts/provision_ontology.py   # ~30 min for graph indexing
 ```
 
-### 4. Create Fabric Data Agents (manual)
+### 4. Grant Fabric access to the Container App
 
-1. Create anomaly detectors in Fabric
-2. Create two Fabric Data Agents using prompts in `data/prompts/`:
-   - `fabric_network_data_agent_instructions.md` → Graph/Ontology Data Agent (Lakehouse)
-   - `fabric_telemetry_data_agent_instructions.md` → Telemetry Data Agent (Eventhouse)
-3. Register them:
-   ```bash
-   uv run python scripts/collect_fabric_agents.py
-   ```
+The `fabric-query-api` Container App must be a Fabric workspace member to execute
+GQL/KQL queries using its managed identity:
 
-### 5. Create Fabric connections in Foundry
+```bash
+uv run python scripts/assign_fabric_role.py
+```
 
-Manually create **two** Fabric connections in Foundry UI (Management Center → Connected Resources).
-`provision_agents.py` will prompt for connection names if not pre-filled in `azure_config.env`.
+This reads `FABRIC_WORKSPACE_ID` and `FABRIC_QUERY_API_PRINCIPAL_ID` from
+`azure_config.env` and assigns the Contributor role via the Fabric REST API.
+Re-running is safe — it skips if the role already exists.
+
+### 5. Verify the deployed API
+
+```bash
+uv run python scripts/test_fabric_query_api.py
+```
+
+This smoke-tests both `/query/graph` (GQL) and `/query/telemetry` (KQL) on the
+deployed Container App.
 
 ### 6. Provision Foundry agents
 
 ```bash
 uv run python scripts/provision_agents.py
 ```
+
+Creates 5 agents: Orchestrator + GraphExplorer + Telemetry + RunbookKB +
+HistoricalTicket. GraphExplorer and Telemetry use `OpenApiTool` pointing at
+the deployed `fabric-query-api`.
 
 ### 7. Test the multi-agent flow (CLI)
 
@@ -146,39 +167,239 @@ cd frontend && npm run dev
 
 Open http://localhost:5173 — the Vite dev server proxies `/api/*` to the backend.
 
+### Redeploying fabric-query-api
+
+If you change `fabric-query-api/` code after initial `azd up`:
+
+```bash
+azd deploy fabric-query-api
+```
+
+This rebuilds the Docker image in ACR (`remoteBuild: true`) and updates the
+Container App revision. No need to re-run `azd up` for code-only changes.
+
+---
+
+## Operations
+
+### Starting the UI locally
+
+```bash
+# Terminal 1 — Backend API
+cd api && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2 — Frontend
+cd frontend && npm run dev
+```
+
+Open http://localhost:5173. The Vite dev server proxies `/api/*` and `/health` to the backend.
+
+### Restarting the frontend
+
+The frontend picks up `.tsx` changes via HMR automatically. For config changes
+(`vite.config.ts`, `package.json`, `tailwind.config.js`), you must restart:
+
+```bash
+# Kill and restart
+lsof -ti:5173 | xargs -r kill -9
+cd frontend && npm run dev
+```
+
+### Restarting the backend
+
+The backend runs with `--reload`, so Python file changes are picked up
+automatically. To fully restart:
+
+```bash
+lsof -ti:8000 | xargs -r kill -9
+cd api && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Killing everything
+
+```bash
+# Kill frontend + backend + fabric-query-api (local)
+lsof -ti:8000,5173,5174,8100 | xargs -r kill -9
+```
+
+### Container App management
+
+The `fabric-query-api` runs as an Azure Container App. Common operations:
+
+```bash
+# Set these or source azure_config.env
+CA_NAME=ca-fabricquery-<suffix>
+RG=rg-<your-resource-group>
+
+# View recent logs (last 50 lines)
+az containerapp logs show --name $CA_NAME --resource-group $RG --type console --tail 50
+
+# Stream logs in real-time
+az containerapp logs show --name $CA_NAME --resource-group $RG --type console --follow
+
+# Check current revision & status
+az containerapp show --name $CA_NAME --resource-group $RG --query "{fqdn:properties.configuration.ingress.fqdn, replicas:properties.template.scale.minReplicas, revision:properties.latestRevisionName}" -o table
+
+# View env vars on the container
+az containerapp show --name $CA_NAME --resource-group $RG --query "properties.template.containers[0].env" -o table
+
+# Restart (creates new revision with same config)
+az containerapp revision restart --name $CA_NAME --resource-group $RG --revision <REVISION_NAME>
+
+# Redeploy after code changes
+azd deploy fabric-query-api
+```
+
+### Reprovisioning agents
+
+After changing prompts, OpenAPI specs, or agent configuration:
+
+```bash
+uv run python scripts/provision_agents.py
+```
+
+This deletes old agents and creates fresh ones. The backend reads `agent_ids.json`
+at request time, so no backend restart is needed.
+
+### Checking agent health
+
+```bash
+# List agents and their IDs
+curl -s http://localhost:8000/api/agents | python3 -m json.tool
+
+# Quick health check
+curl -s http://localhost:8000/health
+```
+
+### Running the orchestrator from CLI
+
+For debugging without the UI:
+
+```bash
+# Default alert
+uv run python scripts/test_orchestrator.py
+
+# Custom alert
+uv run python scripts/test_orchestrator.py "08:15:00 MAJOR ROUTER-SYD-01 BGP_FLAP BGP session down"
+
+# Quiet mode (final response only)
+uv run python scripts/test_orchestrator.py --quiet
+```
+
+---
+
+## Troubleshooting
+
+### Viewing Container App logs
+
+When agents return `HTTP 400` or other errors, check the `fabric-query-api`
+container logs for the raw request body and Fabric error:
+
+```bash
+# Recent logs (last 50 lines)
+az containerapp logs show \
+  --name <CONTAINER_APP_NAME> \
+  --resource-group <RESOURCE_GROUP> \
+  --type console \
+  --tail 50
+
+# Follow logs in real-time
+az containerapp logs show \
+  --name <CONTAINER_APP_NAME> \
+  --resource-group <RESOURCE_GROUP> \
+  --type console \
+  --follow
+```
+
+The logging middleware logs every incoming POST body and flags 4xx+ responses.
+Look for lines like:
+
+```
+INFO  Incoming POST /query/graph — body=b'{"query": "MATCH ..."}'
+WARNING  Response 400 for POST /query/graph
+```
+
+Common GQL 400 causes:
+- **Property not found** — the GQL property name doesn't match the ontology
+  property name (see "Ontology naming rules" below).
+- **Relationship direction wrong** — GQL edge traversal `->` vs `<-` doesn't
+  match the ontology relationship source/target definition.
+- **Entity type not found** — typing mistake in the node label (e.g., `SlaPolicy`
+  instead of `SLAPolicy`).
+
+### Ontology property naming rules
+
+**GQL queries must use ontology property names, NOT Lakehouse column names.**
+
+The Fabric graph model exposes properties by the names defined in
+`provision_ontology.py` via `prop(id, "PropertyName")`. These names may differ
+from the underlying Lakehouse CSV column names. The binding maps CSV columns to
+property IDs (integers), and the property ID maps to a property name.
+
+Example:
+
+```
+# Lakehouse CSV column     →  Ontology property name  →  GQL usage
+# "ServiceId"              →  "ServiceId"              →  sla.ServiceId
+# "Tier"                   →  "Tier"                   →  sla.Tier
+```
+
+When adding new entity types or properties:
+1. **Match property names to CSV column names** wherever possible to avoid
+   confusion. Only rename when there's a genuine ambiguity (e.g., both
+   `Service.ServiceId` and `SLAPolicy.ServiceId` — but in GQL, properties are
+   entity-scoped so this isn't actually ambiguous).
+2. **Update the agent prompt** in `data/prompts/foundry_graph_explorer_agent_v2.md`
+   with the exact property names from the ontology definition.
+3. **Test the GQL query** directly against `/query/graph` before provisioning
+   agents — a 400 from Fabric will include the available property names in the
+   error message.
+
+### Debug endpoint
+
+Set `DEBUG_ENDPOINTS=1` as an env var on the Container App to enable `/debug/raw-gql`,
+which returns the raw Fabric API response without normalization. Useful for
+diagnosing GQL issues. Disabled by default in production.
+
 ## TODO
 
 ### Automation
 - [x] Bug fix provision_ontology.py
 - [x] Auto fill eventhouse tables
-- [ ] Auto create fabric data agents (pending API support)
-- [ ] Auto create anomaly detectors (pending API support)
 - [x] Multi-agent workflow provisioning
 - [x] Test multi-agent flow programmatically
 - [x] Stream agent events with input/output metadata
+- [x] Decouple from Fabric Data Agent → OpenApiTool + fabric-query-api
+- [x] Automate Fabric role assignment (`assign_fabric_role.py`)
+- [x] Deploy fabric-query-api to Container Apps (`azd deploy`)
 
 ### Frontend & API
 - [x] FastAPI backend with SSE streaming
 - [x] React/Vite dark theme UI scaffold
 - [x] Wire real orchestrator into SSE endpoint
-- [ ] Deploy API to Azure Container Apps
+- [x] Deploy fabric-query-api to Azure Container Apps
+- [x] Test independent graph querying
+- [x] Fix unreliable behavior - Ontology/Data file mismatch + confusing prompt spec - Fixed
+- [x] Verify that v2 architecture works with current UI
+- [x] Fix event streaming not working
+- [ ] Final test before merging v2architecture
+- [ ] Deploy main API to Azure Container Apps
 - [ ] Deploy frontend to Azure Static Web Apps
 
 ### Future
 - [x] Format query and response text with markdown
-- [x] Query Fabric graph directly
-- [ ] Consider moving graph to another service for the sake of demo reliability
-- [ ] Decouple graph exploration - Abandon use of Fabric data agent. We will instead query it directly - This will allow us to assert greater control over GQL/KQL to avoid timeouts
-- [ ] Cache common GQL queries. Like grab via embedding from a REDIS CACEHE!! instead of generating?
+- [x] Query Fabric graph directly (GQL via REST API)
+- [x] Create and test graph query tool — FunctionTool PoC → OpenApiTool production
+- [ ] Evaluate Neo4j as alternative graph backend (Fabric F8 capacity too fragile for concurrent agent calls)
+- [ ] Cache common GQL queries (Redis / embedding cache)
 - [ ] Link telemetry from all agents rather than just the orchestrator
-- [ ] MCP server tools 
+- [ ] MCP server tools
 - [ ] CosmosDB for tickets
 - [ ] Corrective action API
 - [ ] Live visualization of the graph directly in the UI
-- [ ] Click on a node, select a particular type of error or scenario, trigger it! - Needs reset button. Hot damn! 
-- [ ] Expand data complexity and size to more closely affect real world? 
-- [ ] Connect Redis to cache frequently asked/difficult questions OR generate subgraphs? Back up somewhere...perhaps cosmosDB?
+- [ ] Click on a node, select a particular type of error or scenario, trigger it!
+- [ ] Expand data complexity and size to more closely model real world
 - [ ] Play by play commentary on each step of the demo
-- [ ] Better and more readable formatting of demo output 
-- [ ] Logs and application insights to trace server-side errors 
-- [ ] Display final response somewhere - We need a wireframe 
+- [ ] Better and more readable formatting of demo output
+- [ ] Logs and Application Insights to trace server-side errors
+- [ ] Display final response somewhere — wireframe needed

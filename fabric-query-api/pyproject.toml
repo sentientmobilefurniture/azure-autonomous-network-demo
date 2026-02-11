@@ -1,0 +1,15 @@
+[project]
+name = "fabric-query-api"
+version = "0.4.0"
+description = "Micro-API for executing GQL and KQL queries against Microsoft Fabric"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "azure-identity>=1.19.0",
+    "httpx>=0.28.0",
+    "azure-kusto-data>=4.6.0",
+]
+
+[dependency-groups]
+dev = []
