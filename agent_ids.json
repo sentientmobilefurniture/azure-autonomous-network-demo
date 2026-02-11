@@ -1,0 +1,24 @@
+{
+  "orchestrator": {
+    "id": "asst_8V9eZo9n4gToVFaMExfvIjKF",
+    "name": "Orchestrator"
+  },
+  "sub_agents": {
+    "GraphExplorerAgent": {
+      "id": "asst_NY7c7SpXMWElt0JaLeknMSUa",
+      "name": "GraphExplorerAgent"
+    },
+    "TelemetryAgent": {
+      "id": "asst_s38JXFGtwgQO3fcMmRpNnlps",
+      "name": "TelemetryAgent"
+    },
+    "RunbookKBAgent": {
+      "id": "asst_29LX86GTquXgFEIaSOBTZpZQ",
+      "name": "RunbookKBAgent"
+    },
+    "HistoricalTicketAgent": {
+      "id": "asst_eP2nuhD41Sa10bzkkkHtD6Ho",
+      "name": "HistoricalTicketAgent"
+    }
+  }
+}

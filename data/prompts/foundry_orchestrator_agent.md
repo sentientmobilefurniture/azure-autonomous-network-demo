@@ -64,9 +64,10 @@ The input names a specific infrastructure component (e.g. "LINK-SYD-MEL-FIBRE-01
 1. **Understand the trigger.** Identify the affected component ID, alert type, and severity.
 2. **Gather telemetry evidence.** Ask the TelemetryAgent for recent alerts and telemetry readings for the affected component. Use the telemetry reference section above to determine if it is down, degraded, or healthy.
 3. **Map the blast radius.** Ask the GraphExplorerAgent: what paths traverse this component, what services depend on those paths, what SLA policies govern those services. Ask for all affected entities.
-4. **Retrieve the procedure.** Ask the RunbookKBAgent for the SOP matching the incident type.
-5. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents on the same corridor or component.
-6. **Synthesise** into a situation report.
+4. **Identify the top 3 most likely root causes.** Use the telemetry evidence, topology context, and alert patterns to rank up to 3 plausible root causes in order of likelihood. For each, state the evidence supporting it and any evidence against it.
+5. **Retrieve the procedure.** Ask the RunbookKBAgent for the SOP matching each candidate root cause.
+6. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents on the same corridor or component.
+7. **Synthesise** into a situation report.
 
 ### Flow B: Alert storm / service-level symptoms
 The input is a batch of alerts, typically multiple SERVICE_DEGRADATION alerts hitting different services in a narrow time window. Work **backward** from symptoms to root cause.
@@ -74,10 +75,11 @@ The input is a batch of alerts, typically multiple SERVICE_DEGRADATION alerts hi
 1. **Analyse the alert storm.** Ask the TelemetryAgent for recent alerts across all entities. Interpret the results yourself: how many alerts, which entities are affected, what are the severity levels. Look for temporal patterns — the earliest alerts are likely closest to the root cause.
 2. **Find the common cause.** Take the list of affected entity IDs from step 1 and ask the GraphExplorerAgent to trace their dependency chains and identify the common infrastructure ancestor — the component that all affected services share in their dependency paths.
 3. **Confirm root cause status.** Ask the TelemetryAgent for recent alerts and telemetry on the suspected root cause component. Interpret the readings yourself using the thresholds from Flow A step 2.
-4. **Get full blast radius.** Ask the GraphExplorerAgent to get full blast radius details on the confirmed root component (all paths, all services, all SLA policies).
-5. **Retrieve the procedure.** Ask the RunbookKBAgent — use the alert_storm_triage_guide first for correlation, then the specific runbook matching the root cause type (fibre_cut, bgp_peer_loss, etc.).
-6. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents.
-7. **Synthesise** into a situation report.
+4. **Rank the top 3 most likely root causes.** Correlate the alert timeline, topology dependencies, and telemetry readings to produce up to 3 candidate root causes in order of likelihood. For each, state the supporting evidence and any counter-evidence. The common ancestor from step 2 is usually the primary candidate, but consider alternatives (e.g. coincident unrelated failures, control-plane vs data-plane issues).
+5. **Get full blast radius.** Ask the GraphExplorerAgent to get full blast radius details on the confirmed root component (all paths, all services, all SLA policies).
+6. **Retrieve the procedure.** Ask the RunbookKBAgent — use the alert_storm_triage_guide first for correlation, then the specific runbook matching each candidate root cause type (fibre_cut, bgp_peer_loss, etc.).
+7. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents.
+8. **Synthesise** into a situation report.
 
 Not every investigation requires all agents or all steps. Use your judgement:
 - A topology-only question may only need the GraphExplorerAgent.
@@ -96,13 +98,22 @@ What happened, which component is affected, severity.
 ### 2. Blast Radius
 Downstream infrastructure (paths, switches, base stations), affected services, and SLA exposure. Include entity IDs.
 
-### 3. Recommended Actions
-Steps from the relevant runbook(s), in order. Cite which runbook each step comes from.
+### 3. Top 3 Probable Root Causes
+Rank up to 3 most likely root causes in order of probability. For each:
+- **Root Cause N:** Brief description and component ID
+- **Evidence for:** What telemetry, alerts, or topology data supports this
+- **Evidence against:** Any counter-evidence or uncertainty
+- **Remediation:** Specific actions to take if this is confirmed, citing the relevant runbook
 
-### 4. Historical Precedents
+If only one root cause is plausible from the evidence, explain why alternatives were ruled out.
+
+### 4. Recommended Actions
+Consolidated remediation steps in priority order, starting with the most likely root cause. Cite which runbook each step comes from. Include immediate actions, verification steps, and escalation criteria.
+
+### 5. Historical Precedents
 Similar past incidents, their resolution, time to resolve, and lessons learned. If none exist, say so.
 
-### 5. Risk Assessment
+### 6. Risk Assessment
 SLA breach window, customer impact scope, whether alternate paths exist and have sufficient capacity.
 
 ## Rules

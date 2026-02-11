@@ -15,6 +15,7 @@ param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
 param principalId = readEnvironmentVariable('AZURE_PRINCIPAL_ID', '')
 param fabricAdminEmail = readEnvironmentVariable('AZURE_FABRIC_ADMIN', '')
 param fabricSkuName = readEnvironmentVariable('AZURE_FABRIC_SKU', 'F32')
+param gptCapacity = int(readEnvironmentVariable('GPT_CAPACITY_1K_TPM', '10'))
 param tags = {
   project: 'autonomous-network-noc'
   environment: readEnvironmentVariable('AZURE_ENV_NAME', 'noc-demo')

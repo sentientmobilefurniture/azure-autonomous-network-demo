@@ -30,6 +30,9 @@ param fabricAdminEmail string = ''
 @allowed(['F2', 'F4', 'F8', 'F16', 'F32', 'F64', 'F128', 'F256', 'F512', 'F1024', 'F2048'])
 param fabricSkuName string = 'F32'
 
+@description('GPT model capacity in 1K TPM units (e.g. 10 = 10K tokens/min, 100 = 100K TPM)')
+param gptCapacity int = 10
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -100,6 +103,7 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
     storageAccountId: storage.outputs.id
     storageAccountName: storage.outputs.name
     storageContainerName: storage.outputs.containerName
+    gptCapacity: gptCapacity
   }
 }
 

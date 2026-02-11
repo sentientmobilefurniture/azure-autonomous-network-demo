@@ -15,8 +15,8 @@ dependencies = [
     # Env file loading
     "python-dotenv>=1.0.0",
     # Foundry Agent Service (Day 3)
-    "azure-ai-projects>=1.0.0b7",
-    "azure-ai-agents>=1.0.0",
+    "azure-ai-projects>=1.0.0,<2.0.0",
+    "azure-ai-agents==1.2.0b6",
     # Eventhouse KQL queries & ingestion (Day 3-4)
     "azure-kusto-data>=4.6.0",
     "azure-kusto-ingest>=4.6.0",

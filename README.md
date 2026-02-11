@@ -1,6 +1,6 @@
 # Sydney Fiber Cut Demo 
 
-> **CONFIRMATION NEEDED **Tip: Ontology is a preview feature and may exhibit unexpected behaviors. Sweden Central may be faster due to less regional contention, but this is anecdotal and needs more observation. Expect 30-90 minutes for the graph to become queryable, and for all entities to finish indexing. This wait is normal for now. If you are anxious, scheduling a graph refresh may help as one is triggered whenever the ontology is updated.**
+> **CONFIRMATION NEEDED **Tip: Ontology is a preview feature and may exhibit unexpected behaviors. Sweden Central may be faster due to less regional contention, but this is anecdotal and needs more observation. Expect 20-90 minutes for the graph to finish indexing and become available to query. This wait is normal for now. If you are anxious, scheduling a graph refresh may help as one is triggered whenever the ontology is updated.**
 
 ## Azure Services Used 
 
@@ -15,13 +15,14 @@
 3. Historical Tickets in AI Search index (hybrid, embeddings + words)
 4. Graph data in fabric lakehouse 
 
+
 ## Target Demo flow
 
-1. GraphExplorerAgent in Foundry connects to Fabric ontology via fabric data agent and uses it to navigate network topology.
+1. GraphExplorerAgent in Foundry connects to Fabric ontology via fabric data agent (NetworkQueryAgent) and uses it to navigate network topology.
 2. RunbookKBAgent in Foundry looks at historical runbooks for guidance on what to do in certain scenarios. (connected to runbooks-index)
 3. HistoricalTicketAgent looks at old tickets to find similar scenarios (connected to tickets-index)
-4. TelemetryAgent looks at telemetry stored in Fabric EventHouse and uses it to retrieve metrics and observational evidence. 
-5. Orchestrator agent receives alert storm prompt (/data/prompts/alert_storm.md), runs diagnosis flow in (/home/hanchoong/projects/autonomous-network-demo/data/prompts/orchestrator_agent.md) 
+4. TelemetryAgent connects to telemetry stored in Fabric EventHouse via fabric data agent (TelemetryQueryAgent) and uses it to retrieve metrics and observational evidence. 
+5. Orchestrator agent receives alert storm prompt (/data/prompts/alert_storm.md), runs diagnosis flow in (/home/hanchoong/projects/autonomous-network-demo/data/prompts/orchestrator_agent.md). Is connected to GraphExplorerAgent, RunbookKBAgent, HistoricalTicketAgent, TelemetryAgent
 
 ## Current Implementation State 
 
@@ -47,29 +48,45 @@ uv run python3 create_runbook_indexer.py
 uv run python3 create_tickets_indexer.py
 uv run python3 provision_lakehouse.py
 uv run python3 provision_eventhouse.py
-uv run python3 provision_ontology.py
+uv run python3 provision_ontology.py # To Swedencentral - Requires 30 mins to become available for query
 ```
 2. Manually create anomaly detectors
-3. Manually create fabric data agents using the prompts in /data/prompts 
-4. Manually create foundry agents and link them 
+3. Manually create fabric data agents using the prompts in /data/prompts:
+   - `fabric_network_data_agent_instructions.md` → Graph/Ontology Data Agent (Lakehouse)
+   - `fabric_telemetry_data_agent_instructions.md` → Telemetry Data Agent (Eventhouse)
+4. Run this script and select the appropriate agents:
+```bash
+uv run python3 collect_fabric_agents.py
+```
+5. Manually create **two** fabric connections in Foundry UI (one per Data Agent) (Management Center -> Connected Resources). Refer to azure_config.env for workspace and artifact IDs
+   `provision_agents.py` will prompt for the connection names if not pre-filled in `azure_config.env`.
+6. Run this script to create the multi-agent system:
+```bash 
+uv run python3 provision_agents.py
+```
+7. Run this script to test the multi-agent flow:
+```bash
+uv run python3 test_orchestrator.py
+```
 
 ## TO DO - Automation Tasks 
 1. ~~Bug fix provision_ontology.py - Why doesn't graph materialize?~~
 2. ~~Auto fill eventhouse tables~~
 3. (HOLD) Auto create fabric data agents for telemetry and graph (Not sure if supported)
 4. (HOLD) Auto create anomaly detectors (Not sure if supported)
-5. Automatically define multi-agent workflow (using yaml rather than pure python SDK)
+5. ~~Automatically define multi-agent workflow (using yaml rather than pure python SDK)~~
 6. Test multi-agent workflow programmatically 
-
-## TO DO - Demo Structuring  
-1. Deploy MCP server 
-2. Switch tickets to CosmosDB, connect to cosmosdb 
-3. 
+7. Stream agent events and thread logs for eventual display on a UI
 
 ## TO DO - Demo Completion - Frontend time
 1. Create simulator environment - See about using Azure Websites
 2. At push of a button, trigger alert storm, see results 
 3. Agent should trigger some corrective action (Dummy API request)
+
+## TO DO - Demo Structuring  
+1. Deploy MCP server 
+2. Switch tickets to CosmosDB, connect to cosmosdb 
+3. 
 
 ## TO DO - Extra Credit
 1. Dummy API response does something to a simulated network infra (Seems unnecessary lol)

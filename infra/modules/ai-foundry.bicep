@@ -32,6 +32,9 @@ param storageAccountName string
 @description('Name of the blob container for runbooks')
 param storageContainerName string
 
+@description('GPT model capacity in 1K TPM units (e.g. 10 = 10K tokens/min)')
+param gptCapacity int = 10
+
 // ---------------------------------------------------------------------------
 // AI Foundry Resource (CognitiveServices account, kind=AIServices)
 // This is a superset of Azure OpenAI — hosts models AND enables projects.
@@ -85,7 +88,7 @@ resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
   dependsOn: [embeddingDeployment]
   sku: {
     name: 'GlobalStandard'
-    capacity: 10
+    capacity: gptCapacity
   }
   properties: {
     model: {
