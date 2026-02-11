@@ -52,19 +52,20 @@ decisions, data flow diagrams, and the configuration signpost.
 
 ## Target Demo flow
 
-1. GraphExplorerAgent in Foundry connects to Fabric ontology via fabric data agent (NetworkQueryAgent) and uses it to navigate network topology.
-2. RunbookKBAgent in Foundry looks at historical runbooks for guidance on what to do in certain scenarios. (connected to runbooks-index)
-3. HistoricalTicketAgent looks at old tickets to find similar scenarios (connected to tickets-index)
-4. TelemetryAgent connects to telemetry stored in Fabric EventHouse via fabric data agent (TelemetryQueryAgent) and uses it to retrieve metrics and observational evidence. 
-5. Orchestrator agent receives alert storm prompt (/data/prompts/alert_storm.md), runs diagnosis flow in (/home/hanchoong/projects/autonomous-network-demo/data/prompts/orchestrator_agent.md). Is connected to GraphExplorerAgent, RunbookKBAgent, HistoricalTicketAgent, TelemetryAgent
+1. **GraphExplorerAgent** queries the Fabric ontology graph via `OpenApiTool` → `fabric-query-api` `/query/graph` (GQL). Navigates network topology (routers, switches, links, base stations).
+2. **RunbookKBAgent** searches historical runbooks for remediation guidance (`AzureAISearchTool` → `runbooks-index`).
+3. **HistoricalTicketAgent** finds similar past incidents (`AzureAISearchTool` → `tickets-index`).
+4. **TelemetryAgent** retrieves metrics and alert evidence via `OpenApiTool` → `fabric-query-api` `/query/telemetry` (KQL).
+5. **Orchestrator** receives an alert storm, delegates to all four agents via `ConnectedAgentTool`, correlates findings, and produces a diagnosis with recommended actions.
 
-## Current Implementation State 
+## Current Implementation State
 
-1. azd up to deploy azure services works okay 
-2. provision fabric and create indexer scripts work okay
-3. fabric data agent works fine 
-4. foundry agent can call fabric data agent
-5. Foundry agent can call other agents 
+1. `azd up` deploys Azure infra (AI Foundry, AI Search, Storage, Fabric Capacity, Container Apps)
+2. `azd deploy fabric-query-api` builds & deploys the Fabric query micro-service to Container Apps
+3. Fabric provisioning scripts create workspace, lakehouse, eventhouse, and ontology
+4. `assign_fabric_role.py` grants the Container App managed identity Fabric workspace access
+5. `provision_agents.py` creates all 5 Foundry agents with OpenApiTool + AzureAISearchTool
+6. Multi-agent orchestrator flow tested end-to-end
 
 ## Setup
 
@@ -94,7 +95,17 @@ cd ../..
 azd up -e myenvname    # Names both the azd env and the resource group
 ```
 
-This deploys AI Foundry, AI Search, Storage, and Fabric Capacity via Bicep.
+This deploys:
+- AI Foundry (account + project + GPT deployment)
+- Azure AI Search
+- Storage account + blob containers
+- Fabric Capacity (F-SKU)
+- Container Apps Environment (ACR + Log Analytics)
+- fabric-query-api Container App (system-assigned managed identity)
+
+`postprovision.sh` runs automatically — uploads runbook/ticket data to blob storage
+and writes deployment outputs (including `FABRIC_QUERY_API_URI` and
+`FABRIC_QUERY_API_PRINCIPAL_ID`) to `azure_config.env`.
 
 ### 3. Provision data stores
 
@@ -106,27 +117,37 @@ uv run python scripts/provision_eventhouse.py
 uv run python scripts/provision_ontology.py   # ~30 min for graph indexing
 ```
 
-### 4. Create Fabric Data Agents (manual)
+### 4. Grant Fabric access to the Container App
 
-1. Create anomaly detectors in Fabric
-2. Create two Fabric Data Agents using prompts in `data/prompts/`:
-   - `fabric_network_data_agent_instructions.md` → Graph/Ontology Data Agent (Lakehouse)
-   - `fabric_telemetry_data_agent_instructions.md` → Telemetry Data Agent (Eventhouse)
-3. Register them:
-   ```bash
-   uv run python scripts/collect_fabric_agents.py
-   ```
+The `fabric-query-api` Container App must be a Fabric workspace member to execute
+GQL/KQL queries using its managed identity:
 
-### 5. Create Fabric connections in Foundry
+```bash
+uv run python scripts/assign_fabric_role.py
+```
 
-Manually create **two** Fabric connections in Foundry UI (Management Center → Connected Resources).
-`provision_agents.py` will prompt for connection names if not pre-filled in `azure_config.env`.
+This reads `FABRIC_WORKSPACE_ID` and `FABRIC_QUERY_API_PRINCIPAL_ID` from
+`azure_config.env` and assigns the Contributor role via the Fabric REST API.
+Re-running is safe — it skips if the role already exists.
+
+### 5. Verify the deployed API
+
+```bash
+uv run python scripts/test_fabric_query_api.py
+```
+
+This smoke-tests both `/query/graph` (GQL) and `/query/telemetry` (KQL) on the
+deployed Container App.
 
 ### 6. Provision Foundry agents
 
 ```bash
 uv run python scripts/provision_agents.py
 ```
+
+Creates 5 agents: Orchestrator + GraphExplorer + Telemetry + RunbookKB +
+HistoricalTicket. GraphExplorer and Telemetry use `OpenApiTool` pointing at
+the deployed `fabric-query-api`.
 
 ### 7. Test the multi-agent flow (CLI)
 
@@ -146,39 +167,52 @@ cd frontend && npm run dev
 
 Open http://localhost:5173 — the Vite dev server proxies `/api/*` to the backend.
 
+### Redeploying fabric-query-api
+
+If you change `fabric-query-api/` code after initial `azd up`:
+
+```bash
+azd deploy fabric-query-api
+```
+
+This rebuilds the Docker image in ACR (`remoteBuild: true`) and updates the
+Container App revision. No need to re-run `azd up` for code-only changes.
+
 ## TODO
 
 ### Automation
 - [x] Bug fix provision_ontology.py
 - [x] Auto fill eventhouse tables
-- [ ] Auto create fabric data agents (pending API support)
-- [ ] Auto create anomaly detectors (pending API support)
 - [x] Multi-agent workflow provisioning
 - [x] Test multi-agent flow programmatically
 - [x] Stream agent events with input/output metadata
+- [x] Decouple from Fabric Data Agent → OpenApiTool + fabric-query-api
+- [x] Automate Fabric role assignment (`assign_fabric_role.py`)
+- [x] Deploy fabric-query-api to Container Apps (`azd deploy`)
 
 ### Frontend & API
 - [x] FastAPI backend with SSE streaming
 - [x] React/Vite dark theme UI scaffold
 - [x] Wire real orchestrator into SSE endpoint
-- [ ] Deploy API to Azure Container Apps
+- [x] Deploy fabric-query-api to Azure Container Apps
+- [x] Test independent graph querying
+- [ ] Fix unreliable behavior
+- [ ] Deploy main API to Azure Container Apps
 - [ ] Deploy frontend to Azure Static Web Apps
 
 ### Future
 - [x] Format query and response text with markdown
-- [x] Query Fabric graph directly
-- [ ] Consider moving graph to another service for the sake of demo reliability
-- [ ] Decouple graph exploration - Abandon use of Fabric data agent. We will instead query it directly - This will allow us to assert greater control over GQL/KQL to avoid timeouts
-- [ ] Cache common GQL queries. Like grab via embedding from a REDIS CACEHE!! instead of generating?
+- [x] Query Fabric graph directly (GQL via REST API)
+- [x] Create and test graph query tool — FunctionTool PoC → OpenApiTool production
+- [ ] Cache common GQL queries (Redis / embedding cache)
 - [ ] Link telemetry from all agents rather than just the orchestrator
-- [ ] MCP server tools 
+- [ ] MCP server tools
 - [ ] CosmosDB for tickets
 - [ ] Corrective action API
 - [ ] Live visualization of the graph directly in the UI
-- [ ] Click on a node, select a particular type of error or scenario, trigger it! - Needs reset button. Hot damn! 
-- [ ] Expand data complexity and size to more closely affect real world? 
-- [ ] Connect Redis to cache frequently asked/difficult questions OR generate subgraphs? Back up somewhere...perhaps cosmosDB?
+- [ ] Click on a node, select a particular type of error or scenario, trigger it!
+- [ ] Expand data complexity and size to more closely model real world
 - [ ] Play by play commentary on each step of the demo
-- [ ] Better and more readable formatting of demo output 
-- [ ] Logs and application insights to trace server-side errors 
-- [ ] Display final response somewhere - We need a wireframe 
+- [ ] Better and more readable formatting of demo output
+- [ ] Logs and Application Insights to trace server-side errors
+- [ ] Display final response somewhere — wireframe needed

@@ -21,6 +21,8 @@ dependencies = [
     "azure-kusto-data>=4.6.0",
     "azure-kusto-ingest>=4.6.0",
     "pandas>=2.2.0",
+    # OpenAPI spec parsing (provision_agents)
+    "pyyaml>=6.0",
 ]
 
 [tool.uv]

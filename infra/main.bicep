@@ -33,6 +33,7 @@ param fabricSkuName string = 'F32'
 @description('GPT model capacity in 1K TPM units (e.g. 10 = 10K tokens/min, 100 = 100K TPM)')
 param gptCapacity int = 10
 
+
 // ---------------------------------------------------------------------------
 // Variables
 // ---------------------------------------------------------------------------
@@ -107,6 +108,37 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Container Apps (fabric-query-api micro-service)
+// ---------------------------------------------------------------------------
+
+module containerAppsEnv 'modules/container-apps-environment.bicep' = {
+  scope: rg
+  params: {
+    name: 'cae-${resourceToken}'
+    location: location
+    tags: tags
+  }
+}
+
+module fabricQueryApi 'modules/container-app.bicep' = {
+  scope: rg
+  params: {
+    name: 'ca-fabricquery-${resourceToken}'
+    location: location
+    tags: union(tags, { 'azd-service-name': 'fabric-query-api' })
+    containerAppsEnvironmentId: containerAppsEnv.outputs.id
+    containerRegistryName: containerAppsEnv.outputs.registryName
+    targetPort: 8100
+    externalIngress: true   // Foundry OpenApiTool calls from outside the VNet
+    minReplicas: 0
+    maxReplicas: 2
+    cpu: '0.25'
+    memory: '0.5Gi'
+    env: []  // Fabric config passed by agents at request time via OpenAPI spec defaults
+  }
+}
+
 module roles 'modules/roles.bicep' = {
   scope: rg
   params: {
@@ -131,3 +163,6 @@ output AZURE_SEARCH_NAME string = search.outputs.name
 output AZURE_SEARCH_ENDPOINT string = search.outputs.endpoint
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_FABRIC_CAPACITY_NAME string = !empty(fabricAdminEmail) ? fabric!.outputs.name : ''
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerAppsEnv.outputs.registryEndpoint
+output FABRIC_QUERY_API_URI string = fabricQueryApi.outputs.uri
+output FABRIC_QUERY_API_PRINCIPAL_ID string = fabricQueryApi.outputs.principalId

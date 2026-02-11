@@ -1,0 +1,129 @@
+openapi: "3.0.3"
+info:
+  title: Fabric Query API
+  version: "0.1.0"
+  description: |
+    Micro-API for executing GQL and KQL queries against Microsoft Fabric.
+    Used by Foundry agents via OpenApiTool.
+servers:
+  - url: "{base_url}"
+    description: Deployed Container App
+
+paths:
+  /query/graph:
+    post:
+      operationId: query_graph
+      summary: Execute a GQL query against the Fabric ontology graph
+      description: |
+        Submits a GQL (Graph Query Language) query to the Fabric GraphModel.
+        Returns columns and data rows from the network topology ontology.
+        Use this to query routers, links, switches, base stations, MPLS paths,
+        services, SLA policies, and BGP sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+                - workspace_id
+                - graph_model_id
+              properties:
+                query:
+                  type: string
+                  description: |
+                    A GQL query string. Use exact entity IDs (uppercase with hyphens).
+                    Never wrap values in LOWER(). Example:
+                    MATCH (mp:MPLSPath)-[:routes_via]->(tl:TransportLink)
+                    WHERE tl.LinkId = "LINK-SYD-MEL-FIBRE-01"
+                    RETURN mp.PathId, mp.PathType
+                workspace_id:
+                  type: string
+                  enum: ["{workspace_id}"]
+                  description: Fabric workspace GUID. Always use the value shown.
+                graph_model_id:
+                  type: string
+                  enum: ["{graph_model_id}"]
+                  description: GraphModel item GUID. Always use the value shown.
+      responses:
+        "200":
+          description: Query results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+        "400":
+          description: Bad request
+        "429":
+          description: Rate-limited
+
+  /query/telemetry:
+    post:
+      operationId: query_telemetry
+      summary: Execute a KQL query against the Fabric Eventhouse
+      description: |
+        Submits a KQL query to the Fabric Eventhouse (NetworkDB).
+        Returns columns and rows of alert or telemetry data.
+        Tables available: AlertStream (~5000 rows), LinkTelemetry (~8640 rows).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+                - eventhouse_query_uri
+                - kql_db_name
+              properties:
+                query:
+                  type: string
+                  description: |
+                    A KQL query string targeting AlertStream or LinkTelemetry tables.
+                    Example: AlertStream | where Severity == 'CRITICAL' | top 5 by Timestamp desc
+                eventhouse_query_uri:
+                  type: string
+                  enum: ["{eventhouse_query_uri}"]
+                  description: Kusto query URI for the Eventhouse. Always use the value shown.
+                kql_db_name:
+                  type: string
+                  enum: ["{kql_db_name}"]
+                  description: KQL database name. Always use the value shown.
+      responses:
+        "200":
+          description: Query results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+                  rows:
+                    type: array
+                    items:
+                      type: object
+        "400":
+          description: Bad request
