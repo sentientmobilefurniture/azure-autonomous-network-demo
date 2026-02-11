@@ -28,10 +28,10 @@ from azure.ai.agents.models import AgentEventHandler
 
 # ── Config ──────────────────────────────────────────────────────────
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / "azure_config.env", override=True)
 
-AGENT_IDS_FILE = PROJECT_ROOT / "agent_ids.json"
+AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
 
 DEFAULT_ALERT = (
     "14:31:14.259 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION "

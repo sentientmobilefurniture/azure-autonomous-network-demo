@@ -21,19 +21,8 @@ import sys
 
 import requests
 from azure.identity import DefaultAzureCredential
-from dotenv import load_dotenv
 
-ENV_FILE = os.path.join(os.path.dirname(__file__), "azure_config.env")
-load_dotenv(ENV_FILE)
-
-FABRIC_API = "https://api.fabric.microsoft.com/v1"
-WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
-
-
-def get_headers() -> dict:
-    credential = DefaultAzureCredential()
-    token = credential.get_token("https://api.fabric.microsoft.com/.default").token
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+from _config import FABRIC_API, ENV_FILE, WORKSPACE_NAME, get_fabric_headers
 
 
 def find_workspace(headers: dict, name: str) -> dict | None:
@@ -79,7 +68,7 @@ def update_env_file(updates: dict[str, str]):
 
 
 def main():
-    headers = get_headers()
+    headers = get_fabric_headers()
 
     # --- Workspace ---
     print(f"Looking up workspace: {WORKSPACE_NAME}")

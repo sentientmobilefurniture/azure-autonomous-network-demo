@@ -57,6 +57,11 @@ mcp_server/__azurite_db*/
 mcp_server/bin/
 mcp_server/obj/
 
+# --- Frontend (Node/Vite) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
 # --- Logs ---
 *.log
 logs/

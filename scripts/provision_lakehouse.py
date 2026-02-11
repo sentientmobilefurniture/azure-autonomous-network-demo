@@ -20,30 +20,26 @@ Usage:
 """
 
 import os
+import re
 import sys
 import time
 
 import requests
 from azure.identity import DefaultAzureCredential
 from azure.storage.filedatalake import DataLakeServiceClient
-from dotenv import load_dotenv
 
-load_dotenv("azure_config.env")
+from _config import (
+    FABRIC_API, PROJECT_ROOT, DATA_DIR,
+    WORKSPACE_NAME, CAPACITY_ID, LAKEHOUSE_NAME,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-FABRIC_API = "https://api.fabric.microsoft.com/v1"
 ONELAKE_ACCOUNT = "onelake"
 ONELAKE_URL = f"https://{ONELAKE_ACCOUNT}.dfs.fabric.microsoft.com"
 
-WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
-CAPACITY_ID = os.getenv("FABRIC_CAPACITY_ID", "")  # UUID of Fabric capacity
-
-LAKEHOUSE_NAME = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-LAKEHOUSE_CSV_DIR = os.path.join(DATA_DIR, "lakehouse")
+LAKEHOUSE_CSV_DIR = str(DATA_DIR / "lakehouse")
 
 # CSV files to upload to Lakehouse → load as delta tables
 LAKEHOUSE_TABLES = [
@@ -280,7 +276,7 @@ def main():
     print("\n  Next: run 'uv run provision_eventhouse.py' for Eventhouse setup")
 
     # Save IDs to azure_config.env
-    env_file = os.path.join(os.path.dirname(__file__), "azure_config.env")
+    env_file = str(PROJECT_ROOT / "azure_config.env")
     env_additions = {
         "FABRIC_WORKSPACE_ID": workspace_id,
         "FABRIC_LAKEHOUSE_ID": lakehouse_id,
@@ -293,7 +289,6 @@ def main():
         content = ""
 
     for key, value in env_additions.items():
-        import re
         pattern = rf"^{re.escape(key)}=.*$"
         if re.search(pattern, content, re.MULTILINE):
             content = re.sub(pattern, f"{key}={value}", content, flags=re.MULTILINE)

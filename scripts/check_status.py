@@ -5,25 +5,13 @@ Usage:
   uv run check_status.py
 """
 
-import os
 import requests
-from azure.identity import DefaultAzureCredential
-from dotenv import load_dotenv
 
-load_dotenv("azure_config.env")
-
-FABRIC_API = "https://api.fabric.microsoft.com/v1"
-WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
-
-
-def get_headers():
-    credential = DefaultAzureCredential()
-    token = credential.get_token("https://api.fabric.microsoft.com/.default").token
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+from _config import FABRIC_API, WORKSPACE_ID, get_fabric_headers
 
 
 def main():
-    headers = get_headers()
+    headers = get_fabric_headers()
 
     if not WORKSPACE_ID:
         print("✗ FABRIC_WORKSPACE_ID not set in azure_config.env")

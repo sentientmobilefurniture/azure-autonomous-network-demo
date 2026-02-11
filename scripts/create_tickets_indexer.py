@@ -1,23 +1,24 @@
 """
-Create AI Search indexer for troubleshooting runbook markdown files.
+Create AI Search indexer for historical incident ticket .txt files.
 
 Creates: data source → index → skillset (chunk + embed) → indexer
 
-Adapted from azure-ai-recipes/2-foundry-agent-avm/create_indexer.py
-for the autonomous-network-demo project.
+Mirror of create_indexer.py (runbooks) but targeting the 'tickets' blob
+container and 'tickets-index' search index.
 
 Prerequisites:
   - Azure resources deployed (azd up)
-  - Runbook .md files uploaded to blob storage 'runbooks' container
+  - Ticket .txt files uploaded to blob storage 'tickets' container
     (done automatically by postprovision hook)
   - azure_config.env populated with resource names
 
 Usage:
-  uv run create_indexer.py
+  uv run create_tickets_indexer.py
 """
 
 import os
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
@@ -49,7 +50,8 @@ from azure.search.documents.indexes.models import (
     SearchIndexer,
 )
 
-load_dotenv("azure_config.env")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / "azure_config.env")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -64,8 +66,8 @@ STORAGE_CONNECTION = (
     f"/providers/Microsoft.Storage/storageAccounts/{os.getenv('STORAGE_ACCOUNT_NAME')}/;"
 )
 
-INDEX_NAME = os.getenv("RUNBOOKS_INDEX_NAME", "runbooks-index")
-CONTAINER_NAME = os.getenv("RUNBOOKS_CONTAINER_NAME", "runbooks")
+INDEX_NAME = os.getenv("TICKETS_INDEX_NAME", "tickets-index")
+CONTAINER_NAME = os.getenv("TICKETS_CONTAINER_NAME", "tickets")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
 
@@ -74,7 +76,7 @@ def main():
     indexer_client = SearchIndexerClient(SEARCH_ENDPOINT, credential)
     index_client = SearchIndexClient(SEARCH_ENDPOINT, credential)
 
-    # 1. Data source — blob container with runbook .md files
+    # 1. Data source — blob container with ticket .txt files
     data_source = SearchIndexerDataSourceConnection(
         name=f"{INDEX_NAME}-datasource",
         type="azureblob",
@@ -141,7 +143,7 @@ def main():
     index_client.create_or_update_index(index)
     print(f"✓ Index '{index.name}' created")
 
-    # 3. Skillset — chunk markdown content + embed
+    # 3. Skillset — chunk ticket content + embed
     split_skill = SplitSkill(
         name="split",
         text_split_mode="pages",

@@ -2,10 +2,9 @@
 Generate historical incident tickets as .txt files for AI Search.
 
 Outputs:
-  - historical_tickets.json  (10 records of past incidents)
+  - data/tickets/{ticket_id}.txt  (10 individual ticket files)
 """
 
-import json
 import os
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "tickets")
@@ -226,14 +225,57 @@ def generate_tickets() -> list[dict]:
     ]
 
 
+def _format_ticket(t: dict) -> str:
+    """Format a ticket dict as human-readable .txt matching indexer expectations."""
+    lines = [
+        f"Incident: {t['ticket_id']}",
+        f"Title: {t['title']}",
+        f"Severity: {t['severity']}",
+        f"Root Cause: {t['root_cause']}",
+        f"Root Cause Type: {t['root_cause_type']}",
+        f"Created: {t['created_at']}",
+        f"Resolved: {t['resolved_at']}",
+        f"SLA Breached: {'Yes' if t['sla_breached'] else 'No'}",
+        "",
+        "Description:",
+        t["description"],
+        "",
+        "Detection Method:",
+        t["detection_method"],
+        "",
+        "Resolution:",
+        t["resolution"],
+        "",
+    ]
+    lines.append("Customer Impact:")
+    if t["customer_impact"]:
+        for c in t["customer_impact"]:
+            lines.append(f"- {c}")
+    else:
+        lines.append("(None)")
+    lines.append("")
+    lines.append(f"Services Affected: {t['services_affected']}")
+    lines.append(f"Alerts Generated: {t['alerts_generated']}")
+    lines.append(f"Alerts Suppressed: {t['alerts_suppressed']}")
+    lines.append(f"Time to Detect: {t['time_to_detect_seconds']} seconds")
+    lines.append(f"Time to Reroute: {t['time_to_reroute_seconds']} seconds")
+    lines.append(f"Time to Resolve: {t['time_to_resolve_minutes']} minutes")
+    lines.append("")
+    lines.append("Lessons Learned:")
+    lines.append(t["lessons_learned"])
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     tickets = generate_tickets()
-    path = os.path.join(OUTPUT_DIR, "historical_tickets.json")
-    with open(path, "w") as f:
-        json.dump(tickets, f, indent=2)
-    print(f"  ✓ historical_tickets.json ({len(tickets)} records)")
-    print(f"\nFile written to {os.path.abspath(path)}")
+    for t in tickets:
+        path = os.path.join(OUTPUT_DIR, f"{t['ticket_id']}.txt")
+        with open(path, "w") as f:
+            f.write(_format_ticket(t))
+        print(f"  ✓ {t['ticket_id']}.txt")
+    print(f"\n{len(tickets)} ticket files written to {os.path.abspath(OUTPUT_DIR)}")
 
 
 if __name__ == "__main__":

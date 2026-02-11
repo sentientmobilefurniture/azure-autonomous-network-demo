@@ -39,10 +39,10 @@ from azure.ai.agents.models import (
 
 # ── Paths ───────────────────────────────────────────────────────────
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
-AGENT_IDS_FILE = PROJECT_ROOT / "agent_ids.json"
+AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
 
 
 # ── Config ──────────────────────────────────────────────────────────

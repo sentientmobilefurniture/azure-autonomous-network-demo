@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 # 1. Delete the Fabric workspace (not in the Azure RG — created via REST API)
 #    Uses the workspace ID from azure_config.env
 source azure_config.env 2>/dev/null || true
