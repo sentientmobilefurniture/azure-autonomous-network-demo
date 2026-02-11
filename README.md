@@ -2,6 +2,37 @@
 
 > **CONFIRMATION NEEDED **Tip: Ontology is a preview feature and may exhibit unexpected behaviors. Sweden Central may be faster due to less regional contention, but this is anecdotal and needs more observation. Expect 20-90 minutes for the graph to finish indexing and become available to query. This wait is normal for now. If you are anxious, scheduling a graph refresh may help as one is triggered whenever the ontology is updated.**
 
+## Prerequisites
+
+Before you begin, install the following tools and authenticate:
+
+### Tools
+
+| Tool | Install | Verify |
+|------|---------|--------|
+| **Python 3.11+** | [python.org](https://www.python.org/downloads/) or `sudo apt install python3` | `python3 --version` |
+| **uv** (package manager) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `uv --version` |
+| **Azure CLI (`az`)** | [Install Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli-linux) | `az --version` |
+| **Azure Developer CLI (`azd`)** | `curl -fsSL https://aka.ms/install-azd.sh \| bash` | `azd version` |
+
+### Authentication
+
+```bash
+# Log in to Azure CLI
+az login
+
+# Log in to Azure Developer CLI (uses the same browser flow)
+azd auth login
+```
+
+Both CLIs must be authenticated before running any provisioning or deployment commands. `azd up` uses your Azure CLI credentials under the hood.
+
+### Python Dependencies
+
+All Python dependencies are managed via `pyproject.toml` and installed automatically by `uv run`. No manual `pip install` needed — just prefix commands with `uv run`.
+
+---
+
 ## Azure Services Used 
 
 1. Microsoft Foundry 
@@ -75,7 +106,7 @@ uv run python3 test_orchestrator.py
 3. (HOLD) Auto create fabric data agents for telemetry and graph (Not sure if supported)
 4. (HOLD) Auto create anomaly detectors (Not sure if supported)
 5. ~~Automatically define multi-agent workflow (using yaml rather than pure python SDK)~~
-6. Test multi-agent workflow programmatically 
+6. ~~Test multi-agent workflow programmatically ~~
 7. Stream agent events and thread logs for eventual display on a UI
 
 ## TO DO - Demo Completion - Frontend time

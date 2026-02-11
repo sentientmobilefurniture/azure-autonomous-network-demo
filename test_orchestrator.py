@@ -166,6 +166,27 @@ class OrchestratorEventHandler(AgentEventHandler):
                             agent_id = getattr(ca, 'agent_id', None) or ca.get('agent_id', '?')
                             agent_name = self.agent_names.get(agent_id, agent_id)
                         print(f"\n    {C_CYAN}↳ {agent_name}{C_RESET} {C_DIM}({duration}{tokens}){C_RESET}", flush=True)
+
+                        # Show input (arguments) — the query sent to the sub-agent
+                        args_raw = getattr(ca, 'arguments', None) or ca.get('arguments', None)
+                        if args_raw:
+                            try:
+                                args_obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                                query = args_obj if isinstance(args_obj, str) else json.dumps(args_obj, indent=2)
+                            except (json.JSONDecodeError, TypeError):
+                                query = str(args_raw)
+                            # Truncate long queries
+                            if len(query) > 300:
+                                query = query[:300] + "…"
+                            print(f"      {C_DIM}Query:{C_RESET} {query}", flush=True)
+
+                        # Show output (response) — the sub-agent's reply
+                        output_raw = getattr(ca, 'output', None) or ca.get('output', None)
+                        if output_raw:
+                            output_str = str(output_raw)
+                            if len(output_str) > 500:
+                                output_str = output_str[:500] + "…"
+                            print(f"      {C_DIM}Response:{C_RESET} {output_str}", flush=True)
                     elif tc_type_str == "fabric_dataagent":
                         print(f"\n    {C_CYAN}↳ FabricDataAgent{C_RESET} {C_DIM}({duration}{tokens}){C_RESET}", flush=True)
                     elif tc_type_str == "azure_ai_search":
