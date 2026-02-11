@@ -166,12 +166,12 @@ Open http://localhost:5173 — the Vite dev server proxies `/api/*` to the backe
 
 ### Future
 - [x] Format query and response text with markdown
-- [ ] Query Fabric graph directly
+- [x] Query Fabric graph directly
 - [ ] Consider moving graph to another service for the sake of demo reliability
 - [ ] Decouple graph exploration - Abandon use of Fabric data agent. We will instead query it directly - This will allow us to assert greater control over GQL/KQL to avoid timeouts
 - [ ] Cache common GQL queries. Like grab via embedding from a REDIS CACEHE!! instead of generating?
 - [ ] Link telemetry from all agents rather than just the orchestrator
-- [ ] MCP server tools (query_eventhouse, search_tickets, create_incident)
+- [ ] MCP server tools 
 - [ ] CosmosDB for tickets
 - [ ] Corrective action API
 - [ ] Live visualization of the graph directly in the UI
