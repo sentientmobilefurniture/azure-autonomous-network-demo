@@ -26,21 +26,16 @@ from azure.identity import DefaultAzureCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties
 from azure.kusto.data.data_format import DataFormat
-from dotenv import load_dotenv
 
-load_dotenv("azure_config.env")
+from _config import (
+    FABRIC_API, PROJECT_ROOT,
+    WORKSPACE_ID, WORKSPACE_NAME, CAPACITY_ID, EVENTHOUSE_NAME,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-FABRIC_API = "https://api.fabric.microsoft.com/v1"
-
-WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
-WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
-CAPACITY_ID = os.getenv("FABRIC_CAPACITY_ID", "")
-EVENTHOUSE_NAME = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH_3117")
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data", "eventhouse")
+DATA_DIR = str(PROJECT_ROOT / "data" / "eventhouse")
 
 # Table schemas — column name → KQL type
 TABLE_SCHEMAS = {
@@ -310,7 +305,7 @@ def _streaming_ingest_fallback(
 
 def update_env_file(updates: dict[str, str]):
     """Update azure_config.env with key=value pairs."""
-    env_file = os.path.join(os.path.dirname(__file__), "azure_config.env")
+    env_file = str(PROJECT_ROOT / "azure_config.env")
     if os.path.exists(env_file):
         with open(env_file) as f:
             content = f.read()

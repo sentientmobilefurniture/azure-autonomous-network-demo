@@ -24,9 +24,8 @@ from openai import OpenAI
 from openai._models import FinalRequestOptions
 from openai._types import Omit
 from openai._utils import is_given
-from dotenv import load_dotenv
 
-load_dotenv("azure_config.env")
+from _config import FABRIC_SCOPE
 
 # ---------------------------------------------------------------------------
 # Config — published Fabric Data Agent endpoint
@@ -39,7 +38,6 @@ BASE_URL = (
     f"dataagents/{_DATA_AGENT_ID}/"
     f"aiassistant/openai"
 )
-FABRIC_SCOPE = "https://api.fabric.microsoft.com/.default"
 
 # ---------------------------------------------------------------------------
 # Test queries — mirrors data/prompts/data_agent_instructions.md

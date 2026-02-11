@@ -27,20 +27,17 @@ import uuid
 
 import requests
 from azure.identity import DefaultAzureCredential
-from dotenv import load_dotenv
 
-load_dotenv("azure_config.env")
+from _config import (
+    FABRIC_API, FABRIC_SCOPE,
+    WORKSPACE_ID, KQL_DB_NAME, ONTOLOGY_NAME,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-FABRIC_API = "https://api.fabric.microsoft.com/v1"
-WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
 LAKEHOUSE_ID = os.getenv("FABRIC_LAKEHOUSE_ID", "")
 EVENTHOUSE_ID = os.getenv("FABRIC_EVENTHOUSE_ID", "")
-KQL_DB_NAME = os.getenv("FABRIC_KQL_DB_NAME", "")
-
-ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -659,7 +656,7 @@ class FabricClient:
         self.credential = DefaultAzureCredential()
 
     def _token(self) -> str:
-        return self.credential.get_token("https://api.fabric.microsoft.com/.default").token
+        return self.credential.get_token(FABRIC_SCOPE).token
 
     @property
     def headers(self) -> dict:

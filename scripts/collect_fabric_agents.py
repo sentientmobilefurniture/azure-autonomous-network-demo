@@ -20,23 +20,12 @@ import re
 import sys
 
 import requests
-from azure.identity import DefaultAzureCredential
-from dotenv import load_dotenv
 
-ENV_FILE = os.path.join(os.path.dirname(__file__), "azure_config.env")
-load_dotenv(ENV_FILE)
-
-FABRIC_API = "https://api.fabric.microsoft.com/v1"
+from _config import FABRIC_API, ENV_FILE, get_fabric_headers
 
 # Item types that could represent a Data Agent in Fabric.
 # The official type may vary — we search broadly and also show unrecognised types.
 DATA_AGENT_TYPES = {"DataAgent", "DataAgentDefinition", "Agent", "AISkill"}
-
-
-def get_headers() -> dict:
-    credential = DefaultAzureCredential()
-    token = credential.get_token("https://api.fabric.microsoft.com/.default").token
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
 def list_workspace_items(headers: dict, workspace_id: str) -> list[dict]:
@@ -119,7 +108,7 @@ def main():
 
     # 1. List all items
     print("\n[1/3] Listing workspace items...")
-    headers = get_headers()
+    headers = get_fabric_headers()
     items = list_workspace_items(headers, workspace_id)
     print(f"  Found {len(items)} items total")
 

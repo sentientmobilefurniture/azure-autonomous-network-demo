@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import clsx from 'clsx';
 
 interface StepEvent {
   step: number;
@@ -7,6 +9,31 @@ interface StepEvent {
   query?: string;
   response?: string;
 }
+
+// Animation variants
+const fadeSlideUp = {
+  initial: { opacity: 0, y: 20 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: 20 },
+  transition: { duration: 0.3, ease: 'easeOut' as const },
+};
+
+const staggerContainer = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: { staggerChildren: 0.05, delayChildren: 0.1 },
+  },
+};
+
+const staggerItem = {
+  hidden: { opacity: 0, y: 10 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.2, ease: 'easeOut' as const },
+  },
+};
 
 export default function App() {
   const [alert, setAlert] = useState(
@@ -64,71 +91,109 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen p-8 max-w-4xl mx-auto">
+    <motion.div
+      className="min-h-screen p-8 max-w-4xl mx-auto"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.3 }}
+    >
       {/* Header */}
-      <h1 className="text-2xl font-semibold mb-1">Autonomous Network NOC</h1>
+      <h1 className="text-2xl font-semibold text-text-primary mb-1">Autonomous Network NOC</h1>
       <p className="text-text-muted text-sm mb-8">Multi-agent diagnosis system</p>
 
       {/* Alert Input */}
-      <div className="glass-card p-6 mb-6">
+      <motion.div className="glass-card p-6 mb-6" {...fadeSlideUp}>
         <label className="text-sm font-medium text-text-secondary block mb-2">
           Alert
         </label>
         <textarea
-          className="w-full bg-neutral-bg3 border border-border rounded-lg p-3 text-sm text-text-primary placeholder-text-muted focus:outline-none focus:border-brand resize-none"
+          className="glass-input w-full rounded-lg p-3 text-sm text-text-primary placeholder-text-muted focus:outline-none resize-none"
           rows={3}
           value={alert}
           onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setAlert(e.target.value)}
           placeholder="Paste a NOC alert..."
         />
-        <button
-          className="mt-4 px-6 py-2 bg-brand hover:bg-brand-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 17 }}
+          className={clsx(
+            'mt-4 px-6 py-2 text-sm font-medium rounded-lg transition-colors',
+            'bg-brand hover:bg-brand-hover text-white',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-bg1',
+            'disabled:opacity-50 disabled:cursor-not-allowed'
+          )}
           onClick={submitAlert}
           disabled={running || !alert.trim()}
         >
           {running ? 'Running...' : 'Send Alert'}
-        </button>
-      </div>
+        </motion.button>
+      </motion.div>
 
       {/* Steps Timeline */}
-      {steps.length > 0 && (
-        <div className="glass-card p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Agent Steps</h2>
-          <div className="space-y-3">
-            {steps.map((s) => (
-              <div key={s.step} className="border-l-2 border-brand pl-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-brand">Step {s.step}</span>
-                  <span className="text-sm text-text-primary">{s.agent}</span>
-                  {s.duration && (
-                    <span className="text-xs text-text-muted">{s.duration}</span>
+      <AnimatePresence>
+        {steps.length > 0 && (
+          <motion.div
+            className="glass-card p-6 mb-6"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.3, ease: 'easeOut' }}
+          >
+            <h2 className="text-lg font-semibold text-text-primary mb-4">Agent Steps</h2>
+            <motion.div
+              className="space-y-3"
+              variants={staggerContainer}
+              initial="hidden"
+              animate="visible"
+            >
+              {steps.map((s) => (
+                <motion.div
+                  key={s.step}
+                  variants={staggerItem}
+                  className="border-l-2 border-brand pl-4"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-brand">Step {s.step}</span>
+                    <span className="text-sm text-text-primary">{s.agent}</span>
+                    {s.duration && (
+                      <span className="text-xs text-text-muted">{s.duration}</span>
+                    )}
+                  </div>
+                  {s.query && (
+                    <p className="text-xs text-text-muted mt-1">Query: {s.query}</p>
                   )}
-                </div>
-                {s.query && (
-                  <p className="text-xs text-text-muted mt-1">Query: {s.query}</p>
-                )}
-                {s.response && (
-                  <p className="text-xs text-text-secondary mt-1">Response: {s.response}</p>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+                  {s.response && (
+                    <p className="text-xs text-text-secondary mt-1">Response: {s.response}</p>
+                  )}
+                </motion.div>
+              ))}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Final Response */}
-      {finalMessage && (
-        <div className="glass-card p-6">
-          <h2 className="text-lg font-semibold mb-4">Diagnosis</h2>
-          <div className="text-sm text-text-secondary whitespace-pre-wrap">{finalMessage}</div>
-        </div>
-      )}
+      <AnimatePresence>
+        {finalMessage && (
+          <motion.div
+            className="glass-card p-6"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.3, ease: 'easeOut' }}
+          >
+            <h2 className="text-lg font-semibold text-text-primary mb-4">Diagnosis</h2>
+            <div className="text-sm text-text-secondary whitespace-pre-wrap">{finalMessage}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Health check indicator */}
       <div className="mt-8 text-xs text-text-muted">
         API: <HealthDot />
       </div>
-    </div>
+    </motion.div>
   );
 }
 

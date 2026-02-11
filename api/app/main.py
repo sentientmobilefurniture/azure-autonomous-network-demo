@@ -10,10 +10,16 @@ Run locally:
   cd api && uv run uvicorn app.main:app --reload --port 8000
 """
 
+import os
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import alert, agents
+
+# Load project-level config (CORS_ORIGINS, etc.)
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "azure_config.env"))
 
 app = FastAPI(
     title="Autonomous Network NOC API",
@@ -21,10 +27,11 @@ app = FastAPI(
     description="Backend API for the Autonomous Network NOC Demo",
 )
 
-# CORS — allow frontend dev server
+# CORS — configurable via CORS_ORIGINS env var (comma-separated list)
+_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite dev server
+    allow_origins=[o.strip() for o in _cors_origins.split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

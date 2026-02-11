@@ -18,6 +18,7 @@ Usage:
 
 import os
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
@@ -49,7 +50,8 @@ from azure.search.documents.indexes.models import (
     SearchIndexer,
 )
 
-load_dotenv("azure_config.env")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / "azure_config.env")
 
 # ---------------------------------------------------------------------------
 # Configuration

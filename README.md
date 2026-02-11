@@ -1,10 +1,8 @@
-# Sydney Fiber Cut Demo 
+# Autonomous Network NOC Demo
 
-> **CONFIRMATION NEEDED **Tip: Ontology is a preview feature and may exhibit unexpected behaviors. Sweden Central may be faster due to less regional contention, but this is anecdotal and needs more observation. Expect 20-90 minutes for the graph to finish indexing and become available to query. This wait is normal for now. If you are anxious, scheduling a graph refresh may help as one is triggered whenever the ontology is updated.**
+> **Note:** Ontology is a preview feature and may exhibit unexpected behaviors. Sweden Central may be faster due to less regional contention. Expect 20-90 minutes for the graph to finish indexing after creation.
 
 ## Prerequisites
-
-Before you begin, install the following tools and authenticate:
 
 ### Tools
 
@@ -12,24 +10,29 @@ Before you begin, install the following tools and authenticate:
 |------|---------|--------|
 | **Python 3.11+** | [python.org](https://www.python.org/downloads/) or `sudo apt install python3` | `python3 --version` |
 | **uv** (package manager) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `uv --version` |
+| **Node.js 20+** | [nodesource](https://deb.nodesource.com/setup_20.x) or `nvm install 20` | `node --version` |
 | **Azure CLI (`az`)** | [Install Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli-linux) | `az --version` |
 | **Azure Developer CLI (`azd`)** | `curl -fsSL https://aka.ms/install-azd.sh \| bash` | `azd version` |
 
 ### Authentication
 
 ```bash
-# Log in to Azure CLI
 az login
-
-# Log in to Azure Developer CLI (uses the same browser flow)
 azd auth login
 ```
 
-Both CLIs must be authenticated before running any provisioning or deployment commands. `azd up` uses your Azure CLI credentials under the hood.
+### Dependencies
 
-### Python Dependencies
+- **Scripts** (Azure SDKs): managed by root `pyproject.toml`, installed automatically via `uv run`
+- **API** (FastAPI): managed by `api/pyproject.toml`, installed via `cd api && uv sync`
+- **Frontend** (React): managed by `frontend/package.json`, installed via `cd frontend && npm install`
 
-All Python dependencies are managed via `pyproject.toml` and installed automatically by `uv run`. No manual `pip install` needed — just prefix commands with `uv run`.
+---
+
+## Project Structure
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for full project structure, architectural
+decisions, data flow diagrams, and the configuration signpost.
 
 ---
 
@@ -63,122 +66,105 @@ All Python dependencies are managed via `pyproject.toml` and installed automatic
 4. foundry agent can call fabric data agent
 5. Foundry agent can call other agents 
 
-## Currently working setup steps
-0. Create azure_config.env from the azure_config.env.template file, fill in desired params, leave auto-marked params blank.
-02. Run data creation scripts:
+## Setup
+
+All commands run from the **project root** unless noted otherwise.
+
+### 0. Configure
+
 ```bash
-uv run python3 generate_alert_stream.py
-uv run python3 generate_routing_data.py
-uv run python3 generate_tickets.py
-uv run python3 generate_topology_data.py
+cp azure_config.env.template azure_config.env
+# Edit azure_config.env — fill in desired params, leave auto-marked params blank
 ```
-1. Run deployment scripts: 
+
+### 1. Generate synthetic data
+
 ```bash
-azd up -e myenvname (This will name both the env and the resource group)
-uv run python3 create_runbook_indexer.py
-uv run python3 create_tickets_indexer.py
-uv run python3 provision_lakehouse.py
-uv run python3 provision_eventhouse.py
-uv run python3 provision_ontology.py # To Swedencentral - Requires 30 mins to become available for query
+cd data/scripts
+uv run python generate_alert_stream.py
+uv run python generate_routing_data.py
+uv run python generate_tickets.py
+uv run python generate_topology_data.py
+cd ../..
 ```
-2. Manually create anomaly detectors
-3. Manually create fabric data agents using the prompts in /data/prompts:
+
+### 2. Deploy Azure infrastructure
+
+```bash
+azd up -e myenvname    # Names both the azd env and the resource group
+```
+
+This deploys AI Foundry, AI Search, Storage, and Fabric Capacity via Bicep.
+
+### 3. Provision data stores
+
+```bash
+uv run python scripts/create_runbook_indexer.py
+uv run python scripts/create_tickets_indexer.py
+uv run python scripts/provision_lakehouse.py
+uv run python scripts/provision_eventhouse.py
+uv run python scripts/provision_ontology.py   # ~30 min for graph indexing
+```
+
+### 4. Create Fabric Data Agents (manual)
+
+1. Create anomaly detectors in Fabric
+2. Create two Fabric Data Agents using prompts in `data/prompts/`:
    - `fabric_network_data_agent_instructions.md` → Graph/Ontology Data Agent (Lakehouse)
    - `fabric_telemetry_data_agent_instructions.md` → Telemetry Data Agent (Eventhouse)
-4. Run this script and select the appropriate agents:
+3. Register them:
+   ```bash
+   uv run python scripts/collect_fabric_agents.py
+   ```
+
+### 5. Create Fabric connections in Foundry
+
+Manually create **two** Fabric connections in Foundry UI (Management Center → Connected Resources).
+`provision_agents.py` will prompt for connection names if not pre-filled in `azure_config.env`.
+
+### 6. Provision Foundry agents
+
 ```bash
-uv run python3 collect_fabric_agents.py
+uv run python scripts/provision_agents.py
 ```
-5. Manually create **two** fabric connections in Foundry UI (one per Data Agent) (Management Center -> Connected Resources). Refer to azure_config.env for workspace and artifact IDs
-   `provision_agents.py` will prompt for the connection names if not pre-filled in `azure_config.env`.
-6. Run this script to create the multi-agent system:
-```bash 
-uv run python3 provision_agents.py
-```
-7. Run this script to test the multi-agent flow:
+
+### 7. Test the multi-agent flow (CLI)
+
 ```bash
-uv run python3 test_orchestrator.py
+uv run python scripts/test_orchestrator.py
 ```
 
-## TO DO - Automation Tasks 
-1. ~~Bug fix provision_ontology.py - Why doesn't graph materialize?~~
-2. ~~Auto fill eventhouse tables~~
-3. (HOLD) Auto create fabric data agents for telemetry and graph (Not sure if supported)
-4. (HOLD) Auto create anomaly detectors (Not sure if supported)
-5. ~~Automatically define multi-agent workflow (using yaml rather than pure python SDK)~~
-6. ~~Test multi-agent workflow programmatically ~~
-7. Stream agent events and thread logs for eventual display on a UI
+### 8. Run the UI locally
 
-## TO DO - Demo Completion - Frontend time
-1. Create simulator environment - See about using Azure Websites
-2. At push of a button, trigger alert storm, see results 
-3. Agent should trigger some corrective action (Dummy API request)
+```bash
+# Terminal 1 — FastAPI backend
+cd api && uv run uvicorn app.main:app --reload --port 8000
 
-## TO DO - Demo Structuring  
-1. Deploy MCP server 
-2. Switch tickets to CosmosDB, connect to cosmosdb 
-3. 
-
-## TO DO - Extra Credit
-1. Dummy API response does something to a simulated network infra (Seems unnecessary lol)
-2. Linking time series data to an entity does something 
-
----
-
-## Architecture Map
-
-### Infrastructure (Bicep via `azd up`)
-
-| Module | Azure Resource | Purpose |
-|--------|---------------|---------|
-| `ai-foundry.bicep` | AI Foundry Hub + Project | Agent hosting, model deployments |
-| `search.bicep` | AI Search | Hybrid (vector + keyword) search over runbooks & tickets |
-| `storage.bicep` | Storage Account | Blob containers for runbook/ticket source docs |
-| `fabric.bicep` | Fabric Capacity | Compute for Lakehouse, Eventhouse, Ontology, Data Agent |
-| `roles.bicep` | Role Assignments | RBAC for user, search, and foundry identities |
-
-### Data Stores & What Goes In
-
-| Store | Item | Data Loaded |
-|-------|------|-------------|
-| **Blob Storage** | `runbooks` container | 5 markdown runbooks (fibre cut, BGP loss, alert triage, reroute, comms template) |
-| | `tickets` container | 10 historical incident `.txt` files |
-| **AI Search** | `runbooks-index` | Chunked + embedded runbook docs (hybrid search) |
-| | `tickets-index` | Chunked + embedded ticket docs (hybrid search) |
-| **Fabric Lakehouse** (`NetworkTopologyLH`) | Dim tables | `DimCoreRouter`, `DimTransportLink`, `DimAggSwitch`, `DimBaseStation`, `DimBGPSession`, `DimMPLSPath`, `DimService`, `DimSLAPolicy` |
-| | Fact tables | `FactMPLSPathHops`, `FactServiceDependency` |
-| **Fabric Eventhouse** (`NetworkTelemetryEH`) | KQL DB (`NetworkDB`) | `AlertStream` (alerts with severity, optical power, BER, CPU, packet loss) · `LinkTelemetry` (utilization, latency, optical power, BER per link) |
-| **Fabric Ontology** | `NetworkTopologyOntology` | 8 entity types + 7 relationship types binding Lakehouse dims + Eventhouse time-series |
-
-### MCP Server (Azure Functions)
-
-Hosted function app exposing 3 tools to Foundry agents via MCP protocol:
-
-| Tool | Backend | Action |
-|------|---------|--------|
-| `query_eventhouse` | Fabric Eventhouse (KQL) | Run arbitrary KQL against `NetworkDB` |
-| `search_tickets` | AI Search (`tickets-index`) | Hybrid search over historical incidents |
-| `create_incident` | In-memory (stub) | Generate a structured incident ticket |
-
-### Foundry Agents
-
-| Agent | Role | Data Source |
-|-------|------|-------------|
-| **Orchestrator** | Top-level supervisor; routes to sub-agents | Connects to all agents below |
-| **GraphExplorerAgent** | Discover blast radius via network topology | Fabric Data Agent (Ontology → Lakehouse/Eventhouse) |
-| **TelemetryAgent** | Query real-time link/alert telemetry | MCP `query_eventhouse` |
-| **RunbookKBAgent** | Find relevant operational procedures | AI Search `runbooks-index` |
-| **HistoricalTicketAgent** | Find similar past incidents | MCP `search_tickets` / AI Search `tickets-index` |
-
-### Data Flow (Demo)
-
+# Terminal 2 — React frontend
+cd frontend && npm run dev
 ```
-Anomaly detected (latency spike)
-  → Orchestrator
-    → GraphExplorerAgent   → Fabric Ontology/Lakehouse → blast radius
-    → TelemetryAgent       → Eventhouse KQL            → live metrics
-    → HistoricalTicketAgent→ AI Search tickets-index    → precedent
-    → RunbookKBAgent       → AI Search runbooks-index   → remediation
-  → Orchestrator synthesizes diagnosis + recommended action
-  → create_incident tool   → structured ticket output
-```
+
+Open http://localhost:5173 — the Vite dev server proxies `/api/*` to the backend.
+
+## TODO
+
+### Automation
+- [x] Bug fix provision_ontology.py
+- [x] Auto fill eventhouse tables
+- [ ] Auto create fabric data agents (pending API support)
+- [ ] Auto create anomaly detectors (pending API support)
+- [x] Multi-agent workflow provisioning
+- [x] Test multi-agent flow programmatically
+- [x] Stream agent events with input/output metadata
+
+### Frontend & API
+- [x] FastAPI backend with SSE streaming
+- [x] React/Vite dark theme UI scaffold
+- [ ] Wire real orchestrator into SSE endpoint
+- [ ] Deploy API to Azure Container Apps
+- [ ] Deploy frontend to Azure Static Web Apps
+
+### Future
+- [ ] MCP server tools (query_eventhouse, search_tickets, create_incident)
+- [ ] CosmosDB for tickets
+- [ ] Corrective action API
