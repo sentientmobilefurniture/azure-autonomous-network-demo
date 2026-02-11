@@ -168,3 +168,6 @@ Open http://localhost:5173 — the Vite dev server proxies `/api/*` to the backe
 - [ ] MCP server tools (query_eventhouse, search_tickets, create_incident)
 - [ ] CosmosDB for tickets
 - [ ] Corrective action API
+- [ ] Live visualization of the graph directly in the UI
+- [ ] Click on a node, select a particular type of error or scenario, trigger it! - Needs reset button. Hot damn! 
+- [ ] Expand data complexity and size to more closely affect real world? 
