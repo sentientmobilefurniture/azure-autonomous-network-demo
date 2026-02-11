@@ -21,6 +21,7 @@ Usage:
 import base64
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -29,7 +30,7 @@ import requests
 from azure.identity import DefaultAzureCredential
 
 from _config import (
-    FABRIC_API, FABRIC_SCOPE,
+    FABRIC_API, FABRIC_SCOPE, PROJECT_ROOT,
     WORKSPACE_ID, KQL_DB_NAME, ONTOLOGY_NAME,
 )
 
@@ -38,6 +39,30 @@ from _config import (
 # ---------------------------------------------------------------------------
 LAKEHOUSE_ID = os.getenv("FABRIC_LAKEHOUSE_ID", "")
 EVENTHOUSE_ID = os.getenv("FABRIC_EVENTHOUSE_ID", "")
+
+# ---------------------------------------------------------------------------
+# Env file updater
+# ---------------------------------------------------------------------------
+
+def update_env_file(updates: dict[str, str]):
+    """Update azure_config.env with key=value pairs."""
+    env_file = str(PROJECT_ROOT / "azure_config.env")
+    if os.path.exists(env_file):
+        with open(env_file) as f:
+            content = f.read()
+    else:
+        content = ""
+
+    for key, value in updates.items():
+        pattern = rf"^{re.escape(key)}=.*$"
+        if re.search(pattern, content, re.MULTILINE):
+            content = re.sub(pattern, f"{key}={value}", content, flags=re.MULTILINE)
+        else:
+            content = content.rstrip("\n") + f"\n{key}={value}\n"
+
+    with open(env_file, "w") as f:
+        f.write(content)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -873,6 +898,17 @@ def main():
         print(f"    Check Fabric portal: Workspace → look for graph model item")
 
     # ------------------------------------------------------------------
+    # 7. Update azure_config.env
+    # ------------------------------------------------------------------
+    env_updates = {
+        "FABRIC_ONTOLOGY_ID": ontology_id,
+    }
+    if graph_item:
+        env_updates["FABRIC_GRAPH_MODEL_ID"] = graph_id
+
+    update_env_file(env_updates)
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     print("\n" + "=" * 60)
@@ -887,6 +923,10 @@ def main():
     print(f"     connects_to, aggregates_to, backhauls_via, routes_via,")
     print(f"     depends_on, governed_by, peers_over")
     print("=" * 60)
+
+    print("\n  ✓ Updated azure_config.env")
+    for key, value in env_updates.items():
+        print(f"    {key}={value}")
 
     print("\n  Next steps (manual — Step 2.6):")
     print("    1. Open Fabric portal → workspace → + New item → Data agent")
