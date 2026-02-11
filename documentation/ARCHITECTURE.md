@@ -1,5 +1,10 @@
 # Architecture
 
+## Demo built with assistance from Claude Opus 4.6 using the following [skills](https://github.com/microsoft/skills):
+* azure-ai-projects-py
+* fastapi-router-py
+* frontend-ui-dark-ts
+
 ## System Overview
 
 Multi-agent NOC diagnosis system. An alert enters via the frontend, flows through
