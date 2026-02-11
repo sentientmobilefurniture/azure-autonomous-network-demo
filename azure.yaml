@@ -14,3 +14,14 @@ hooks:
     shell: sh
     run: hooks/postprovision.sh
     description: Upload runbooks and tickets to blob storage
+
+# Services (placeholder — deploy targets configured later)
+# services:
+#   api:
+#     project: ./api
+#     host: containerapp
+#     language: python
+#   frontend:
+#     project: ./frontend
+#     host: staticwebapp
+#     language: typescript
