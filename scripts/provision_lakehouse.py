@@ -20,6 +20,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import time
 
@@ -288,7 +289,6 @@ def main():
         content = ""
 
     for key, value in env_additions.items():
-        import re
         pattern = rf"^{re.escape(key)}=.*$"
         if re.search(pattern, content, re.MULTILINE):
             content = re.sub(pattern, f"{key}={value}", content, flags=re.MULTILINE)

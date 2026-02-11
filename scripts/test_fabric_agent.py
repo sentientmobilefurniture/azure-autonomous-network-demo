@@ -183,7 +183,7 @@ def run_query(
         thread_id=thread.id, role="user", content=question
     )
     run = client.beta.threads.runs.create(
-        thread_id=thread.id, assistant_id=assistant.id
+        thread_id=thread.id, assistant_id=assistant_id
     )
 
     terminal = {"completed", "failed", "cancelled", "requires_action", "expired"}

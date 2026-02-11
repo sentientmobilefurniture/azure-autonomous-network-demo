@@ -137,6 +137,16 @@ PREV_FABRIC_CONN="${FABRIC_CONNECTION_NAME:-}"
 PREV_EH_URI="${EVENTHOUSE_QUERY_URI:-}"
 PREV_AGENT_ID="${FABRIC_DATA_AGENT_ID:-}"
 PREV_AGENT_API="${FABRIC_DATA_AGENT_API_VERSION:-2024-05-01-preview}"
+# Preserve fields that other scripts/user may have set
+PREV_GRAPH_AGENT_ID="${GRAPH_DATA_AGENT_ID:-}"
+PREV_TELEMETRY_AGENT_ID="${TELEMETRY_DATA_AGENT_ID:-}"
+PREV_GRAPH_CONN="${GRAPH_FABRIC_CONNECTION_NAME:-}"
+PREV_TELEMETRY_CONN="${TELEMETRY_FABRIC_CONNECTION_NAME:-}"
+PREV_CORS="${CORS_ORIGINS:-http://localhost:5173}"
+PREV_FABRIC_API_URL="${FABRIC_API_URL:-https://api.fabric.microsoft.com/v1}"
+PREV_FABRIC_SCOPE_VAL="${FABRIC_SCOPE:-https://api.fabric.microsoft.com/.default}"
+PREV_ONTOLOGY_NAME="${FABRIC_ONTOLOGY_NAME:-NetworkTopologyOntology}"
+PREV_GPT_CAPACITY="${GPT_CAPACITY_1K_TPM:-10}"
 
 cat > "$CONFIG_FILE" <<EOF
 # ============================================================================
@@ -177,12 +187,21 @@ TICKETS_CONTAINER_NAME=$TICKETS_CONT
 # --- Fabric deployment settings (USER: edit before 'azd up') ---
 FABRIC_SKU=$FABRIC_SKU_VAL
 AZURE_FABRIC_ADMIN=$FABRIC_ADMIN_VAL
+GPT_CAPACITY_1K_TPM=${PREV_GPT_CAPACITY}
+
+# --- Fabric API (defaults are correct for public Azure — only change for sovereign clouds) ---
+FABRIC_API_URL=${PREV_FABRIC_API_URL}
+FABRIC_SCOPE=${PREV_FABRIC_SCOPE_VAL}
+
+# --- App / CORS (USER: change for production deployment) ---
+CORS_ORIGINS=${PREV_CORS}
 
 # --- Fabric resource names (USER: edit before running provision_lakehouse.py) ---
 FABRIC_WORKSPACE_NAME=$FABRIC_WS
 FABRIC_LAKEHOUSE_NAME=$LAKEHOUSE
 FABRIC_EVENTHOUSE_NAME=$EVENTHOUSE
 FABRIC_KQL_DB_DEFAULT=$KQL_DB_DEFAULT
+FABRIC_ONTOLOGY_NAME=${PREV_ONTOLOGY_NAME}
 
 # --- Fabric IDs (AUTO: populated by populate_fabric_config.py) ---
 FABRIC_CONNECTION_NAME=${PREV_FABRIC_CONN}
@@ -194,9 +213,15 @@ FABRIC_EVENTHOUSE_ID=${PREV_FABRIC_EH_ID}
 FABRIC_KQL_DB_ID=${PREV_FABRIC_KQL_ID}
 FABRIC_KQL_DB_NAME=${PREV_FABRIC_KQL_NAME}
 
-# --- Fabric Data Agent (USER: set after creating Data Agent in Fabric portal) ---
+# --- Fabric Data Agent (AUTO: populated by collect_fabric_agents.py) ---
 FABRIC_DATA_AGENT_ID=${PREV_AGENT_ID}
 FABRIC_DATA_AGENT_API_VERSION=${PREV_AGENT_API}
+GRAPH_DATA_AGENT_ID=${PREV_GRAPH_AGENT_ID}
+TELEMETRY_DATA_AGENT_ID=${PREV_TELEMETRY_AGENT_ID}
+
+# --- Fabric Connections in Foundry (USER: set after creating in AI Foundry portal) ---
+GRAPH_FABRIC_CONNECTION_NAME=${PREV_GRAPH_CONN}
+TELEMETRY_FABRIC_CONNECTION_NAME=${PREV_TELEMETRY_CONN}
 EOF
 
 echo "  ✓ azure_config.env written"
