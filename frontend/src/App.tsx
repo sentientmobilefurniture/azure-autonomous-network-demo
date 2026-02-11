@@ -79,6 +79,8 @@ export default function App() {
               setSteps((prev: StepEvent[]) => [...prev, data as StepEvent]);
             } else if (currentEvent === 'message') {
               setFinalMessage(data.text);
+            } else if (currentEvent === 'error') {
+              setFinalMessage(`**Error:** ${data.message}`);
             }
           }
         }

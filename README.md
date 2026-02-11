@@ -171,3 +171,8 @@ Open http://localhost:5173 — the Vite dev server proxies `/api/*` to the backe
 - [ ] Live visualization of the graph directly in the UI
 - [ ] Click on a node, select a particular type of error or scenario, trigger it! - Needs reset button. Hot damn! 
 - [ ] Expand data complexity and size to more closely affect real world? 
+- [ ] Connect Redis to cache frequently asked/difficult questions OR generate subgraphs? Back up somewhere...perhaps cosmosDB?
+- [ ] Play by play commentary on each step of the demo
+- [ ] Better and more readable formatting of demo output 
+- [ ] Logs and application insights to trace server-side errors 
+- [ ] Display final response somewhere - We need a wireframe 

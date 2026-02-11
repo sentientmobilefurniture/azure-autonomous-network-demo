@@ -2,16 +2,22 @@
 Alert router — POST /api/alert
 
 Accepts a NOC alert and returns a streamed SSE response with agent progress.
-Currently a hello-world stub that returns a canned response.
+Connects to the real Foundry Orchestrator agent when configured,
+falls back to stub responses for frontend development.
 """
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
+
+from app.orchestrator import is_configured, run_orchestrator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["alert"])
 
@@ -34,7 +40,7 @@ async def _stub_event_generator(alert_text: str):
 
     agents = ["TelemetryAgent", "GraphExplorerAgent", "RunbookKBAgent", "HistoricalTicketAgent"]
     for i, agent in enumerate(agents, 1):
-        await asyncio.sleep(0.5)  # Simulate work
+        await asyncio.sleep(0.5)
         yield {
             "event": "step_start",
             "data": json.dumps({"step": i, "agent": agent}),
@@ -57,7 +63,8 @@ async def _stub_event_generator(alert_text: str):
             "text": (
                 "## Incident Summary\n\n"
                 "**Alert:** " + alert_text + "\n\n"
-                "This is a stub response. The real orchestrator will be wired in later."
+                "This is a **stub response**. The real orchestrator is not configured.\n\n"
+                "Run `provision_agents.py` and ensure `scripts/agent_ids.json` exists."
             ),
         }),
     }
@@ -71,4 +78,9 @@ async def _stub_event_generator(alert_text: str):
 @router.post("/alert")
 async def submit_alert(req: AlertRequest):
     """Submit a NOC alert. Returns an SSE stream of orchestrator progress."""
-    return EventSourceResponse(_stub_event_generator(req.text))
+    if is_configured():
+        logger.info("Using real orchestrator for alert: %s", req.text[:80])
+        return EventSourceResponse(run_orchestrator(req.text))
+    else:
+        logger.info("Orchestrator not configured — using stub for: %s", req.text[:80])
+        return EventSourceResponse(_stub_event_generator(req.text))
