@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
+import ReactMarkdown from 'react-markdown';
 
 interface StepEvent {
   step: number;
@@ -163,10 +164,16 @@ export default function App() {
                     )}
                   </div>
                   {s.query && (
-                    <p className="text-xs text-text-muted mt-1">Query: {s.query}</p>
+                    <div className="text-xs text-text-muted mt-1">
+                      <span className="font-medium">Query: </span>
+                      <span className="inline prose prose-xs prose-invert max-w-none"><ReactMarkdown>{s.query}</ReactMarkdown></span>
+                    </div>
                   )}
                   {s.response && (
-                    <p className="text-xs text-text-secondary mt-1">Response: {s.response}</p>
+                    <div className="text-xs text-text-secondary mt-2 prose prose-xs prose-invert max-w-none">
+                      <span className="font-medium">Response:</span>
+                      <ReactMarkdown>{s.response}</ReactMarkdown>
+                    </div>
                   )}
                 </motion.div>
               ))}
@@ -186,7 +193,9 @@ export default function App() {
             transition={{ duration: 0.3, ease: 'easeOut' }}
           >
             <h2 className="text-lg font-semibold text-text-primary mb-4">Diagnosis</h2>
-            <div className="text-sm text-text-secondary whitespace-pre-wrap">{finalMessage}</div>
+            <div className="text-sm text-text-secondary prose prose-sm prose-invert max-w-none">
+              <ReactMarkdown>{finalMessage}</ReactMarkdown>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

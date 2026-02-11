@@ -160,11 +160,14 @@ Open http://localhost:5173 — the Vite dev server proxies `/api/*` to the backe
 ### Frontend & API
 - [x] FastAPI backend with SSE streaming
 - [x] React/Vite dark theme UI scaffold
-- [ ] Wire real orchestrator into SSE endpoint
+- [x] Wire real orchestrator into SSE endpoint
 - [ ] Deploy API to Azure Container Apps
 - [ ] Deploy frontend to Azure Static Web Apps
 
 ### Future
+- [x] Format query and response text with markdown
+- [ ] Decouple graph exploration - Abandon use of Fabric data agent. We will instead query it directly - This will allow us to assert greater control over GQL/KQL to avoid timeouts
+- [ ] Link telemetry from all agents rather than just the orchestrator
 - [ ] MCP server tools (query_eventhouse, search_tickets, create_incident)
 - [ ] CosmosDB for tickets
 - [ ] Corrective action API
