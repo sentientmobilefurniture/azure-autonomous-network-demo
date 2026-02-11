@@ -180,6 +180,114 @@ Container App revision. No need to re-run `azd up` for code-only changes.
 
 ---
 
+## Operations
+
+### Starting the UI locally
+
+```bash
+# Terminal 1 — Backend API
+cd api && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2 — Frontend
+cd frontend && npm run dev
+```
+
+Open http://localhost:5173. The Vite dev server proxies `/api/*` and `/health` to the backend.
+
+### Restarting the frontend
+
+The frontend picks up `.tsx` changes via HMR automatically. For config changes
+(`vite.config.ts`, `package.json`, `tailwind.config.js`), you must restart:
+
+```bash
+# Kill and restart
+lsof -ti:5173 | xargs -r kill -9
+cd frontend && npm run dev
+```
+
+### Restarting the backend
+
+The backend runs with `--reload`, so Python file changes are picked up
+automatically. To fully restart:
+
+```bash
+lsof -ti:8000 | xargs -r kill -9
+cd api && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Killing everything
+
+```bash
+# Kill frontend + backend + fabric-query-api (local)
+lsof -ti:8000,5173,5174,8100 | xargs -r kill -9
+```
+
+### Container App management
+
+The `fabric-query-api` runs as an Azure Container App. Common operations:
+
+```bash
+# Set these or source azure_config.env
+CA_NAME=ca-fabricquery-<suffix>
+RG=rg-<your-resource-group>
+
+# View recent logs (last 50 lines)
+az containerapp logs show --name $CA_NAME --resource-group $RG --type console --tail 50
+
+# Stream logs in real-time
+az containerapp logs show --name $CA_NAME --resource-group $RG --type console --follow
+
+# Check current revision & status
+az containerapp show --name $CA_NAME --resource-group $RG --query "{fqdn:properties.configuration.ingress.fqdn, replicas:properties.template.scale.minReplicas, revision:properties.latestRevisionName}" -o table
+
+# View env vars on the container
+az containerapp show --name $CA_NAME --resource-group $RG --query "properties.template.containers[0].env" -o table
+
+# Restart (creates new revision with same config)
+az containerapp revision restart --name $CA_NAME --resource-group $RG --revision <REVISION_NAME>
+
+# Redeploy after code changes
+azd deploy fabric-query-api
+```
+
+### Reprovisioning agents
+
+After changing prompts, OpenAPI specs, or agent configuration:
+
+```bash
+uv run python scripts/provision_agents.py
+```
+
+This deletes old agents and creates fresh ones. The backend reads `agent_ids.json`
+at request time, so no backend restart is needed.
+
+### Checking agent health
+
+```bash
+# List agents and their IDs
+curl -s http://localhost:8000/api/agents | python3 -m json.tool
+
+# Quick health check
+curl -s http://localhost:8000/health
+```
+
+### Running the orchestrator from CLI
+
+For debugging without the UI:
+
+```bash
+# Default alert
+uv run python scripts/test_orchestrator.py
+
+# Custom alert
+uv run python scripts/test_orchestrator.py "08:15:00 MAJOR ROUTER-SYD-01 BGP_FLAP BGP session down"
+
+# Quiet mode (final response only)
+uv run python scripts/test_orchestrator.py --quiet
+```
+
+---
+
 ## Troubleshooting
 
 ### Viewing Container App logs
@@ -273,7 +381,7 @@ diagnosing GQL issues. Disabled by default in production.
 - [x] Test independent graph querying
 - [x] Fix unreliable behavior - Ontology/Data file mismatch + confusing prompt spec - Fixed
 - [x] Verify that v2 architecture works with current UI
-- [ ] Fix event streaming not working
+- [x] Fix event streaming not working
 - [ ] Deploy main API to Azure Container Apps
 - [ ] Deploy frontend to Azure Static Web Apps
 
@@ -281,6 +389,7 @@ diagnosing GQL issues. Disabled by default in production.
 - [x] Format query and response text with markdown
 - [x] Query Fabric graph directly (GQL via REST API)
 - [x] Create and test graph query tool — FunctionTool PoC → OpenApiTool production
+- [ ] Evaluate Neo4j as alternative graph backend (Fabric F8 capacity too fragile for concurrent agent calls)
 - [ ] Cache common GQL queries (Redis / embedding cache)
 - [ ] Link telemetry from all agents rather than just the orchestrator
 - [ ] MCP server tools

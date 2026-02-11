@@ -1,10 +1,13 @@
 openapi: "3.0.3"
 info:
   title: Fabric Query API
-  version: "0.3.0"
+  version: "0.4.0"
   description: |
     Micro-API for executing GQL and KQL queries against Microsoft Fabric.
     Used by Foundry agents via OpenApiTool.
+# NOTE: Template placeholders ({base_url}, {workspace_id}, etc.) are substituted
+# at runtime by scripts/provision_agents.py. This raw file is NOT a valid OpenAPI
+# spec until those values are replaced. See provision_agents.py::_load_openapi_spec().
 servers:
   - url: "{base_url}"
     description: Deployed Container App

@@ -27,14 +27,16 @@ from __future__ import annotations
 import asyncio
 import os
 import logging
-import time
+import threading
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-import requests as http_requests
+import httpx
 from azure.identity import DefaultAzureCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 from azure.kusto.data.exceptions import KustoServiceError
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -42,29 +44,40 @@ from pydantic import BaseModel
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(
-    title="Fabric Query API",
-    version="0.3.0",
-    description="Runs GQL and KQL queries against Microsoft Fabric for Foundry agents.",
-)
-
 logger = logging.getLogger("fabric-query-api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+_REQUIRED_ENV_VARS = (
+    "FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID",
+    "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME",
+)
 
-@app.on_event("startup")
-async def _validate_config():
-    """Log warnings for missing env vars at startup."""
-    missing = []
-    for var in ("FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID",
-                "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME"):
-        if not os.getenv(var):
-            missing.append(var)
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Validate config at startup; warn about missing env vars."""
+    missing = [v for v in _REQUIRED_ENV_VARS if not os.getenv(v)]
     if missing:
         logger.warning(
             "Missing env vars (will rely on request body values): %s",
             ", ".join(missing),
         )
+    yield
+
+
+app = FastAPI(
+    title="Fabric Query API",
+    version="0.4.0",
+    description="Runs GQL and KQL queries against Microsoft Fabric for Foundry agents.",
+    lifespan=_lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
@@ -137,13 +150,13 @@ def _fabric_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-def _execute_gql(
+async def _execute_gql(
     query: str,
     workspace_id: str = "",
     graph_model_id: str = "",
     max_retries: int = 3,
 ) -> dict:
-    """Execute a GQL query with retry on 429."""
+    """Execute a GQL query with retry on 429 (fully async)."""
     ws = workspace_id or WORKSPACE_ID
     gm = graph_model_id or GRAPH_MODEL_ID
     url = (
@@ -152,43 +165,45 @@ def _execute_gql(
     )
     body = {"query": query}
 
-    for attempt in range(1, max_retries + 1):
-        headers = _fabric_headers()
-        r = http_requests.post(url, headers=headers, json=body, params={"beta": "True"})
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for attempt in range(1, max_retries + 1):
+            headers = _fabric_headers()
+            r = await client.post(url, headers=headers, json=body, params={"beta": "True"})
 
-        if r.status_code == 200:
-            payload = r.json()
-            # Fabric returns HTTP 200 even for GQL errors — check body status
-            status_code = payload.get("status", {}).get("code", "")
-            if status_code and not status_code.startswith("0"):
-                cause = payload.get("status", {}).get("cause", {})
-                err_desc = cause.get("description", payload["status"].get("description", "unknown GQL error"))
-                raise HTTPException(status_code=400, detail=f"GQL error ({status_code}): {err_desc}")
-            return payload
+            if r.status_code == 200:
+                payload = r.json()
+                # Fabric returns HTTP 200 even for GQL errors — check body status
+                status_code = payload.get("status", {}).get("code", "")
+                if status_code and not status_code.startswith("0"):
+                    cause = payload.get("status", {}).get("cause", {})
+                    err_desc = cause.get("description", payload["status"].get("description", "unknown GQL error"))
+                    raise HTTPException(status_code=400, detail=f"GQL error ({status_code}): {err_desc}")
+                return payload
 
-        if r.status_code == 429 and attempt < max_retries:
-            retry_after = int(r.headers.get("Retry-After", "0"))
-            if not retry_after:
-                try:
-                    msg = r.json().get("message", "")
-                    if "until:" in msg:
-                        ts_str = msg.split("until:")[1].strip().rstrip(")")
-                        ts_str = ts_str.replace("(UTC", "").strip()
-                        blocked_until = datetime.strptime(ts_str, "%m/%d/%Y %I:%M:%S %p")
-                        blocked_until = blocked_until.replace(tzinfo=timezone.utc)
-                        wait = (blocked_until - datetime.now(timezone.utc)).total_seconds()
-                        retry_after = max(int(wait) + 1, 3)
-                except Exception:
-                    pass
-            retry_after = max(retry_after, 10 * attempt)
-            time.sleep(retry_after)
-            continue
+            if r.status_code == 429 and attempt < max_retries:
+                retry_after = int(r.headers.get("Retry-After", "0"))
+                if not retry_after:
+                    try:
+                        msg = r.json().get("message", "")
+                        if "until:" in msg:
+                            ts_str = msg.split("until:")[1].strip().rstrip(")")
+                            ts_str = ts_str.replace("(UTC", "").strip()
+                            blocked_until = datetime.strptime(ts_str, "%m/%d/%Y %I:%M:%S %p")
+                            blocked_until = blocked_until.replace(tzinfo=timezone.utc)
+                            wait = (blocked_until - datetime.now(timezone.utc)).total_seconds()
+                            retry_after = max(int(wait) + 1, 3)
+                    except Exception:
+                        logger.debug("Could not parse Retry-After timestamp from 429 body, using fallback")
+                retry_after = max(retry_after, 10 * attempt)
+                logger.info("429 rate-limited, retrying in %ds (attempt %d/%d)", retry_after, attempt, max_retries)
+                await asyncio.sleep(retry_after)
+                continue
 
-        # Non-retryable error
-        raise HTTPException(
-            status_code=r.status_code,
-            detail=f"Fabric GraphModel API error: {r.text[:500]}",
-        )
+            # Non-retryable error
+            raise HTTPException(
+                status_code=r.status_code,
+                detail=f"Fabric GraphModel API error: {r.text[:500]}",
+            )
 
     raise HTTPException(status_code=429, detail="Rate-limited after max retries")
 
@@ -197,23 +212,20 @@ def _execute_gql(
 # KQL helpers
 # ---------------------------------------------------------------------------
 
+_kusto_lock = threading.Lock()
 _kusto_client: KustoClient | None = None
 _kusto_client_uri: str = ""
 
 
-def _make_kusto_client(uri: str) -> KustoClient:
-    """Create a fresh KustoClient for the given URI."""
-    kcsb = KustoConnectionStringBuilder.with_azure_token_credential(uri, credential)
-    return KustoClient(kcsb)
-
-
 def _get_kusto_client(uri: str) -> KustoClient:
-    """Return a cached KustoClient if the URI matches, otherwise create a new one."""
+    """Return a cached KustoClient if the URI matches, otherwise create a new one (thread-safe)."""
     global _kusto_client, _kusto_client_uri
-    if _kusto_client is None or uri != _kusto_client_uri:
-        _kusto_client = _make_kusto_client(uri)
-        _kusto_client_uri = uri
-    return _kusto_client
+    with _kusto_lock:
+        if _kusto_client is None or uri != _kusto_client_uri:
+            kcsb = KustoConnectionStringBuilder.with_azure_token_credential(uri, credential)
+            _kusto_client = KustoClient(kcsb)
+            _kusto_client_uri = uri
+        return _kusto_client
 
 
 def _execute_kql(
@@ -268,7 +280,7 @@ async def query_graph(req: GraphQueryRequest):
     gm = req.graph_model_id or GRAPH_MODEL_ID
     if not ws or not gm:
         raise HTTPException(status_code=400, detail="workspace_id and graph_model_id are required (via request body or env vars)")
-    result = await asyncio.to_thread(_execute_gql, req.query, workspace_id=ws, graph_model_id=gm)
+    result = await _execute_gql(req.query, workspace_id=ws, graph_model_id=gm)
 
     # Normalise Fabric API response
     # The API may return {"status": "...", "result": {"columns": [...], "data": [...]}}
@@ -317,5 +329,5 @@ if os.getenv("DEBUG_ENDPOINTS") == "1":
         gm = req.graph_model_id or GRAPH_MODEL_ID
         if not ws or not gm:
             raise HTTPException(status_code=400, detail="workspace_id and graph_model_id required")
-        result = await asyncio.to_thread(_execute_gql, req.query, workspace_id=ws, graph_model_id=gm)
+        result = await _execute_gql(req.query, workspace_id=ws, graph_model_id=gm)
         return result
