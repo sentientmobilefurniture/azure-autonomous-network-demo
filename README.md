@@ -382,6 +382,7 @@ diagnosing GQL issues. Disabled by default in production.
 - [x] Fix unreliable behavior - Ontology/Data file mismatch + confusing prompt spec - Fixed
 - [x] Verify that v2 architecture works with current UI
 - [x] Fix event streaming not working
+- [ ] Final test before merging v2architecture
 - [ ] Deploy main API to Azure Container Apps
 - [ ] Deploy frontend to Azure Static Web Apps
 
