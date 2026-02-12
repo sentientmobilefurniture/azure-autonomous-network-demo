@@ -17,6 +17,28 @@ export default defineConfig({
           });
         },
       },
+      '/api/logs': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        // SSE: disable response buffering so log events stream in real-time
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['cache-control'] = 'no-cache';
+            proxyRes.headers['x-accel-buffering'] = 'no';
+          });
+        },
+      },
+      '/fabric-api/logs': {
+        target: 'http://localhost:8100',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/fabric-api/, '/api'),
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['cache-control'] = 'no-cache';
+            proxyRes.headers['x-accel-buffering'] = 'no';
+          });
+        },
+      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,

@@ -25,9 +25,11 @@ Run locally:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import logging
 import threading
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -38,6 +40,7 @@ from azure.kusto.data.exceptions import KustoServiceError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.responses import StreamingResponse
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -45,7 +48,7 @@ from pydantic import BaseModel
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger("fabric-query-api")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 _REQUIRED_ENV_VARS = (
     "FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID",
@@ -82,14 +85,30 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log every incoming request and catch validation errors."""
+    """Log every incoming request with timing and full error details."""
+    import time as _time
     body = b""
     if request.method in ("POST", "PUT", "PATCH"):
         body = await request.body()
-        logger.info(f"Incoming {request.method} {request.url.path} — body={body[:500]}")
+        logger.info(
+            "▶ %s %s  body=%s",
+            request.method, request.url.path, body[:1000].decode(errors="replace"),
+        )
+    else:
+        logger.info("▶ %s %s", request.method, request.url.path)
+    t0 = _time.time()
     response = await call_next(request)
+    elapsed_ms = (_time.time() - t0) * 1000
     if response.status_code >= 400:
-        logger.warning(f"Response {response.status_code} for {request.method} {request.url.path}")
+        logger.warning(
+            "◀ %s %s → %d  (%.0fms)",
+            request.method, request.url.path, response.status_code, elapsed_ms,
+        )
+    else:
+        logger.info(
+            "◀ %s %s → %d  (%.0fms)",
+            request.method, request.url.path, response.status_code, elapsed_ms,
+        )
     return response
 
 # ---------------------------------------------------------------------------
@@ -165,10 +184,20 @@ async def _execute_gql(
     )
     body = {"query": query}
 
+    logger.info("GQL request to %s", url)
+    logger.debug("GQL query:\n%s", query)
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         for attempt in range(1, max_retries + 1):
             headers = _fabric_headers()
+            import time as _time
+            t0 = _time.time()
             r = await client.post(url, headers=headers, json=body, params={"beta": "True"})
+            elapsed_ms = (_time.time() - t0) * 1000
+            logger.info(
+                "GQL response: status=%d  elapsed=%.0fms  attempt=%d/%d",
+                r.status_code, elapsed_ms, attempt, max_retries,
+            )
 
             if r.status_code == 200:
                 payload = r.json()
@@ -177,7 +206,16 @@ async def _execute_gql(
                 if status_code and not status_code.startswith("0"):
                     cause = payload.get("status", {}).get("cause", {})
                     err_desc = cause.get("description", payload["status"].get("description", "unknown GQL error"))
+                    logger.error(
+                        "GQL logical error (status=%s): %s\nFull query:\n%s\nFull response body:\n%s",
+                        status_code, err_desc, query, r.text[:2000],
+                    )
                     raise HTTPException(status_code=400, detail=f"GQL error ({status_code}): {err_desc}")
+                # Log result summary
+                result_data = payload.get("result", payload)
+                row_count = len(result_data.get("data", []))
+                col_count = len(result_data.get("columns", []))
+                logger.info("GQL success: %d columns, %d rows", col_count, row_count)
                 return payload
 
             if r.status_code == 429 and attempt < max_retries:
@@ -200,9 +238,13 @@ async def _execute_gql(
                 continue
 
             # Non-retryable error
+            logger.error(
+                "GQL non-retryable error: HTTP %d\nQuery:\n%s\nResponse body:\n%s",
+                r.status_code, query, r.text[:2000],
+            )
             raise HTTPException(
                 status_code=r.status_code,
-                detail=f"Fabric GraphModel API error: {r.text[:500]}",
+                detail=f"Fabric GraphModel API error (HTTP {r.status_code}): {r.text[:1000]}",
             )
 
     raise HTTPException(status_code=429, detail="Rate-limited after max retries")
@@ -234,12 +276,18 @@ def _execute_kql(
     kql_db_name: str = "",
 ) -> dict:
     """Execute a KQL query and return structured results."""
+    import time as _time
     uri = eventhouse_query_uri or EVENTHOUSE_QUERY_URI
     db = kql_db_name or KQL_DB_NAME
+    logger.info("KQL request: db=%s  uri=%s", db, uri)
+    logger.debug("KQL query:\n%s", query)
     client = _get_kusto_client(uri)
+    t0 = _time.time()
     response = client.execute(db, query)
+    elapsed_ms = (_time.time() - t0) * 1000
     primary = response.primary_results[0] if response.primary_results else None
     if primary is None:
+        logger.warning("KQL returned no primary results (%.0fms)", elapsed_ms)
         return {"columns": [], "rows": []}
 
     columns = [
@@ -256,6 +304,7 @@ def _execute_kql(
             row_dict[col.column_name] = val
         rows.append(row_dict)
 
+    logger.info("KQL success: %d columns, %d rows  (%.0fms)", len(columns), len(rows), elapsed_ms)
     return {"columns": columns, "rows": rows}
 
 
@@ -275,12 +324,21 @@ def _execute_kql(
     ),
 )
 async def query_graph(req: GraphQueryRequest):
-    logger.info(f"POST /query/graph — query={req.query[:100]!r} ws={req.workspace_id!r} gm={req.graph_model_id!r}")
+    logger.info(
+        "POST /query/graph — query=%.200s  ws=%s  gm=%s",
+        req.query, req.workspace_id or WORKSPACE_ID, req.graph_model_id or GRAPH_MODEL_ID,
+    )
     ws = req.workspace_id or WORKSPACE_ID
     gm = req.graph_model_id or GRAPH_MODEL_ID
     if not ws or not gm:
         raise HTTPException(status_code=400, detail="workspace_id and graph_model_id are required (via request body or env vars)")
-    result = await _execute_gql(req.query, workspace_id=ws, graph_model_id=gm)
+    try:
+        result = await _execute_gql(req.query, workspace_id=ws, graph_model_id=gm)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in /query/graph")
+        raise HTTPException(status_code=502, detail=f"Unexpected GQL error: {type(e).__name__}: {e}")
 
     # Normalise Fabric API response
     # The API may return {"status": "...", "result": {"columns": [...], "data": [...]}}
@@ -302,7 +360,10 @@ async def query_graph(req: GraphQueryRequest):
     ),
 )
 async def query_telemetry(req: TelemetryQueryRequest):
-    logger.info(f"POST /query/telemetry — query={req.query[:100]!r} uri={req.eventhouse_query_uri!r} db={req.kql_db_name!r}")
+    logger.info(
+        "POST /query/telemetry — query=%.200s  uri=%s  db=%s",
+        req.query, req.eventhouse_query_uri or EVENTHOUSE_QUERY_URI, req.kql_db_name or KQL_DB_NAME,
+    )
     uri = req.eventhouse_query_uri or EVENTHOUSE_QUERY_URI
     db = req.kql_db_name or KQL_DB_NAME
     if not uri or not db:
@@ -314,6 +375,69 @@ async def query_telemetry(req: TelemetryQueryRequest):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"KQL backend error: {type(e).__name__}: {e}")
     return TelemetryQueryResponse(columns=result["columns"], rows=result["rows"])
+
+
+# ---------------------------------------------------------------------------
+# Log streaming SSE
+# ---------------------------------------------------------------------------
+
+_log_subscribers: set[asyncio.Queue] = set()
+_log_buffer: deque[dict] = deque(maxlen=100)
+
+
+def _broadcast_log(record: dict) -> None:
+    _log_buffer.append(record)
+    dead: list[asyncio.Queue] = []
+    for q in _log_subscribers:
+        try:
+            q.put_nowait(record)
+        except asyncio.QueueFull:
+            dead.append(q)
+    for q in dead:
+        _log_subscribers.discard(q)
+
+
+class _SSELogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            entry = {
+                "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S.%f")[:-3],
+                "level": record.levelname,
+                "name": record.name,
+                "msg": self.format(record),
+            }
+            _broadcast_log(entry)
+        except Exception:
+            self.handleError(record)
+
+
+_sse_handler = _SSELogHandler()
+_sse_handler.setLevel(logging.INFO)
+_sse_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+_sse_handler.addFilter(lambda r: r.name.startswith(("fabric-query-api", "azure", "uvicorn")))
+logging.getLogger().addHandler(_sse_handler)
+
+
+async def _log_sse_generator():
+    q: asyncio.Queue = asyncio.Queue(maxsize=500)
+    _log_subscribers.add(q)
+    try:
+        for rec in list(_log_buffer):
+            yield f"event: log\ndata: {json.dumps(rec)}\n\n"
+        while True:
+            rec = await q.get()
+            yield f"event: log\ndata: {json.dumps(rec)}\n\n"
+    finally:
+        _log_subscribers.discard(q)
+
+
+@app.get("/api/logs", summary="Stream logs via SSE")
+async def stream_logs():
+    return StreamingResponse(
+        _log_sse_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/health", summary="Health check")

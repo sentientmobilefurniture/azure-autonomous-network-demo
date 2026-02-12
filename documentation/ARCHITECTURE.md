@@ -245,6 +245,117 @@ Dark theme following the `frontend-ui-dark-ts` skill specification:
 - `clsx` for conditional class composition
 - `focus-visible` ring styles for keyboard accessibility
 
+### Frontend architecture: V3 NOC Dashboard
+
+The frontend was refactored from a 350-line monolithic `App.tsx` into a
+component-based three-zone dashboard layout. The design follows the wireframe
+specified in `documentation/V3UIFORMATPROPOSED.md`.
+
+**Layout structure** (`h-screen flex flex-col`, no page scroll):
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Header          (h-12, fixed)                  Zone 1   │
+├──────────────────────────────────────────────────────────┤
+│  MetricsBar      (flex-shrink-0)                Zone 2   │
+│  [KPI] [KPI] [KPI] [KPI] [AlertChart]                    │
+│  ←──── resizable panels (react-resizable-panels) ────→   │
+├────────────────────────┬─────────────────────────────────┤
+│  InvestigationPanel    │  DiagnosisPanel          Zone 3  │
+│  (w-1/2, scroll-y)    │  (w-1/2, scroll-y)              │
+│  AlertInput            │  Empty → Loading → Markdown     │
+│  AgentTimeline         │                                  │
+│  ErrorBanner           │                                  │
+└────────────────────────┴─────────────────────────────────┘
+```
+
+**Component tree:**
+
+```
+App.tsx                        Layout shell — imports hook + zones
+├── Header.tsx                 Branding + HealthDot + "5 Agents" indicator
+├── MetricsBar.tsx             PanelGroup with 5 equal-width resizable panels
+│   ├── MetricCard.tsx ×4      KPI display (hardcoded values for demo)
+│   └── AlertChart.tsx         Static <img> of anomaly detection chart
+├── InvestigationPanel.tsx     Left panel container
+│   ├── AlertInput.tsx         Textarea + submit button
+│   ├── AgentTimeline.tsx      Step list + thinking dots + run-complete footer
+│   │   ├── StepCard.tsx       Collapsible step with query/response expand
+│   │   └── ThinkingDots.tsx   Bouncing dots indicator
+│   └── ErrorBanner.tsx        Contextual error messages + retry
+├── DiagnosisPanel.tsx         Right panel — 3 states: empty / loading / result
+└── HealthDot.tsx              API health check indicator (reused in Header)
+```
+
+**File layout:**
+
+```
+frontend/src/
+├── App.tsx                    # ~55 lines — layout shell only
+├── main.tsx                   # React 18 entry
+├── types/
+│   └── index.ts               # StepEvent, ThinkingState, RunMeta
+├── hooks/
+│   └── useInvestigation.ts    # SSE connection + all state (extracted from old App.tsx)
+├── components/
+│   ├── Header.tsx
+│   ├── MetricsBar.tsx         # PanelGroup (react-resizable-panels)
+│   ├── MetricCard.tsx
+│   ├── AlertChart.tsx
+│   ├── InvestigationPanel.tsx
+│   ├── AlertInput.tsx
+│   ├── AgentTimeline.tsx
+│   ├── StepCard.tsx
+│   ├── ThinkingDots.tsx
+│   ├── ErrorBanner.tsx
+│   ├── DiagnosisPanel.tsx
+│   └── HealthDot.tsx
+└── styles/
+    └── globals.css            # Includes .metrics-resize-handle styles
+```
+
+**State management:** All SSE state lives in `useInvestigation()` custom hook.
+The hook returns `{ alert, setAlert, steps, thinking, finalMessage, errorMessage,
+running, runStarted, runMeta, submitAlert }`. `App.tsx` calls the hook and passes
+props down. Both panels read from the same hook instance — investigation panel
+gets the steps/thinking state, diagnosis panel gets the final message.
+
+**Resizable metrics panels:** The metrics bar uses `react-resizable-panels`
+(exported as `Group`, `Panel`, `Separator`). All 5 panels (4 KPI cards + alert
+chart) start at equal 20% width. Users drag handles to resize. Handle styling is
+in `globals.css` under `.metrics-resize-handle` — a 6px-wide invisible hit area
+with a 2px visible indicator line that brightens on hover/active.
+
+**Hardcoded vs live data:** Metrics values (12 alerts, 3 services, $115k SLA,
+231 anomalies) and the alert chart image are hardcoded for demo reliability.
+Only the investigation panel (SSE steps) and diagnosis panel (final markdown)
+are connected to the live backend.
+
+**Extension guidance:**
+
+- **Add a new metric card:** Add an entry to the `metrics` array in `MetricsBar.tsx`.
+  The PanelGroup auto-distributes equal sizes via `100 / (metrics.length + 1)`.
+  Update `minSize` if the new card needs more space.
+
+- **Make metrics live:** Replace hardcoded values in `MetricsBar.tsx` with state
+  from a new hook (e.g., `useMetrics()`) that polls `/api/metrics` or subscribes
+  to an SSE stream. Each `MetricCard` accepts props — no component changes needed.
+
+- **Replace the alert chart image:** Swap `AlertChart.tsx` from a static `<img>`
+  to a Recharts/D3 component. The parent `Panel` provides the container dimensions.
+
+- **Add a third panel zone:** Wrap Zone 3 in another `PanelGroup` with
+  `orientation="horizontal"` to split investigation/diagnosis with a resize handle.
+
+- **State migration to Zustand:** Replace `useInvestigation` props-drilling with
+  a Zustand store. Both panels import `useInvestigationStore()` directly. The
+  `InvestigationState` interface is documented in `V3UIFORMATPROPOSED.md`.
+
+- **Sub-agent step expansion (V3UIENHANCEMENT):** `StepCard.tsx` already supports
+  click-to-expand with query/response sections. For post-hoc enrichment (fetching
+  sub-agent thread details after run completes), add a `useStepDetails(threadId)`
+  hook and render inside the expanded card. See `V3UIENHANCEMENT.md`.
+
 ### Infrastructure as Code
 
 Subscription-scoped Bicep deployment via `azd up`. The parameter file reads from
@@ -405,4 +516,5 @@ CORS_ORIGINS must be updated to the production frontend URL before deploying.
 | `mcp[cli]` | `>=1.9.0` | FastMCP server framework |
 | `react` | `18.x` | UI library |
 | `framer-motion` | `11.x` | Animation |
+| `react-resizable-panels` | `^0.x` | Resizable panel layout (metrics bar) |
 | `tailwindcss` | `3.x` | Utility-first CSS |

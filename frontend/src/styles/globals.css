@@ -80,6 +80,66 @@ body {
   }
 }
 
+/* Resizable panel handles */
+.metrics-resize-handle {
+  width: 6px;
+  flex-shrink: 0;
+  position: relative;
+  cursor: col-resize;
+  transition: background-color 150ms ease;
+}
+
+.metrics-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 25%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 50%;
+  border-radius: 1px;
+  background: hsla(0, 0%, 100%, 0.08);
+  transition: background-color 150ms ease;
+}
+
+.metrics-resize-handle:hover::after,
+.metrics-resize-handle[data-resize-handle-active]::after {
+  background: hsla(0, 0%, 100%, 0.25);
+}
+
+/* Vertical resize handle (between metrics bar and main content) */
+.vertical-resize-handle {
+  height: 12px;
+  flex-shrink: 0;
+  position: relative;
+  cursor: row-resize;
+  background: hsla(0, 0%, 100%, 0.03);
+  transition: background-color 150ms ease;
+  z-index: 10;
+}
+
+.vertical-resize-handle:hover {
+  background: hsla(0, 0%, 100%, 0.06);
+}
+
+.vertical-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 40%;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20%;
+  height: 3px;
+  border-radius: 2px;
+  background: hsla(0, 0%, 100%, 0.15);
+  transition: background-color 150ms ease;
+}
+
+.vertical-resize-handle:hover::after,
+.vertical-resize-handle[data-resize-handle-active]::after {
+  background: hsla(260, 80%, 65%, 0.6);
+}
+
 /* Animation utilities */
 @layer utilities {
   .animate-in {
