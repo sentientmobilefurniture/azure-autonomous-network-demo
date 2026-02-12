@@ -1,14 +1,13 @@
 # Architecture
 
 ## Demo built with assistance from Claude Opus 4.6 using the following [skills](https://github.com/microsoft/skills):
-* azure-ai-projects-py
-* fastapi-router-py
-* frontend-ui-dark-ts
-/home/hanchoong/references/skills/.github/skills/azure-ai-projects-py
-/home/hanchoong/references/skills/.github/skills/hosted-agents-v2-py
-/home/hanchoong/references/skills/.github/skills/mcp-builder
-/home/hanchoong/references/skills/.github/skills/azure-appconfiguration-py
-/home/hanchoong/references/skills/.github/skills/azure-containerregistry-py
+* azure-ai-projects-py — `~/references/skills/.github/skills/azure-ai-projects-py`
+* hosted-agents-v2-py — `~/references/skills/.github/skills/hosted-agents-v2-py`
+* mcp-builder — `~/references/skills/.github/skills/mcp-builder`
+* azure-appconfiguration-py — `~/references/skills/.github/skills/azure-appconfiguration-py`
+* azure-containerregistry-py — `~/references/skills/.github/skills/azure-containerregistry-py`
+* fastapi-router-py (training data, no local reference)
+* frontend-ui-dark-ts (training data, no local reference)
 
 ## System Overview
 
@@ -96,23 +95,26 @@ by a distinct data source in Microsoft Fabric or Azure AI Search.
 │   ├── populate_fabric_config.py   # Discover Fabric IDs → write to azure_config.env
 │   ├── collect_fabric_agents.py    # Discover Fabric Data Agent IDs → azure_config.env
 │   ├── provision_agents.py     # Create all 5 Foundry agents (orchestrator + 4 sub-agents)
-│   ├── test_orchestrator.py    # CLI test — stream orchestrator run with metadata
-│   ├── test_fabric_agent.py    # CLI test — query a single Fabric Data Agent
-│   ├── test_gql_query.py       # CLI test — GQL queries against Fabric GraphModel API
-│   ├── test_kql_query.py       # CLI test — KQL queries against Fabric Eventhouse
-│   ├── test_fabric_query_api.py # Deployment smoke test for fabric-query-api
 │   ├── assign_fabric_role.py   # Grant Container App identity Fabric workspace access
-│   ├── test_function_tool.py   # PoC — Foundry agent with FunctionTool (archived)
-│   ├── check_status.py         # Inspect Fabric workspace items and job status
-│   └── agent_ids.json          # Output: provisioned agent IDs
+│   ├── agent_ids.json          # Output: provisioned agent IDs
+│   └── testing_scripts/        # CLI test & debug utilities
+│       ├── test_orchestrator.py    # Stream orchestrator run with metadata
+│       ├── test_fabric_agent.py    # Query a single Fabric Data Agent
+│       ├── test_gql_query.py       # GQL queries against Fabric GraphModel API
+│       ├── test_kql_query.py       # KQL queries against Fabric Eventhouse
+│       ├── test_fabric_query_api.py # Deployment smoke test for fabric-query-api
+│       ├── test_function_tool.py   # PoC — Foundry agent with FunctionTool (archived)
+│       └── check_status.py         # Inspect Fabric workspace items and job status
 │
 ├── api/                        # FastAPI backend
 │   ├── pyproject.toml          # Python deps (fastapi, sse-starlette, mcp, azure SDKs)
 │   └── app/
 │       ├── main.py             # App factory, CORS, router mounts
+│       ├── orchestrator.py     # Foundry agent bridge — sync SDK → async SSE generator
 │       ├── routers/
 │       │   ├── alert.py        # POST /api/alert → SSE stream of orchestrator steps
-│       │   └── agents.py       # GET /api/agents → list of agent metadata
+│       │   ├── agents.py       # GET /api/agents → list of agent metadata
+│       │   └── logs.py         # GET /api/logs + /api/fabric-logs → SSE log streams
 │       └── mcp/
 │           └── server.py       # FastMCP tool stubs (query_eventhouse, search_tickets, …)
 │
@@ -124,15 +126,23 @@ by a distinct data source in Microsoft Fabric or Azure AI Search.
 │
 ├── frontend/                   # React SPA
 │   ├── package.json
-│   ├── vite.config.ts          # Dev server :5173, proxies /api → :8000
+│   ├── vite.config.ts          # Dev server :5173, proxies /api + SSE routes → :8000
 │   ├── tailwind.config.js      # Full colour system (brand, neutral, status)
 │   ├── index.html
 │   └── src/
 │       ├── main.tsx            # React 18 entry
-│       ├── App.tsx             # Alert input → SSE consumer → step timeline → diagnosis
+│       ├── App.tsx             # Layout shell — imports hook + zones
 │       └── styles/globals.css  # CSS custom properties, glass utilities, dark theme
 │
-└── deprecated/                 # Archived code (not used)
+├── documentation/              # Architecture docs, design specs, scenario description
+│   ├── ARCHITECTURE.md         # This file
+│   ├── SCENARIO.md             # Demo scenario description
+│   ├── V4GRAPH.md              # V4 graph model design
+│   ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
+│   └── previous_dev_phases/    # Archived design docs (V2, V3)
+│
+└── .github/
+    └── copilot-instructions.md # Copilot context for this project
 ```
 
 ---
@@ -231,9 +241,11 @@ The API streams structured SSE events to the frontend. Event types:
 | Event | Payload | Purpose |
 |-------|---------|---------|
 | `run_start` | `{run_id, alert, timestamp}` | Signals diagnosis began |
+| `step_thinking` | `{agent, status}` | Agent is working (shows thinking dots) |
 | `step_start` | `{step, agent}` | Agent invocation starting |
-| `step_complete` | `{step, agent, duration, query, response}` | Agent returned; includes I/O |
+| `step_complete` | `{step, agent, duration, query, response, error?}` | Agent returned; includes I/O. `error: true` on failure |
 | `message` | `{text}` | Final diagnosis (markdown) |
+| `error` | `{message}` | Run-level error (agent failure, timeout, etc.) |
 | `run_complete` | `{steps, tokens, time}` | Run finished; summary stats |
 
 ### Frontend design system
@@ -244,6 +256,141 @@ Dark theme following the `frontend-ui-dark-ts` skill specification:
 - Framer Motion for all transitions: `AnimatePresence`, stagger containers, spring-physics buttons
 - `clsx` for conditional class composition
 - `focus-visible` ring styles for keyboard accessibility
+
+### Frontend architecture: V4 NOC Dashboard
+
+The frontend is a component-based three-zone dashboard layout with
+vertically and horizontally resizable panels.
+
+**Layout structure** (`h-screen flex flex-col`, no page scroll):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Header          (h-12, fixed)                              Zone 1  │
+├──────────────────────────────────────────────────────────────────────┤
+│  MetricsBar      (resizable height, default 30%)            Zone 2  │
+│  [KPI] [KPI] [KPI] [KPI] [AlertChart] [API Logs] [Fabric Logs]     │
+│  ←──── resizable panels (react-resizable-panels) ────→              │
+├═══════════════════════════ vertical drag handle ═════════════════════┤
+│                  (resizable height, default 70%)            Zone 3  │
+│  ┌────────────────────────┬─────────────────────────────────┐       │
+│  │  InvestigationPanel    │  DiagnosisPanel                 │       │
+│  │  (w-1/2, scroll-y)    │  (w-1/2, scroll-y)              │       │
+│  │  AlertInput            │  Empty → Loading → Markdown     │       │
+│  │  AgentTimeline         │                                 │       │
+│  │  ErrorBanner           │                                 │       │
+│  └────────────────────────┴─────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Zone 2 and Zone 3 are vertically resizable via a `PanelGroup` with
+`orientation="vertical"`. Users can drag the handle between them to
+allocate more space to metrics or investigation.
+
+**Component tree:**
+
+```
+App.tsx                        Layout shell — imports hook + zones
+├── Header.tsx                 Branding + HealthDot + "5 Agents" indicator
+├── MetricsBar.tsx             PanelGroup with 7 resizable panels
+│   ├── MetricCard.tsx ×4      KPI display (hardcoded values for demo)
+│   ├── AlertChart.tsx         Static <img> of anomaly detection chart
+│   ├── LogStream.tsx ×2       Live SSE log panels (API logs + Fabric logs)
+├── InvestigationPanel.tsx     Left panel container
+│   ├── AlertInput.tsx         Textarea + submit button
+│   ├── AgentTimeline.tsx      Step list + thinking dots + run-complete footer
+│   │   ├── StepCard.tsx       Collapsible step with query/response expand
+│   │   └── ThinkingDots.tsx   Bouncing dots indicator
+│   └── ErrorBanner.tsx        Contextual error messages + retry
+├── DiagnosisPanel.tsx         Right panel — 3 states: empty / loading / result
+└── HealthDot.tsx              API health check indicator (reused in Header)
+```
+
+**File layout:**
+
+```
+frontend/src/
+├── App.tsx                    # ~80 lines — layout shell with vertical PanelGroup
+├── main.tsx                   # React 18 entry
+├── types/
+│   └── index.ts               # StepEvent, ThinkingState, RunMeta
+├── hooks/
+│   └── useInvestigation.ts    # SSE connection + all state (uses @microsoft/fetch-event-source)
+├── components/
+│   ├── Header.tsx
+│   ├── MetricsBar.tsx         # PanelGroup with 7 panels (react-resizable-panels)
+│   ├── MetricCard.tsx
+│   ├── AlertChart.tsx
+│   ├── LogStream.tsx          # Generic SSE log viewer (url + title props)
+│   ├── InvestigationPanel.tsx
+│   ├── AlertInput.tsx
+│   ├── AgentTimeline.tsx
+│   ├── StepCard.tsx
+│   ├── ThinkingDots.tsx
+│   ├── ErrorBanner.tsx
+│   ├── DiagnosisPanel.tsx
+│   └── HealthDot.tsx
+└── styles/
+    └── globals.css            # Includes .metrics-resize-handle + .vertical-resize-handle styles
+```
+
+**State management:** All SSE state lives in `useInvestigation()` custom hook.
+The hook returns `{ alert, setAlert, steps, thinking, finalMessage, errorMessage,
+running, runStarted, runMeta, submitAlert }`. `App.tsx` calls the hook and passes
+props down. Both panels read from the same hook instance — investigation panel
+gets the steps/thinking state, diagnosis panel gets the final message. The hook
+uses `@microsoft/fetch-event-source` to issue a POST-based SSE request (standard
+`EventSource` is GET-only).
+
+**Resizable metrics panels:** The metrics bar uses `react-resizable-panels`
+(exported as `Group`, `Panel`, `Separator`). 7 panels (4 KPI cards + alert chart
++ API log stream + Fabric log stream) are horizontally resizable. Handle styling
+is in `globals.css` under `.metrics-resize-handle`.
+
+**Live log streaming:** Two `LogStream` components in the metrics bar display
+real-time backend logs via SSE:
+- **API logs** (`/api/logs`) — captures all `app.*`, `azure.*`, and `uvicorn`
+  log output from the FastAPI process.
+- **Fabric logs** (`/api/fabric-logs`) — synthetic logs emitted by the
+  orchestrator showing the queries and responses that flow through
+  `fabric-query-api` (graph/telemetry endpoints). These are reconstructed from
+  the orchestrator's view of agent tool calls, since the real fabric-query-api
+  runs in Azure and isn't directly observable locally.
+
+Each LogStream supports auto-scroll, manual scroll-pause, and connection status.
+
+**Hardcoded vs live data:** Metrics values (12 alerts, 3 services, $115k SLA,
+231 anomalies) and the alert chart image are hardcoded for demo reliability.
+The investigation panel (SSE steps), diagnosis panel (final markdown), and log
+streams are connected to the live backend.
+
+**Extension guidance:**
+
+- **Add a new metric card:** Add an entry to the `metrics` array in `MetricsBar.tsx`
+  and add a new `<Panel>` with `<ResizeHandle>` in the JSX. Adjust `defaultSize`
+  percentages so all panels sum to 100.
+
+- **Make metrics live:** Replace hardcoded values in `MetricsBar.tsx` with state
+  from a new hook (e.g., `useMetrics()`) that polls `/api/metrics` or subscribes
+  to an SSE stream. Each `MetricCard` accepts props — no component changes needed.
+
+- **Replace the alert chart image:** Swap `AlertChart.tsx` from a static `<img>`
+  to a Recharts/D3 component. The parent `Panel` provides the container dimensions.
+
+- **Adjust vertical split ratio:** Zone 2 and Zone 3 are already in a vertical
+  `PanelGroup`. Change the `defaultSize` props (currently 30/70) in `App.tsx` to
+  adjust. The `minSize` props prevent either zone from collapsing completely.
+
+- **State migration to Zustand:** Replace `useInvestigation` props-drilling with
+  a Zustand store. Both panels import `useInvestigationStore()` directly. The
+  `InvestigationState` interface maps to the hook's current return shape.
+
+- **Sub-agent step expansion:** `StepCard.tsx` already supports click-to-expand
+  with query/response sections and renders responses as Markdown via
+  `react-markdown`. Failed steps are visually distinguished with red borders and
+  error styling. For post-hoc enrichment (fetching sub-agent thread details
+  after run completes), add a `useStepDetails(threadId)` hook and render inside
+  the expanded card.
 
 ### Infrastructure as Code
 
@@ -405,4 +552,7 @@ CORS_ORIGINS must be updated to the production frontend URL before deploying.
 | `mcp[cli]` | `>=1.9.0` | FastMCP server framework |
 | `react` | `18.x` | UI library |
 | `framer-motion` | `11.x` | Animation |
+| `@microsoft/fetch-event-source` | `^2.0.1` | POST-capable SSE client |
+| `react-markdown` | `^10.1.0` | Markdown rendering in diagnosis + step cards |
+| `react-resizable-panels` | `^4.6.2` | Resizable panel layout (metrics bar + vertical split) |
 | `tailwindcss` | `3.x` | Utility-first CSS |

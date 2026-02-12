@@ -26,6 +26,18 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+# Fabric-perspective log emitter (imported lazily to avoid circular imports)
+def _emit_fabric_log(level: str, msg: str) -> None:
+    """Emit a synthetic fabric-query-api log to the fabric SSE channel."""
+    from app.routers.logs import broadcast_fabric_log
+    from datetime import datetime, timezone as _tz
+    broadcast_fabric_log({
+        "ts": datetime.now(_tz.utc).strftime("%H:%M:%S.%f")[:-3],
+        "level": level,
+        "name": "fabric-query-api",
+        "msg": msg,
+    })
+
 # ---------------------------------------------------------------------------
 # Paths & config
 # ---------------------------------------------------------------------------
@@ -159,12 +171,17 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 # Extract structured error info if available
                 code = getattr(err, "code", None) or (err.get("code") if isinstance(err, dict) else None) or "unknown"
                 msg = getattr(err, "message", None) or (err.get("message") if isinstance(err, dict) else str(err))
-                logger.error("Orchestrator run failed: [%s] %s", code, msg)
+                logger.error(
+                    "Orchestrator run failed: [%s] %s  (steps completed: %d, elapsed: %s)",
+                    code, msg, handler.ui_step if hasattr(handler, 'ui_step') else '?',
+                    handler._elapsed() if hasattr(handler, '_elapsed') else '?',
+                )
                 _put("error", {
                     "message": (
-                        f"The orchestrator run failed on the Azure AI service side "
-                        f"(code: {code}). This is typically a transient error — "
-                        f"try resubmitting the alert. Detail: {msg}"
+                        f"Agent run interrupted \u2014 A backend query returned an error. "
+                        f"The graph schema or data may not match the query. "
+                        f"{handler.ui_step} steps completed before the error.\n\n"
+                        f"Error detail: [{code}] {msg}"
                     ),
                 })
 
@@ -181,6 +198,69 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 self.step_starts[step.id] = time.time()
                 # Emit an early "thinking" event so UI shows activity
                 _put("step_thinking", {"agent": "Orchestrator", "status": "calling sub-agent..."})
+
+            elif status == "failed" and step_type == "tool_calls":
+                # Capture and log full detail about the failed tool call
+                start = self.step_starts.get(step.id, self.t0)
+                duration = f"{time.time() - start:.1f}s"
+                last_err = step.last_error if hasattr(step, "last_error") else None
+                err_code = ""
+                err_msg = "(no error detail)"
+                if last_err:
+                    err_code = getattr(last_err, "code", None) or (last_err.get("code") if isinstance(last_err, dict) else "") or ""
+                    err_msg = getattr(last_err, "message", None) or (last_err.get("message") if isinstance(last_err, dict) else str(last_err)) or ""
+
+                # Try to identify which tool/agent failed
+                failed_agent = "unknown"
+                failed_query = ""
+                if hasattr(step, "step_details") and hasattr(step.step_details, "tool_calls"):
+                    for tc in step.step_details.tool_calls:
+                        tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
+                        tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
+                        if tc_type == "connected_agent":
+                            ca = tc.connected_agent if hasattr(tc, "connected_agent") else tc.get("connected_agent", {})
+                            agent_id = getattr(ca, "agent_id", None) or ca.get("agent_id", "?")
+                            failed_agent = agent_names.get(agent_id, getattr(ca, "name", None) or ca.get("name", agent_id))
+                            args_raw = getattr(ca, "arguments", None) or ca.get("arguments", None)
+                            if args_raw:
+                                try:
+                                    obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                                    failed_query = obj if isinstance(obj, str) else json.dumps(obj)
+                                except Exception:
+                                    failed_query = str(args_raw)
+                        elif tc_type == "fabric_dataagent":
+                            failed_agent = "FabricDataAgent"
+                        elif tc_type == "azure_ai_search":
+                            failed_agent = "AzureAISearch"
+
+                logger.error(
+                    "Step FAILED: agent=%s  duration=%s  code=%s  error=%s\n  query=%s",
+                    failed_agent, duration, err_code, err_msg, failed_query[:500] if failed_query else "(none)",
+                )
+
+                # Emit fabric-perspective logs for failed Graph/Telemetry calls
+                if failed_agent and ("Graph" in failed_agent or "Telemetry" in failed_agent):
+                    endpoint = "/query/graph" if "Graph" in failed_agent else "/query/telemetry"
+                    query_type = "GQL" if "Graph" in failed_agent else "KQL"
+                    _emit_fabric_log("INFO", f"▶ POST {endpoint}  (from {failed_agent})")
+                    if failed_query:
+                        try:
+                            q_obj = json.loads(failed_query) if failed_query.startswith("{") else None
+                            q_body = q_obj.get("query", failed_query) if q_obj else failed_query
+                        except Exception:
+                            q_body = failed_query
+                        _emit_fabric_log("DEBUG", f"{query_type} query:\n{q_body[:500]}")
+                    _emit_fabric_log("ERROR", f"◀ POST {endpoint} FAILED [{err_code}]: {err_msg}")
+
+                self.ui_step += 1
+                _put("step_complete", {
+                    "step": self.ui_step,
+                    "agent": failed_agent,
+                    "duration": duration,
+                    "query": failed_query[:500] if failed_query else "",
+                    "response": f"FAILED: [{err_code}] {err_msg}",
+                    "error": True,
+                })
 
             elif status == "completed" and step_type == "tool_calls":
                 start = self.step_starts.get(step.id, self.t0)
@@ -236,6 +316,31 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         response = response[:2000] + "…"
 
                     logger.info("Emitting step %d: agent=%s duration=%s", self.ui_step, agent_name, duration)
+                    if query:
+                        logger.info("  ↳ query: %s", query[:300])
+                    if response:
+                        logger.info("  ↳ response (%d chars): %s", len(response), response[:200])
+
+                    # Emit fabric-perspective logs for Graph/Telemetry agents
+                    if agent_name and ("Graph" in agent_name or "Telemetry" in agent_name):
+                        endpoint = "/query/graph" if "Graph" in agent_name else "/query/telemetry"
+                        query_type = "GQL" if "Graph" in agent_name else "KQL"
+                        _emit_fabric_log("INFO", f"▶ POST {endpoint}  (from {agent_name})")
+                        if query:
+                            # Try to extract the actual query string
+                            try:
+                                q_obj = json.loads(query) if query.startswith("{") else None
+                                q_body = q_obj.get("query", query) if q_obj else query
+                            except Exception:
+                                q_body = query
+                            _emit_fabric_log("DEBUG", f"{query_type} query:\n{q_body[:500]}")
+                        if response:
+                            resp_preview = response[:300].replace("\n", " ")
+                            _emit_fabric_log("INFO", f"{query_type} response ({len(response)} chars, {duration}): {resp_preview}")
+                        else:
+                            _emit_fabric_log("WARNING", f"{query_type} returned empty response ({duration})")
+                        _emit_fabric_log("INFO", f"◀ POST {endpoint} → 200  ({duration})")
+
                     _put("step_start", {"step": self.ui_step, "agent": agent_name})
                     _put("step_complete", {
                         "step": self.ui_step,
