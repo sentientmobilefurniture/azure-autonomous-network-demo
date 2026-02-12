@@ -25,3 +25,21 @@ services:
       path: ./Dockerfile
       context: .
       remoteBuild: true
+
+  api:
+    project: ./api
+    language: python
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      context: ..
+      remoteBuild: true
+
+  frontend:
+    project: ./frontend
+    language: js
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      context: .
+      remoteBuild: true

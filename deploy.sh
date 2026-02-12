@@ -165,6 +165,16 @@ if ! azd auth login --check-status &>/dev/null 2>&1; then
 fi
 ok "azd authenticated"
 
+# Ensure required resource providers are registered (idempotent, skips if already registered)
+for provider in Microsoft.App Microsoft.ContainerService; do
+  state=$(az provider show --namespace "$provider" --query "registrationState" -o tsv 2>/dev/null || echo "NotRegistered")
+  if [[ "$state" != "Registered" ]]; then
+    info "Registering resource provider $provider (state: $state)..."
+    az provider register --namespace "$provider" --wait
+    ok "$provider registered"
+  fi
+done
+
 # ── Step 1: Environment selection ───────────────────────────────────
 
 step "Step 1: Azure environment selection"
@@ -587,13 +597,35 @@ else
   fi
 fi
 
-# ── Step 8: Start local services ────────────────────────────────────
+# ── Step 7b: Redeploy API with agent_ids.json ──────────────────────
+
+step "Step 7b: Redeploying API service with agent_ids.json"
+
+if [[ -f "$AGENT_IDS_FILE" ]]; then
+  info "agent_ids.json exists — rebuilding API container to include it..."
+
+  if azd deploy api 2>&1; then
+    ok "API service redeployed with agent_ids.json"
+  else
+    fail "API redeploy failed."
+    echo "   To retry: azd deploy api"
+    warn "Continuing — the API container may not have agent IDs yet."
+  fi
+else
+  warn "Skipping API redeploy — agent_ids.json not found."
+  warn "You can redeploy later: azd deploy api"
+fi
+
+# ── Step 8: Start local services (optional — all services deployed to Azure) ──
 
 if $SKIP_LOCAL; then
   step "Step 8: Local services (SKIPPED)"
   echo ""
-  ok "Deployment complete! Start services manually:"
+  ok "Deployment complete! All services are running in Azure."
   echo ""
+  echo "   Frontend:  ${FRONTEND_URI:-<check azure_config.env>}"
+  echo ""
+  echo "   To run locally instead:"
   echo "   # Terminal 1 — API"
   echo "   cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
   echo ""
@@ -671,6 +703,8 @@ echo "    AI Search:        ${AI_SEARCH_NAME:-<pending>}"
 echo "    Storage:          ${STORAGE_ACCOUNT_NAME:-<pending>}"
 echo "    Cosmos DB:        ${COSMOS_GREMLIN_ENDPOINT:-<pending>}"
 echo "    graph-query-api:  ${GRAPH_QUERY_API_URI:-<pending>}"
+echo "    API backend:      ${API_URI:-<pending>}"
+echo "    Frontend:         ${FRONTEND_URI:-<pending>}"
 echo ""
 
 if [[ -f "$AGENT_IDS_FILE" ]]; then
@@ -704,7 +738,9 @@ fi
 
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
-echo "    azd deploy graph-query-api         # Redeploy container after code changes"
+echo "    azd deploy graph-query-api         # Redeploy graph-query-api after code changes"
+echo "    azd deploy api                     # Redeploy API backend after code changes"
+echo "    azd deploy frontend                # Redeploy frontend after UI changes"
 echo "    source azure_config.env && uv run python scripts/provision_agents.py --force  # Re-provision agents"
 echo "    azd down --force --purge           # Tear down all Azure resources"
 echo ""

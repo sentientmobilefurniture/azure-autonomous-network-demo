@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
-AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
+AGENT_IDS_FILE = Path(os.getenv("AGENT_IDS_PATH", str(PROJECT_ROOT / "scripts" / "agent_ids.json")))
 
 load_dotenv(CONFIG_FILE)
 

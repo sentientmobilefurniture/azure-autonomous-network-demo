@@ -26,6 +26,9 @@ param cosmosNoSqlAccountName string = ''
 @description('Principal ID of the Container App managed identity (for Cosmos DB NoSQL data access)')
 param containerAppPrincipalId string = ''
 
+@description('Principal ID of the API Container App managed identity (for Foundry agent invocation)')
+param apiContainerAppPrincipalId string = ''
+
 // ---------------------------------------------------------------------------
 // Built-in Role Definition GUIDs
 // ---------------------------------------------------------------------------
@@ -204,5 +207,31 @@ resource containerAppCosmosDbDataContributor 'Microsoft.DocumentDB/databaseAccou
     principalId: containerAppPrincipalId
     roleDefinitionId: '${cosmosNoSqlAccount.id}/sqlRoleDefinitions/${roles.cosmosDbDataContributor}'
     scope: cosmosNoSqlAccount.id
+  }
+}
+
+// ============================================================================
+// API CONTAINER APP ROLE ASSIGNMENTS (Foundry agent invocation)
+// ============================================================================
+
+// API Container App MI → Cognitive Services OpenAI User (invoke Foundry agents)
+resource apiOpenAiUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(apiContainerAppPrincipalId)) {
+  name: guid(foundry.id, apiContainerAppPrincipalId, roles.cognitiveServicesOpenAiUser)
+  scope: foundry
+  properties: {
+    principalId: apiContainerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesOpenAiUser)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// API Container App MI → Cognitive Services Contributor (manage agents, threads, runs)
+resource apiCognitiveServicesContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(apiContainerAppPrincipalId)) {
+  name: guid(foundry.id, apiContainerAppPrincipalId, roles.cognitiveServicesContributor)
+  scope: foundry
+  properties: {
+    principalId: apiContainerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesContributor)
+    principalType: 'ServicePrincipal'
   }
 }

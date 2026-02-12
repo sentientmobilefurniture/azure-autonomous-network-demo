@@ -174,6 +174,58 @@ module graphQueryApi 'modules/container-app.bicep' = {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Container App — API (FastAPI backend, Foundry agent orchestrator)
+// ---------------------------------------------------------------------------
+
+module apiService 'modules/container-app.bicep' = {
+  scope: rg
+  params: {
+    name: 'ca-api-${resourceToken}'
+    location: location
+    tags: union(tags, { 'azd-service-name': 'api' })
+    containerAppsEnvironmentId: containerAppsEnv.outputs.id
+    containerRegistryName: containerAppsEnv.outputs.registryName
+    targetPort: 8000
+    externalIngress: false  // Only accessed by the frontend reverse proxy (internal)
+    minReplicas: 1
+    maxReplicas: 3
+    cpu: '0.5'
+    memory: '1Gi'
+    env: [
+      { name: 'PROJECT_ENDPOINT', value: aiFoundry.outputs.foundryEndpoint }
+      { name: 'AI_FOUNDRY_PROJECT_NAME', value: aiFoundry.outputs.projectName }
+      { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
+      { name: 'CORS_ORIGINS', value: '*' }
+      { name: 'AGENT_IDS_PATH', value: '/app/scripts/agent_ids.json' }
+    ]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Container App — Frontend (React + nginx reverse proxy)
+// ---------------------------------------------------------------------------
+
+module frontend 'modules/container-app.bicep' = {
+  scope: rg
+  params: {
+    name: 'ca-frontend-${resourceToken}'
+    location: location
+    tags: union(tags, { 'azd-service-name': 'frontend' })
+    containerAppsEnvironmentId: containerAppsEnv.outputs.id
+    containerRegistryName: containerAppsEnv.outputs.registryName
+    targetPort: 80
+    externalIngress: true   // Public-facing UI
+    minReplicas: 1
+    maxReplicas: 2
+    cpu: '0.25'
+    memory: '0.5Gi'
+    env: [
+      { name: 'API_BACKEND_URL', value: 'https://${apiService.outputs.fqdn}' }
+    ]
+  }
+}
+
 module roles 'modules/roles.bicep' = {
   scope: rg
   params: {
@@ -185,6 +237,7 @@ module roles 'modules/roles.bicep' = {
     foundryPrincipalId: aiFoundry.outputs.foundryPrincipalId
     cosmosNoSqlAccountName: deployCosmosGremlin ? 'cosmos-gremlin-${resourceToken}-nosql' : ''
     containerAppPrincipalId: graphQueryApi.outputs.principalId
+    apiContainerAppPrincipalId: apiService.outputs.principalId
   }
 }
 
@@ -223,6 +276,9 @@ output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerAppsEnv.outputs.registryEndpoint
 output GRAPH_QUERY_API_URI string = graphQueryApi.outputs.uri
 output GRAPH_QUERY_API_PRINCIPAL_ID string = graphQueryApi.outputs.principalId
+output API_URI string = apiService.outputs.uri
+output API_PRINCIPAL_ID string = apiService.outputs.principalId
+output FRONTEND_URI string = frontend.outputs.uri
 output COSMOS_GREMLIN_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.gremlinEndpoint : ''
 output COSMOS_GREMLIN_ACCOUNT_NAME string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosAccountName : ''
 output COSMOS_NOSQL_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosNoSqlEndpoint : ''
