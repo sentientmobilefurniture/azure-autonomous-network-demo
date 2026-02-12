@@ -2,15 +2,15 @@
 provision_agents.py — Create Foundry Agents for the Autonomous Network NOC Demo.
 
 Uses the Azure AI Agents SDK to programmatically create all 5 agents:
-  1. GraphExplorerAgent   — OpenApiTool (GQL via fabric-query-api)
-  2. TelemetryAgent       — OpenApiTool (KQL via fabric-query-api)
+  1. GraphExplorerAgent   — OpenApiTool (graph via graph-query-api)
+  2. TelemetryAgent       — OpenApiTool (KQL via graph-query-api)
   3. RunbookKBAgent       — AzureAISearchTool (runbooks-index)
   4. HistoricalTicketAgent — AzureAISearchTool (tickets-index)
   5. Orchestrator          — ConnectedAgentTool (wired to all 4 above)
 
 Prerequisites:
   - 'azd up' completed (infra deployed, azure_config.env populated)
-  - fabric-query-api deployed and healthy (FABRIC_QUERY_API_URI set)
+  - graph-query-api deployed and healthy (GRAPH_QUERY_API_URI set)
   - Search indexes created (create_runbook_indexer.py, create_tickets_indexer.py)
 
 Usage:
@@ -44,7 +44,28 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
 AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
-OPENAPI_SPEC_FILE = PROJECT_ROOT / "fabric-query-api" / "openapi.yaml"
+OPENAPI_DIR = PROJECT_ROOT / "graph-query-api" / "openapi"
+
+# ── Graph backend ───────────────────────────────────────────────────
+
+GRAPH_BACKEND = os.environ.get("GRAPH_BACKEND", "cosmosdb").lower()
+
+OPENAPI_SPEC_MAP = {
+    "cosmosdb": OPENAPI_DIR / "cosmosdb.yaml",
+    "mock": OPENAPI_DIR / "mock.yaml",
+}
+
+OPENAPI_SPEC_FILE = OPENAPI_SPEC_MAP.get(GRAPH_BACKEND, OPENAPI_DIR / "cosmosdb.yaml")
+
+LANGUAGE_FILE_MAP = {
+    "cosmosdb": "language_gremlin.md",
+    "mock": "language_mock.md",
+}
+
+GRAPH_TOOL_DESCRIPTIONS = {
+    "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore network topology and relationships.",
+    "mock": "Query the network topology graph (offline mock mode).",
+}
 
 
 # ── Config ──────────────────────────────────────────────────────────
@@ -68,10 +89,10 @@ def load_config() -> dict:
         print(f"ERROR: Missing required config in {CONFIG_FILE}: {', '.join(missing)}")
         sys.exit(1)
 
-    fabric_query_api_uri = os.environ.get("FABRIC_QUERY_API_URI", "")
-    if not fabric_query_api_uri:
-        print("WARNING: FABRIC_QUERY_API_URI not set. GraphExplorer and Telemetry agents")
-        print("         will be created WITHOUT tools. Deploy fabric-query-api first.")
+    graph_query_api_uri = os.environ.get("GRAPH_QUERY_API_URI", "")
+    if not graph_query_api_uri:
+        print("WARNING: GRAPH_QUERY_API_URI not set. GraphExplorer and Telemetry agents")
+        print("         will be created WITHOUT tools. Deploy graph-query-api first.")
 
     # Compute project-scoped endpoint
     base_endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
@@ -87,7 +108,7 @@ def load_config() -> dict:
         "resource_group": os.environ["AZURE_RESOURCE_GROUP"],
         "foundry_name": os.environ["AI_FOUNDRY_NAME"],
         "project_name": project_name,
-        "fabric_query_api_uri": fabric_query_api_uri,
+        "graph_query_api_uri": graph_query_api_uri,
     }
 
 
@@ -114,28 +135,48 @@ def load_prompt(filename: str) -> tuple[str, str]:
     return text, description
 
 
+def load_graph_explorer_prompt() -> tuple[str, str]:
+    """Compose the GraphExplorer prompt from parts based on GRAPH_BACKEND.
+
+    Assembles: core_instructions + core_schema + language_{backend}
+    Also reads description.md for the agent description.
+    """
+    base = PROMPTS_DIR / "graph_explorer"
+    language_file = LANGUAGE_FILE_MAP.get(GRAPH_BACKEND, "language_gremlin.md")
+
+    instructions = "\n\n---\n\n".join([
+        (base / "core_instructions.md").read_text(encoding="utf-8").strip(),
+        (base / "core_schema.md").read_text(encoding="utf-8").strip(),
+        (base / language_file).read_text(encoding="utf-8").strip(),
+    ])
+
+    # Read description
+    desc_text = (base / "description.md").read_text(encoding="utf-8").strip()
+    desc_lines = [
+        line.lstrip("> ").strip()
+        for line in desc_text.splitlines()
+        if line.strip().startswith(">")
+    ]
+    description = " ".join(desc_lines) if desc_lines else desc_text
+
+    print(f"  GraphExplorer prompt: {len(instructions)} chars, backend={GRAPH_BACKEND}, language={language_file}")
+    return instructions, description
+
+
 # ── OpenAPI tool helpers ────────────────────────────────────────────
 
 def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
     """Load the OpenAPI spec from disk and substitute all placeholders.
 
     Placeholders replaced:
-      {base_url}              — fabric-query-api Container App URI
-      {workspace_id}          — Fabric workspace GUID
-      {graph_model_id}        — GraphModel item GUID
-      {eventhouse_query_uri}  — Kusto query URI
-      {kql_db_name}           — KQL database name
+      {base_url}              — graph-query-api Container App URI
 
     If *keep_path* is given (e.g. "/query/graph"), all other paths are
     removed from the spec so the agent only sees its own endpoint.
     """
     raw = OPENAPI_SPEC_FILE.read_text(encoding="utf-8")
     replacements = {
-        "{base_url}": config["fabric_query_api_uri"].rstrip("/"),
-        "{workspace_id}": os.environ.get("FABRIC_WORKSPACE_ID", ""),
-        "{graph_model_id}": os.environ.get("FABRIC_GRAPH_MODEL_ID", ""),
-        "{eventhouse_query_uri}": os.environ.get("EVENTHOUSE_QUERY_URI", ""),
-        "{kql_db_name}": os.environ.get("FABRIC_KQL_DB_NAME", ""),
+        "{base_url}": config["graph_query_api_uri"].rstrip("/"),
     }
     for placeholder, value in replacements.items():
         raw = raw.replace(placeholder, value)
@@ -154,7 +195,7 @@ def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
     return OpenApiTool(
         name="query_graph",
         spec=spec,
-        description="Execute a GQL query against the Fabric GraphModel to explore network topology and relationships.",
+        description=GRAPH_TOOL_DESCRIPTIONS.get(GRAPH_BACKEND, GRAPH_TOOL_DESCRIPTIONS["cosmosdb"]),
         auth=OpenApiAnonymousAuthDetails(),
     )
 
@@ -165,7 +206,7 @@ def _make_telemetry_openapi_tool(config: dict) -> OpenApiTool:
     return OpenApiTool(
         name="query_telemetry",
         spec=spec,
-        description="Execute a KQL query against the Fabric Eventhouse to retrieve alert and link telemetry data.",
+        description="Execute a Cosmos SQL query against telemetry data (AlertStream or LinkTelemetry) in Azure Cosmos DB.",
         auth=OpenApiAnonymousAuthDetails(),
     )
 
@@ -225,11 +266,11 @@ def get_search_connection_id(config: dict) -> str:
 
 
 def create_graph_explorer_agent(agents_client, model: str, config: dict) -> dict:
-    """Create the GraphExplorerAgent with OpenApiTool (GQL via fabric-query-api)."""
-    instructions, description = load_prompt("foundry_graph_explorer_agent_v2.md")
+    """Create the GraphExplorerAgent with OpenApiTool (graph backend via graph-query-api)."""
+    instructions, description = load_graph_explorer_prompt()
 
     tools = []
-    if config["fabric_query_api_uri"]:
+    if config["graph_query_api_uri"]:
         openapi_tool = _make_graph_openapi_tool(config)
         tools = openapi_tool.definitions
 
@@ -244,11 +285,11 @@ def create_graph_explorer_agent(agents_client, model: str, config: dict) -> dict
 
 
 def create_telemetry_agent(agents_client, model: str, config: dict) -> dict:
-    """Create the TelemetryAgent with OpenApiTool (KQL via fabric-query-api)."""
+    """Create the TelemetryAgent with OpenApiTool (Cosmos SQL via graph-query-api)."""
     instructions, description = load_prompt("foundry_telemetry_agent_v2.md")
 
     tools = []
-    if config["fabric_query_api_uri"]:
+    if config["graph_query_api_uri"]:
         openapi_tool = _make_telemetry_openapi_tool(config)
         tools = openapi_tool.definitions
 
@@ -352,9 +393,10 @@ def main():
     config = load_config()
     print(f"  Project endpoint: {config['project_endpoint']}")
     print(f"  Model: {config['model']}")
-    api_uri = config["fabric_query_api_uri"]
+    print(f"  Graph backend: {GRAPH_BACKEND}")
+    api_uri = config["graph_query_api_uri"]
     if api_uri:
-        print(f"  Fabric Query API: {api_uri}")
+        print(f"  Graph Query API: {api_uri}")
 
     # 2. Connect to Foundry
     print("\n[2/5] Connecting to AI Foundry...")
@@ -374,28 +416,44 @@ def main():
         print("\n[3/5] Resolving connections...")
         search_conn_id = get_search_connection_id(config)
 
-        # 3. Create sub-agents
+        # 3. Create sub-agents (with partial-failure recovery)
         print("\n[4/5] Creating specialist agents...")
-        graph_agent = create_graph_explorer_agent(
-            agents_client, config["model"], config,
-        )
-        telemetry_agent = create_telemetry_agent(
-            agents_client, config["model"], config,
-        )
-        runbook_agent = create_runbook_kb_agent(
-            agents_client, config["model"], search_conn_id, config["runbooks_index"],
-        )
-        ticket_agent = create_historical_ticket_agent(
-            agents_client, config["model"], search_conn_id, config["tickets_index"],
-        )
+        agent_specs = [
+            ("GraphExplorerAgent", create_graph_explorer_agent,
+             (agents_client, config["model"], config)),
+            ("TelemetryAgent", create_telemetry_agent,
+             (agents_client, config["model"], config)),
+            ("RunbookKBAgent", create_runbook_kb_agent,
+             (agents_client, config["model"], search_conn_id, config["runbooks_index"])),
+            ("HistoricalTicketAgent", create_historical_ticket_agent,
+             (agents_client, config["model"], search_conn_id, config["tickets_index"])),
+        ]
 
-        sub_agents = [graph_agent, telemetry_agent, runbook_agent, ticket_agent]
+        sub_agents: list[dict] = []
+        try:
+            for name, create_fn, create_args in agent_specs:
+                agent = create_fn(*create_args)
+                sub_agents.append(agent)
+        except Exception as exc:
+            print(f"\n  ✗ Failed to create {name}: {exc}")
+            if sub_agents:
+                print(f"  {len(sub_agents)} agent(s) were created before the failure:")
+                for sa in sub_agents:
+                    print(f"    {sa['name']}: {sa['id']}")
+                print("\n  Re-run with --force to clean up orphaned agents and retry.")
+            sys.exit(1)
 
         # 4. Create orchestrator wired to sub-agents
         print("\n[5/5] Creating orchestrator...")
-        orchestrator = create_orchestrator(
-            agents_client, config["model"], sub_agents,
-        )
+        try:
+            orchestrator = create_orchestrator(
+                agents_client, config["model"], sub_agents,
+            )
+        except Exception as exc:
+            print(f"\n  ✗ Failed to create orchestrator: {exc}")
+            print(f"  {len(sub_agents)} sub-agents were created successfully.")
+            print("  Re-run with --force to clean up and retry.")
+            sys.exit(1)
 
     # 5. Save results
     all_agents = {
@@ -424,7 +482,7 @@ def main():
 
     if not api_uri:
         print("\n  WARNING: GraphExplorerAgent and TelemetryAgent were created WITHOUT tools.")
-        print("  To fix: deploy fabric-query-api, set FABRIC_QUERY_API_URI, re-run with --force")
+        print("  To fix: deploy graph-query-api, set GRAPH_QUERY_API_URI, re-run with --force")
 
     print(f"\n  To test: uv run python test_orchestrator.py")
     print()

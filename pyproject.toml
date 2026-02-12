@@ -1,7 +1,7 @@
 [project]
 name = "autonomous-network-demo"
 version = "0.1.0"
-description = "Knowledge-Grounded NOC Demo — Fabric IQ Ontology + Multi-Agent System"
+description = "Autonomous Network NOC Demo — Cosmos DB + Multi-Agent System"
 requires-python = ">=3.11"
 dependencies = [
     # Azure Identity
@@ -10,20 +10,23 @@ dependencies = [
     "azure-search-documents>=11.6.0",
     # OneLake file upload (ADLS Gen2 compatible)
     "azure-storage-file-datalake>=12.18.0",
-    # Fabric REST API calls
+    # Blob storage (async CSV loading for --from-blob)
+    "azure-storage-blob>=12.24.0",
+    # REST API calls
     "requests>=2.32.0",
     # Env file loading
     "python-dotenv>=1.0.0",
     # Foundry Agent Service (Day 3)
     "azure-ai-projects>=1.0.0,<2.0.0",
     "azure-ai-agents==1.2.0b6",
-    # Eventhouse KQL queries & ingestion (Day 3-4)
-    "azure-kusto-data>=4.6.0",
-    "azure-kusto-ingest>=4.6.0",
+    # Cosmos DB NoSQL (telemetry queries & ingestion)
+    "azure-cosmos>=4.9.0",
     "pandas>=2.2.0",
     # OpenAPI spec parsing (provision_agents)
     "pyyaml>=6.0",
+    # Gremlin graph loading (provision_cosmos_gremlin)
+    "gremlinpython>=3.7.0",
 ]
 
-[tool.uv]
-dev-dependencies = []
+[dependency-groups]
+dev = []

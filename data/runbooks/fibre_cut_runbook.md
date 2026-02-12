@@ -8,7 +8,7 @@ A fibre cut is a physical-layer failure on a DWDM or dark-fibre transport link, 
 |---|---|---|
 | Optical power | < −30 dBm (loss of light) | TransportLink entity — OpticalPowerDbm |
 | Bit error rate | = 1.0 (total) | TransportLink entity — BitErrorRate |
-| Link status | DOWN | LINK_DOWN alert in Eventhouse |
+| Link status | DOWN | LINK_DOWN alert in telemetry database |
 | BGP peer loss | Peer unreachable within 3s of link alarm | BGP_PEER_LOSS alert correlated by time |
 | OSPF adjacency | Lost within 5s of link alarm | OSPF_ADJACENCY_DOWN alert |
 

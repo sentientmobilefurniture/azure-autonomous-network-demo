@@ -1,5 +1,5 @@
 """
-Generate alert stream and link telemetry CSV files for Eventhouse KQL DB.
+Generate alert stream and link telemetry CSV files for Cosmos DB NoSQL.
 
 Outputs 2 CSV files:
   - AlertStream.csv     (~5,000 rows) — 54h baseline + cascading alert storm over 90 seconds
@@ -11,7 +11,7 @@ import os
 import random
 from datetime import datetime, timedelta, timezone
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "eventhouse")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "telemetry")
 
 # Incident start time
 INCIDENT_START = datetime(2026, 2, 6, 14, 30, 0, tzinfo=timezone.utc)
@@ -20,7 +20,7 @@ INCIDENT_START = datetime(2026, 2, 6, 14, 30, 0, tzinfo=timezone.utc)
 random.seed(42)
 
 # --------------------------------------------------------------------------- #
-#  Topology references (must match Lakehouse entity tables)
+#  Topology references (must match network entity tables)
 # --------------------------------------------------------------------------- #
 
 CORE_ROUTERS = ["CORE-SYD-01", "CORE-MEL-01", "CORE-BNE-01"]
@@ -87,7 +87,7 @@ def generate_alert_stream() -> None:
     The alert type indicates which metric triggered the threshold, but the
     row captures a full telemetry snapshot of the node at that instant. This
     mirrors real monitoring systems (SNMP polls all OIDs) and is required by
-    the Fabric Anomaly Detector, which rejects rows with null values.
+    downstream anomaly detection, which rejects rows with null values.
 
     Baseline period provides "normal" low-severity background noise
     (~1 alert per minute) so the Anomaly Detector can distinguish
@@ -398,7 +398,7 @@ def generate_link_telemetry() -> None:
 
 
 def main() -> None:
-    print("Generating alert stream and link telemetry (Eventhouse tables)...")
+    print("Generating alert stream and link telemetry (telemetry data)...")
     generate_alert_stream()
     generate_link_telemetry()
     print(f"\nAll files written to {os.path.abspath(OUTPUT_DIR)}")

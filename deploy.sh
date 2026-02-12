@@ -1,0 +1,710 @@
+#!/usr/bin/env bash
+# ============================================================================
+# Autonomous Network NOC Demo — End-to-End Deployment Script (Cosmos DB Flow)
+# ============================================================================
+#
+# Deploys the full Cosmos DB-backed pipeline:
+#   1. Azure infrastructure (AI Foundry, AI Search, Storage, Cosmos DB, Container Apps)
+#   2. Data uploads (runbooks → blob, tickets → blob)
+#   3. Search indexes (runbooks-index, tickets-index)
+#   4. Cosmos DB graph data (vertices + edges from graph_schema.yaml)
+#   5. Container App deployment (graph-query-api)
+#   6. AI Foundry agents (5 agents: orchestrator + 4 specialists)
+#   7. Local services (API :8000, Frontend :5173)
+#
+# Usage:
+#   chmod +x deploy.sh && ./deploy.sh
+#
+# Options:
+#   --skip-infra       Skip azd up (reuse existing Azure resources)
+#   --skip-data        Skip graph data loading (keeps existing Cosmos data)
+#   --skip-agents      Skip agent provisioning
+#   --skip-local       Skip starting local API + frontend
+#   --env NAME         Use a specific azd environment name
+#   --location LOC     Azure location (default: swedencentral)
+#   --yes              Skip all confirmation prompts
+#
+# ============================================================================
+set -euo pipefail
+
+# ── Colour helpers ──────────────────────────────────────────────────
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info()  { echo -e "${BLUE}ℹ${NC}  $*"; }
+ok()    { echo -e "${GREEN}✓${NC}  $*"; }
+warn()  { echo -e "${YELLOW}⚠${NC}  $*"; }
+fail()  { echo -e "${RED}✗${NC}  $*"; }
+step()  { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${NC}\n"; }
+banner() {
+  echo -e "\n${BOLD}${CYAN}"
+  echo "╔════════════════════════════════════════════════════════════════╗"
+  echo "║  Autonomous Network NOC Demo — Cosmos DB Deployment          ║"
+  echo "╚════════════════════════════════════════════════════════════════╝"
+  echo -e "${NC}"
+}
+
+# ── Parse arguments ─────────────────────────────────────────────────
+
+SKIP_INFRA=false
+SKIP_DATA=false
+SKIP_AGENTS=false
+SKIP_LOCAL=false
+AUTO_YES=false
+AZD_ENV_NAME=""
+AZURE_LOC=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-infra)   SKIP_INFRA=true; shift ;;
+    --skip-data)    SKIP_DATA=true; shift ;;
+    --skip-agents)  SKIP_AGENTS=true; shift ;;
+    --skip-local)   SKIP_LOCAL=true; shift ;;
+    --yes|-y)       AUTO_YES=true; shift ;;
+    --env)          AZD_ENV_NAME="$2"; shift 2 ;;
+    --location)     AZURE_LOC="$2"; shift 2 ;;
+    --help|-h)
+      sed -n '2,/^set -euo/p' "$0" | head -n -1
+      exit 0
+      ;;
+    *)
+      fail "Unknown option: $1"
+      echo "Run with --help for usage."
+      exit 1
+      ;;
+  esac
+done
+
+# ── Locate project root ────────────────────────────────────────────
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+cd "$PROJECT_ROOT"
+
+CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
+AGENT_IDS_FILE="$PROJECT_ROOT/scripts/agent_ids.json"
+
+# ── Helper: prompt user ────────────────────────────────────────────
+
+confirm() {
+  local msg="$1"
+  if $AUTO_YES; then return 0; fi
+  echo -en "${YELLOW}?${NC}  ${msg} [y/N] "
+  read -r answer
+  [[ "$answer" =~ ^[Yy] ]]
+}
+
+choose() {
+  # Usage: choose "prompt" option1 option2 option3
+  # Returns the chosen option text
+  local prompt="$1"; shift
+  local options=("$@")
+  echo -e "\n${YELLOW}?${NC}  ${prompt}"
+  for i in "${!options[@]}"; do
+    echo "   $((i+1))) ${options[$i]}"
+  done
+  while true; do
+    echo -en "   Choice [1-${#options[@]}]: "
+    read -r choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
+      CHOSEN="${options[$((choice-1))]}"
+      return 0
+    fi
+    echo "   Invalid choice."
+  done
+}
+
+# ── Step 0: Prerequisites ──────────────────────────────────────────
+
+banner
+
+step "Step 0: Checking prerequisites"
+
+PREREQ_OK=true
+
+check_cmd() {
+  local cmd="$1" install_hint="$2"
+  if command -v "$cmd" &>/dev/null; then
+    ok "$cmd: $(command -v "$cmd")"
+  else
+    fail "$cmd not found. Install: $install_hint"
+    PREREQ_OK=false
+  fi
+}
+
+check_cmd az     "https://learn.microsoft.com/cli/azure/install-azure-cli-linux"
+check_cmd azd    "curl -fsSL https://aka.ms/install-azd.sh | bash"
+check_cmd uv     "curl -LsSf https://astral.sh/uv/install.sh | sh"
+check_cmd node   "nvm install 20"
+check_cmd python3 "apt install python3"
+
+if ! $PREREQ_OK; then
+  fail "Missing prerequisites. Install them and re-run."
+  exit 1
+fi
+
+# Verify az login
+if ! az account show &>/dev/null; then
+  warn "Not logged in to Azure CLI."
+  info "Running: az login"
+  az login
+fi
+ok "Azure CLI authenticated: $(az account show --query name -o tsv)"
+
+# Verify azd login
+if ! azd auth login --check-status &>/dev/null 2>&1; then
+  warn "Not logged in to azd."
+  info "Running: azd auth login"
+  azd auth login
+fi
+ok "azd authenticated"
+
+# ── Step 1: Environment selection ───────────────────────────────────
+
+step "Step 1: Azure environment selection"
+
+# Check existing environments
+EXISTING_ENVS=$(azd env list --output json 2>/dev/null || echo "[]")
+ENV_COUNT=$(echo "$EXISTING_ENVS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+
+if [[ -n "$AZD_ENV_NAME" ]]; then
+  # Explicit --env flag
+  info "Using environment from --env flag: $AZD_ENV_NAME"
+  USE_ENV="$AZD_ENV_NAME"
+
+elif (( ENV_COUNT > 0 )); then
+  echo ""
+  info "Found existing azd environment(s):"
+  azd env list 2>/dev/null
+  echo ""
+
+  DEFAULT_ENV=$(echo "$EXISTING_ENVS" | python3 -c "
+import sys, json
+envs = json.load(sys.stdin)
+default = [e for e in envs if e.get('IsDefault')]
+print(default[0]['Name'] if default else envs[0]['Name'])
+" 2>/dev/null || echo "")
+
+  if $AUTO_YES; then
+    USE_ENV="$DEFAULT_ENV"
+    info "Auto-selecting default environment: $USE_ENV"
+  else
+    choose "What would you like to do?" \
+      "Use existing environment: $DEFAULT_ENV" \
+      "Delete existing and create new environment" \
+      "Create a new separate environment"
+
+    case "$CHOSEN" in
+      "Use existing"*)
+        USE_ENV="$DEFAULT_ENV"
+        ;;
+      "Delete existing"*)
+        warn "This will destroy all Azure resources in '$DEFAULT_ENV'."
+        if confirm "Are you sure?"; then
+          info "Tearing down '$DEFAULT_ENV'..."
+          azd env select "$DEFAULT_ENV" 2>/dev/null || true
+          azd down --force --purge 2>&1 | tail -5 || true
+          azd env delete "$DEFAULT_ENV" --yes 2>/dev/null || true
+          ok "Old environment deleted."
+        else
+          info "Aborted."
+          exit 0
+        fi
+        echo -en "${YELLOW}?${NC}  New environment name: "
+        read -r USE_ENV
+        ;;
+      "Create a new"*)
+        echo -en "${YELLOW}?${NC}  New environment name: "
+        read -r USE_ENV
+        ;;
+    esac
+  fi
+else
+  if $AUTO_YES; then
+    USE_ENV="noc-cosmosdb"
+    info "No existing environments. Creating: $USE_ENV"
+  else
+    echo -en "${YELLOW}?${NC}  No existing environments. Enter a name for the new environment: "
+    read -r USE_ENV
+  fi
+fi
+
+# Validate env name
+if [[ -z "$USE_ENV" ]]; then
+  fail "Environment name cannot be empty."
+  exit 1
+fi
+
+# Select or create the environment
+if azd env list 2>/dev/null | grep -q "$USE_ENV"; then
+  azd env select "$USE_ENV"
+  ok "Selected existing environment: $USE_ENV"
+else
+  azd env new "$USE_ENV"
+  ok "Created new environment: $USE_ENV"
+fi
+
+# ── Step 2: Configure azure_config.env ──────────────────────────────
+
+step "Step 2: Configuring for Cosmos DB backend"
+
+# Determine location
+if [[ -z "$AZURE_LOC" ]]; then
+  # Try to read from existing config or azd env
+  AZURE_LOC=$(azd env get-values 2>/dev/null | grep "^AZURE_LOCATION=" | cut -d'"' -f2 || echo "")
+  if [[ -z "$AZURE_LOC" ]]; then
+    AZURE_LOC="swedencentral"
+  fi
+  if ! $AUTO_YES; then
+    echo -en "${YELLOW}?${NC}  Azure location [${AZURE_LOC}]: "
+    read -r loc_input
+    if [[ -n "$loc_input" ]]; then AZURE_LOC="$loc_input"; fi
+  fi
+fi
+info "Location: $AZURE_LOC"
+
+# If config file exists, read existing values to preserve them
+if [[ -f "$CONFIG_FILE" ]]; then
+  info "Existing azure_config.env found — preserving user-set values."
+  set -a
+  source "$CONFIG_FILE"
+  set +a
+fi
+
+# Force Cosmos DB backend
+GRAPH_BACKEND=cosmosdb
+
+# Create / update the config — preserve existing values where sensible
+cat > "$CONFIG_FILE" <<ENVEOF
+# ============================================================================
+# Autonomous Network NOC Demo — Configuration (Cosmos DB Flow)
+# ============================================================================
+# Generated by deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# GRAPH_BACKEND=cosmosdb — graph queries use Gremlin via Cosmos DB
+# ============================================================================
+
+# --- Core Azure settings (AUTO: populated after azd up) ---
+AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
+AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-}
+AZURE_LOCATION=${AZURE_LOC}
+
+# --- AI Foundry (AUTO: populated after azd up) ---
+AI_FOUNDRY_NAME=${AI_FOUNDRY_NAME:-}
+AI_FOUNDRY_ENDPOINT=${AI_FOUNDRY_ENDPOINT:-}
+AI_FOUNDRY_PROJECT_NAME=${AI_FOUNDRY_PROJECT_NAME:-}
+PROJECT_ENDPOINT=${PROJECT_ENDPOINT:-}
+
+# --- Model deployments ---
+MODEL_DEPLOYMENT_NAME=${MODEL_DEPLOYMENT_NAME:-gpt-4.1}
+EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-1536}
+GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
+
+# --- Azure AI Search (AUTO: name after azd up) ---
+AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
+RUNBOOKS_INDEX_NAME=${RUNBOOKS_INDEX_NAME:-runbooks-index}
+TICKETS_INDEX_NAME=${TICKETS_INDEX_NAME:-tickets-index}
+
+# --- Azure Storage (AUTO: name after azd up) ---
+STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
+RUNBOOKS_CONTAINER_NAME=${RUNBOOKS_CONTAINER_NAME:-runbooks}
+TICKETS_CONTAINER_NAME=${TICKETS_CONTAINER_NAME:-tickets}
+
+# --- Graph Backend ---
+GRAPH_BACKEND=cosmosdb
+
+# --- Cosmos DB Gremlin (AUTO: populated after azd up) ---
+COSMOS_GREMLIN_ENDPOINT=${COSMOS_GREMLIN_ENDPOINT:-}
+COSMOS_GREMLIN_PRIMARY_KEY=${COSMOS_GREMLIN_PRIMARY_KEY:-}
+COSMOS_GREMLIN_DATABASE=${COSMOS_GREMLIN_DATABASE:-networkgraph}
+COSMOS_GREMLIN_GRAPH=${COSMOS_GREMLIN_GRAPH:-topology}
+
+# --- Cosmos DB NoSQL / Telemetry (AUTO: populated after azd up) ---
+COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
+COSMOS_NOSQL_DATABASE=${COSMOS_NOSQL_DATABASE:-telemetrydb}
+
+# --- App / CORS ---
+CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
+
+# --- graph-query-api (AUTO: populated after azd up) ---
+GRAPH_QUERY_API_URI=${GRAPH_QUERY_API_URI:-}
+GRAPH_QUERY_API_PRINCIPAL_ID=${GRAPH_QUERY_API_PRINCIPAL_ID:-}
+ENVEOF
+
+ok "azure_config.env written with GRAPH_BACKEND=cosmosdb"
+ok "Location: $AZURE_LOC"
+
+# ── Step 3: Deploy infrastructure ───────────────────────────────────
+
+if $SKIP_INFRA; then
+  step "Step 3: Infrastructure deployment (SKIPPED)"
+  info "Using existing Azure resources. Loading config..."
+  if [[ -f "$CONFIG_FILE" ]]; then
+    set -a; source "$CONFIG_FILE"; set +a
+  fi
+else
+  step "Step 3: Deploying Azure infrastructure (azd up)"
+
+  info "This will provision:"
+  echo "   • Resource Group"
+  echo "   • AI Foundry (account + project + GPT-4.1 deployment)"
+  echo "   • Azure AI Search"
+  echo "   • Storage Account (runbooks + tickets blob containers)"
+  echo "   • Cosmos DB Gremlin (database: networkgraph, graph: topology)"
+  echo "   • Container Apps Environment (ACR + Log Analytics)"
+  echo "   • graph-query-api Container App"
+  echo ""
+
+  if ! $AUTO_YES; then
+    if ! confirm "Proceed with infrastructure deployment?"; then
+      info "Skipping infrastructure. Re-run with --skip-infra to use existing."
+      exit 0
+    fi
+  fi
+
+  # Set essential azd env vars
+  azd env set AZURE_LOCATION "$AZURE_LOC"
+  azd env set GRAPH_BACKEND "cosmosdb"
+  azd env set GPT_CAPACITY_1K_TPM "${GPT_CAPACITY_1K_TPM:-300}"
+
+  info "Running azd up (this may take 10-15 minutes)..."
+  echo ""
+
+  # azd up runs: preprovision → Bicep → deploy graph-query-api → postprovision
+  if ! azd up; then
+    fail "azd up failed. Check the output above for errors."
+    fail "Common issues:"
+    echo "   • Quota exceeded — try a different location"
+    echo "   • Soft-deleted resources — run: azd down --purge, then retry"
+    echo "   • Name conflict — use a different --env name"
+    exit 1
+  fi
+
+  ok "Infrastructure deployed!"
+
+  # Reload config (postprovision.sh should have populated it)
+  set -a; source "$CONFIG_FILE"; set +a
+
+  # Verify critical values were populated
+  MISSING_AFTER_AZD=()
+  [[ -z "${AI_SEARCH_NAME:-}" ]]          && MISSING_AFTER_AZD+=("AI_SEARCH_NAME")
+  [[ -z "${STORAGE_ACCOUNT_NAME:-}" ]]    && MISSING_AFTER_AZD+=("STORAGE_ACCOUNT_NAME")
+  [[ -z "${AI_FOUNDRY_NAME:-}" ]]         && MISSING_AFTER_AZD+=("AI_FOUNDRY_NAME")
+  [[ -z "${PROJECT_ENDPOINT:-}" ]]        && MISSING_AFTER_AZD+=("PROJECT_ENDPOINT")
+  [[ -z "${GRAPH_QUERY_API_URI:-}" ]]     && MISSING_AFTER_AZD+=("GRAPH_QUERY_API_URI")
+  [[ -z "${COSMOS_GREMLIN_ENDPOINT:-}" ]] && MISSING_AFTER_AZD+=("COSMOS_GREMLIN_ENDPOINT")
+
+  if (( ${#MISSING_AFTER_AZD[@]} > 0 )); then
+    fail "azd up completed but these values are missing from azure_config.env:"
+    for v in "${MISSING_AFTER_AZD[@]}"; do echo "   • $v"; done
+    fail "Check postprovision.sh output. You may need to set them manually."
+    exit 1
+  fi
+
+  ok "All critical config values populated"
+  info "Cosmos DB endpoint: $COSMOS_GREMLIN_ENDPOINT"
+  info "Graph Query API:    $GRAPH_QUERY_API_URI"
+fi
+
+# ── Step 4: Create search indexes ───────────────────────────────────
+
+step "Step 4: Creating search indexes"
+
+info "Creating runbooks-index..."
+if uv run python scripts/create_runbook_indexer.py 2>&1; then
+  ok "Runbooks index created"
+else
+  fail "Runbook indexer failed. Check output above."
+  fail "Common fix: ensure blob data was uploaded (check Storage Account containers)."
+  exit 1
+fi
+
+echo ""
+info "Creating tickets-index..."
+if uv run python scripts/create_tickets_indexer.py 2>&1; then
+  ok "Tickets index created"
+else
+  fail "Tickets indexer failed. Check output above."
+  exit 1
+fi
+
+# ── Step 5: Load Cosmos DB graph data ───────────────────────────────
+
+if $SKIP_DATA; then
+  step "Step 5: Cosmos DB graph data (SKIPPED)"
+  info "Keeping existing graph data in Cosmos DB."
+else
+  step "Step 5: Loading graph data into Cosmos DB"
+
+  # Verify Cosmos credentials are set
+  if [[ -z "${COSMOS_GREMLIN_ENDPOINT:-}" ]] || [[ -z "${COSMOS_GREMLIN_PRIMARY_KEY:-}" ]]; then
+    fail "Cosmos DB credentials not set in azure_config.env."
+    fail "Ensure azd up completed successfully and postprovision.sh ran."
+    echo ""
+    info "Manual fix: check your Cosmos DB account in Azure Portal and set:"
+    echo "   COSMOS_GREMLIN_ENDPOINT=<account>.gremlin.cosmos.azure.com"
+    echo "   COSMOS_GREMLIN_PRIMARY_KEY=<key>"
+    exit 1
+  fi
+
+  info "Loading graph schema from data/graph_schema.yaml"
+  info "Cosmos DB: $COSMOS_GREMLIN_ENDPOINT / $COSMOS_GREMLIN_DATABASE / $COSMOS_GREMLIN_GRAPH"
+  info "This will DROP existing graph data and reload."
+  echo ""
+
+  # provision_cosmos_gremlin.py reads os.environ, NOT load_dotenv
+  # So we must have the env vars in the shell already (sourced above)
+  if uv run python scripts/cosmos/provision_cosmos_gremlin.py 2>&1; then
+    ok "Graph data loaded into Cosmos DB"
+  else
+    fail "Cosmos DB graph loading failed."
+    fail "Common issues:"
+    echo "   • 401: Check COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY"
+    echo "   • 429: Cosmos DB throttling — increase maxThroughput or wait and retry"
+    echo "   • Connection refused: Check Cosmos DB firewall settings"
+    echo ""
+    echo "   To retry this step only: source azure_config.env && uv run python scripts/cosmos/provision_cosmos_gremlin.py"
+    exit 1
+  fi
+fi
+
+# ── Step 5b: Load Cosmos DB telemetry data ──────────────────────────
+
+if $SKIP_DATA; then
+  step "Step 5b: Cosmos DB telemetry data (SKIPPED)"
+  info "Keeping existing telemetry data in Cosmos DB."
+else
+  step "Step 5b: Loading telemetry data into Cosmos DB"
+
+  # Verify Cosmos NoSQL endpoint is set
+  if [[ -z "${COSMOS_NOSQL_ENDPOINT:-}" ]]; then
+    fail "COSMOS_NOSQL_ENDPOINT not set in azure_config.env."
+    fail "Ensure azd up completed successfully and postprovision.sh ran."
+    echo ""
+    info "Manual fix: check your Cosmos DB account in Azure Portal and set:"
+    echo "   COSMOS_NOSQL_ENDPOINT=https://<account>.documents.azure.com:443/"
+    exit 1
+  fi
+
+  info "Loading telemetry data from data/telemetry/"
+  info "Cosmos DB: $COSMOS_NOSQL_ENDPOINT / $COSMOS_NOSQL_DATABASE"
+  info "Containers: AlertStream (pk: /SourceNodeType), LinkTelemetry (pk: /LinkId)"
+  echo ""
+
+  if uv run python scripts/cosmos/provision_cosmos_telemetry.py 2>&1; then
+    ok "Telemetry data loaded into Cosmos DB"
+  else
+    fail "Cosmos DB telemetry loading failed."
+    fail "Common issues:"
+    echo "   • 401/403: Check RBAC — your identity needs Cosmos DB Data Contributor on the account"
+    echo "   • 429: Cosmos DB throttling — increase maxThroughput or wait and retry"
+    echo ""
+    echo "   To retry: source azure_config.env && uv run python scripts/cosmos/provision_cosmos_telemetry.py"
+    exit 1
+  fi
+fi
+
+# ── Step 6: Verify graph-query-api health ───────────────────────────
+
+step "Step 6: Verifying graph-query-api deployment"
+
+GQ_URI="${GRAPH_QUERY_API_URI:-}"
+if [[ -z "$GQ_URI" ]]; then
+  fail "GRAPH_QUERY_API_URI not set — cannot verify deployment."
+  exit 1
+fi
+
+info "Checking health at $GQ_URI/health ..."
+
+HEALTH_OK=false
+for attempt in 1 2 3 4 5; do
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$GQ_URI/health" 2>/dev/null || echo "000")
+  if [[ "$HTTP_CODE" == "200" ]]; then
+    HEALTH_OK=true
+    break
+  fi
+  if (( attempt < 5 )); then
+    warn "Attempt $attempt: HTTP $HTTP_CODE — waiting 15s for container to start..."
+    sleep 15
+  fi
+done
+
+if $HEALTH_OK; then
+  HEALTH_BODY=$(curl -s "$GQ_URI/health" 2>/dev/null)
+  ok "graph-query-api is healthy: $HEALTH_BODY"
+else
+  fail "graph-query-api not responding after 5 attempts."
+  fail "The Container App may still be starting or the image build may have failed."
+  echo ""
+  info "Debug commands:"
+  echo "   az containerapp logs show --name <ca-name> --resource-group ${AZURE_RESOURCE_GROUP:-} --type console --tail 50"
+  echo "   azd deploy graph-query-api"
+  warn "Continuing anyway — agent provisioning may fail if the API is down."
+fi
+
+# ── Step 7: Provision AI agents ─────────────────────────────────────
+
+if $SKIP_AGENTS; then
+  step "Step 7: Agent provisioning (SKIPPED)"
+  info "Using existing agents."
+else
+  step "Step 7: Provisioning AI Foundry agents"
+
+  info "Creating 5 agents (orchestrator + 4 specialists) with --force"
+  info "Graph backend: cosmosdb (Gremlin queries)"
+  echo ""
+
+  # Re-export to ensure provision_agents.py sees them via load_dotenv
+  export GRAPH_BACKEND=cosmosdb
+
+  if uv run python scripts/provision_agents.py --force 2>&1; then
+    ok "All agents provisioned"
+  else
+    fail "Agent provisioning failed."
+    fail "Common issues:"
+    echo "   • 401/403: Azure credential issue — run 'az login'"
+    echo "   • 404: AI Foundry project not found — check AI_FOUNDRY_PROJECT_NAME"
+    echo "   • 429: Rate limited — wait a minute and re-run"
+    echo ""
+    echo "   To retry: source azure_config.env && GRAPH_BACKEND=cosmosdb uv run python scripts/provision_agents.py --force"
+    exit 1
+  fi
+
+  # Verify agent_ids.json was created
+  if [[ -f "$AGENT_IDS_FILE" ]]; then
+    ORCH_ID=$(python3 -c "import json; print(json.load(open('$AGENT_IDS_FILE'))['orchestrator']['id'])" 2>/dev/null || echo "")
+    if [[ -n "$ORCH_ID" ]]; then
+      ok "Orchestrator agent: $ORCH_ID"
+    fi
+  else
+    fail "agent_ids.json not created — agents may have failed to provision."
+  fi
+fi
+
+# ── Step 8: Start local services ────────────────────────────────────
+
+if $SKIP_LOCAL; then
+  step "Step 8: Local services (SKIPPED)"
+  echo ""
+  ok "Deployment complete! Start services manually:"
+  echo ""
+  echo "   # Terminal 1 — API"
+  echo "   cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+  echo ""
+  echo "   # Terminal 2 — Frontend"
+  echo "   cd frontend && npm install && npm run dev"
+  echo ""
+  echo "   Open http://localhost:5173"
+else
+  step "Step 8: Starting local API + Frontend"
+
+  # Kill any existing processes on our ports
+  lsof -ti:8000,5173 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+  sleep 1
+
+  # Install frontend deps
+  info "Installing frontend dependencies..."
+  (cd frontend && npm install --silent 2>&1 | tail -3) || true
+
+  # Start API in background
+  info "Starting API on port 8000..."
+  (cd "$PROJECT_ROOT/api" && source "$CONFIG_FILE" && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload) &
+  API_PID=$!
+
+  # Wait for API to be ready
+  info "Waiting for API to start..."
+  for i in $(seq 1 15); do
+    if curl -s http://localhost:8000/health &>/dev/null; then
+      ok "API is running (PID $API_PID)"
+      break
+    fi
+    if (( i == 15 )); then
+      fail "API did not start within 15 seconds."
+      kill $API_PID 2>/dev/null || true
+      exit 1
+    fi
+    sleep 1
+  done
+
+  # Start frontend in background
+  info "Starting frontend on port 5173..."
+  (cd "$PROJECT_ROOT/frontend" && npm run dev) &
+  FE_PID=$!
+
+  # Wait for frontend
+  sleep 3
+  if curl -s -o /dev/null -w "%{http_code}" http://localhost:5173 2>/dev/null | grep -q "200"; then
+    ok "Frontend is running (PID $FE_PID)"
+  else
+    warn "Frontend may still be starting..."
+  fi
+
+  # Register cleanup
+  trap "info 'Shutting down...'; kill $API_PID $FE_PID 2>/dev/null; exit 0" INT TERM
+
+  echo ""
+fi
+
+# ── Summary ─────────────────────────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}${GREEN}"
+echo "╔════════════════════════════════════════════════════════════════╗"
+echo "║  Deployment Complete!                                        ║"
+echo "╚════════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+
+echo -e "  ${BOLD}Environment:${NC}      $USE_ENV"
+echo -e "  ${BOLD}Graph Backend:${NC}    cosmosdb (Gremlin)"
+echo -e "  ${BOLD}Location:${NC}         ${AZURE_LOC}"
+echo -e "  ${BOLD}Resource Group:${NC}   ${AZURE_RESOURCE_GROUP:-<pending>}"
+echo ""
+echo -e "  ${BOLD}Azure Services:${NC}"
+echo "    AI Foundry:       ${AI_FOUNDRY_NAME:-<pending>}"
+echo "    AI Search:        ${AI_SEARCH_NAME:-<pending>}"
+echo "    Storage:          ${STORAGE_ACCOUNT_NAME:-<pending>}"
+echo "    Cosmos DB:        ${COSMOS_GREMLIN_ENDPOINT:-<pending>}"
+echo "    graph-query-api:  ${GRAPH_QUERY_API_URI:-<pending>}"
+echo ""
+
+if [[ -f "$AGENT_IDS_FILE" ]]; then
+  echo -e "  ${BOLD}Agents:${NC}"
+  python3 -c "
+import json
+with open('$AGENT_IDS_FILE') as f:
+    data = json.load(f)
+print(f\"    Orchestrator:           {data['orchestrator']['id']}\")
+for name, info in data.get('sub_agents', {}).items():
+    print(f\"    {name:26s} {info['id']}\")
+" 2>/dev/null || echo "    (could not read agent_ids.json)"
+  echo ""
+fi
+
+if ! $SKIP_LOCAL; then
+  echo -e "  ${BOLD}Local Services:${NC}"
+  echo "    API:       http://localhost:8000"
+  echo "    Frontend:  http://localhost:5173"
+  echo ""
+  echo -e "  ${BOLD}Test:${NC}"
+  echo "    Open http://localhost:5173 and paste an alert:"
+  echo "    14:31:14.259 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable"
+  echo ""
+  echo -e "  ${BOLD}CLI test:${NC}"
+  echo "    source azure_config.env && uv run python scripts/testing_scripts/test_orchestrator.py"
+  echo ""
+  echo "  Press Ctrl+C to stop local services."
+  wait
+fi
+
+echo ""
+echo -e "  ${BOLD}Useful commands:${NC}"
+echo "    azd deploy graph-query-api         # Redeploy container after code changes"
+echo "    source azure_config.env && uv run python scripts/provision_agents.py --force  # Re-provision agents"
+echo "    azd down --force --purge           # Tear down all Azure resources"
+echo ""

@@ -187,8 +187,6 @@ class OrchestratorEventHandler(AgentEventHandler):
                             if len(output_str) > 1500:
                                 output_str = output_str[:1500] + "…"
                             print(f"      {C_DIM}Response:{C_RESET} {output_str}", flush=True)
-                    elif tc_type_str == "fabric_dataagent":
-                        print(f"\n    {C_CYAN}↳ FabricDataAgent{C_RESET} {C_DIM}({duration}{tokens}){C_RESET}", flush=True)
                     elif tc_type_str == "azure_ai_search":
                         print(f"\n    {C_CYAN}↳ AzureAISearch{C_RESET} {C_DIM}({duration}{tokens}){C_RESET}", flush=True)
                     else:

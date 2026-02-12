@@ -64,6 +64,22 @@ resource ticketsContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   }
 }
 
+resource telemetryDataContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'telemetry-data'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource networkDataContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'network-data'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------

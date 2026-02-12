@@ -69,33 +69,23 @@ echo "Uploading tickets to blob container 'tickets'..."
 upload_with_retry "tickets" "$PROJECT_ROOT/data/tickets"
 
 # --------------------------------------------------------------------------
+# 2b. Upload telemetry CSVs to blob storage (enables --from-blob ingestion
+#     and future Azure Data Factory / native connector pipelines)
+# --------------------------------------------------------------------------
+echo ""
+echo "Uploading telemetry CSVs to blob container 'telemetry-data'..."
+upload_with_retry "telemetry-data" "$PROJECT_ROOT/data/telemetry"
+
+echo ""
+echo "Uploading network CSVs to blob container 'network-data'..."
+upload_with_retry "network-data" "$PROJECT_ROOT/data/network"
+
+# --------------------------------------------------------------------------
 # 3. Populate azure_config.env for downstream scripts
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
-# 3. Look up Fabric capacity GUID (if deployed)
 # --------------------------------------------------------------------------
-FABRIC_CAP_NAME="${AZURE_FABRIC_CAPACITY_NAME:-}"
-FABRIC_CAP_ID=""
-
-if [ -n "$FABRIC_CAP_NAME" ]; then
-  echo ""
-  echo "Looking up Fabric capacity GUID for '$FABRIC_CAP_NAME'..."
-  # Get an access token for the Fabric API
-  FABRIC_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv 2>/dev/null || true)
-  if [ -n "$FABRIC_TOKEN" ]; then
-    FABRIC_CAP_ID=$(curl -s -H "Authorization: Bearer $FABRIC_TOKEN" \
-      "https://api.fabric.microsoft.com/v1/capacities" | \
-      python3 -c "import sys,json; caps=json.load(sys.stdin).get('value',[]); matches=[c['id'] for c in caps if c.get('displayName','')=='$FABRIC_CAP_NAME']; print(matches[0] if matches else '')" 2>/dev/null || true)
-  fi
-  if [ -n "$FABRIC_CAP_ID" ]; then
-    echo "  ✓ Fabric capacity GUID: $FABRIC_CAP_ID"
-  else
-    echo "  ⚠ Could not resolve Fabric capacity GUID — set FABRIC_CAPACITY_ID manually in azure_config.env"
-  fi
-fi
-
-# --------------------------------------------------------------------------
-# 4. Populate azure_config.env for downstream scripts
+# 3. Populate azure_config.env for downstream scripts
 # --------------------------------------------------------------------------
 echo ""
 echo "Populating azure_config.env..."
@@ -104,6 +94,15 @@ CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
 
 # Get subscription ID
 SUB_ID=$(az account show --query id -o tsv)
+
+# Save azd-provided Bicep outputs BEFORE sourcing — the source below would
+# overwrite them with the (empty) values from the existing config file.
+AZD_GRAPH_QUERY_API_URI="${GRAPH_QUERY_API_URI:-}"
+AZD_GRAPH_QUERY_API_PRINCIPAL_ID="${GRAPH_QUERY_API_PRINCIPAL_ID:-}"
+AZD_COSMOS_GREMLIN_ENDPOINT="${COSMOS_GREMLIN_ENDPOINT:-}"
+AZD_COSMOS_GREMLIN_ACCOUNT_NAME="${COSMOS_GREMLIN_ACCOUNT_NAME:-}"
+AZD_COSMOS_NOSQL_ENDPOINT="${COSMOS_NOSQL_ENDPOINT:-}"
+AZD_COSMOS_NOSQL_DATABASE="${COSMOS_NOSQL_DATABASE:-}"
 
 # Preserve user-set values from existing azure_config.env (if present)
 if [ -f "$CONFIG_FILE" ]; then
@@ -116,37 +115,16 @@ fi
 MODEL_DEPLOY="${MODEL_DEPLOYMENT_NAME:-gpt-4.1}"
 EMBED_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
 EMBED_DIMS="${EMBEDDING_DIMENSIONS:-1536}"
-FABRIC_WS="${FABRIC_WORKSPACE_NAME:-AutonomousNetworkDemo}"
-LAKEHOUSE="${FABRIC_LAKEHOUSE_NAME:-NetworkTopologyLH}"
-EVENTHOUSE="${FABRIC_EVENTHOUSE_NAME:-NetworkTelemetryEH_3117}"
-KQL_DB_DEFAULT="${FABRIC_KQL_DB_DEFAULT:-NetworkDB}"
 RUNBOOKS_IDX="${RUNBOOKS_INDEX_NAME:-runbooks-index}"
 TICKETS_IDX="${TICKETS_INDEX_NAME:-tickets-index}"
 RUNBOOKS_CONT="${RUNBOOKS_CONTAINER_NAME:-runbooks}"
 TICKETS_CONT="${TICKETS_CONTAINER_NAME:-tickets}"
-FABRIC_SKU_VAL="${FABRIC_SKU:-F8}"
-FABRIC_ADMIN_VAL="${AZURE_FABRIC_ADMIN:-}"
-# Preserve IDs that were set by populate_fabric_config.py
-PREV_FABRIC_CAP_ID="${FABRIC_CAPACITY_ID:-}"
-PREV_FABRIC_WS_ID="${FABRIC_WORKSPACE_ID:-}"
-PREV_FABRIC_LH_ID="${FABRIC_LAKEHOUSE_ID:-}"
-PREV_FABRIC_EH_ID="${FABRIC_EVENTHOUSE_ID:-}"
-PREV_FABRIC_KQL_ID="${FABRIC_KQL_DB_ID:-}"
-PREV_FABRIC_KQL_NAME="${FABRIC_KQL_DB_NAME:-}"
-PREV_FABRIC_CONN="${FABRIC_CONNECTION_NAME:-}"
-PREV_EH_URI="${EVENTHOUSE_QUERY_URI:-}"
-PREV_AGENT_ID="${FABRIC_DATA_AGENT_ID:-}"
-PREV_AGENT_API="${FABRIC_DATA_AGENT_API_VERSION:-2024-05-01-preview}"
-# Preserve fields that other scripts/user may have set
-PREV_GRAPH_AGENT_ID="${GRAPH_DATA_AGENT_ID:-}"
-PREV_TELEMETRY_AGENT_ID="${TELEMETRY_DATA_AGENT_ID:-}"
-PREV_GRAPH_CONN="${GRAPH_FABRIC_CONNECTION_NAME:-}"
-PREV_TELEMETRY_CONN="${TELEMETRY_FABRIC_CONNECTION_NAME:-}"
 PREV_CORS="${CORS_ORIGINS:-http://localhost:5173}"
-PREV_FABRIC_API_URL="${FABRIC_API_URL:-https://api.fabric.microsoft.com/v1}"
-PREV_FABRIC_SCOPE_VAL="${FABRIC_SCOPE:-https://api.fabric.microsoft.com/.default}"
-PREV_ONTOLOGY_NAME="${FABRIC_ONTOLOGY_NAME:-NetworkTopologyOntology}"
 PREV_GPT_CAPACITY="${GPT_CAPACITY_1K_TPM:-10}"
+PREV_GRAPH_BACKEND="${GRAPH_BACKEND:-cosmosdb}"
+PREV_COSMOS_GREMLIN_DB="${COSMOS_GREMLIN_DATABASE:-networkgraph}"
+PREV_COSMOS_GREMLIN_GRAPH="${COSMOS_GREMLIN_GRAPH:-topology}"
+PREV_COSMOS_NOSQL_DB="${COSMOS_NOSQL_DATABASE:-telemetrydb}"
 
 cat > "$CONFIG_FILE" <<EOF
 # ============================================================================
@@ -184,49 +162,66 @@ STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT
 RUNBOOKS_CONTAINER_NAME=$RUNBOOKS_CONT
 TICKETS_CONTAINER_NAME=$TICKETS_CONT
 
-# --- Fabric deployment settings (USER: edit before 'azd up') ---
-FABRIC_SKU=$FABRIC_SKU_VAL
-AZURE_FABRIC_ADMIN=$FABRIC_ADMIN_VAL
+# --- Deployment settings (USER: edit before 'azd up') ---
 GPT_CAPACITY_1K_TPM=${PREV_GPT_CAPACITY}
-
-# --- Fabric API (defaults are correct for public Azure — only change for sovereign clouds) ---
-FABRIC_API_URL=${PREV_FABRIC_API_URL}
-FABRIC_SCOPE=${PREV_FABRIC_SCOPE_VAL}
 
 # --- App / CORS (USER: change for production deployment) ---
 CORS_ORIGINS=${PREV_CORS}
 
-# --- Fabric resource names (USER: edit before running provision_lakehouse.py) ---
-FABRIC_WORKSPACE_NAME=$FABRIC_WS
-FABRIC_LAKEHOUSE_NAME=$LAKEHOUSE
-FABRIC_EVENTHOUSE_NAME=$EVENTHOUSE
-FABRIC_KQL_DB_DEFAULT=$KQL_DB_DEFAULT
-FABRIC_ONTOLOGY_NAME=${PREV_ONTOLOGY_NAME}
+# --- Graph Backend ---
+# Controls which graph database backend is used by graph-query-api
+# Options: "cosmosdb" (Gremlin → Azure Cosmos DB), "mock" (static responses)
+GRAPH_BACKEND=${PREV_GRAPH_BACKEND}
 
-# --- Fabric IDs (AUTO: populated by populate_fabric_config.py) ---
-FABRIC_CONNECTION_NAME=${PREV_FABRIC_CONN}
-EVENTHOUSE_QUERY_URI=${PREV_EH_URI}
-FABRIC_CAPACITY_ID=${FABRIC_CAP_ID:-$PREV_FABRIC_CAP_ID}
-FABRIC_WORKSPACE_ID=${PREV_FABRIC_WS_ID}
-FABRIC_LAKEHOUSE_ID=${PREV_FABRIC_LH_ID}
-FABRIC_EVENTHOUSE_ID=${PREV_FABRIC_EH_ID}
-FABRIC_KQL_DB_ID=${PREV_FABRIC_KQL_ID}
-FABRIC_KQL_DB_NAME=${PREV_FABRIC_KQL_NAME}
+# --- graph-query-api (AUTO: from deployment) ---
+GRAPH_QUERY_API_URI=${AZD_GRAPH_QUERY_API_URI:-${GRAPH_QUERY_API_URI:-}}
+GRAPH_QUERY_API_PRINCIPAL_ID=${AZD_GRAPH_QUERY_API_PRINCIPAL_ID:-${GRAPH_QUERY_API_PRINCIPAL_ID:-}}
 
-# --- Fabric Data Agent (AUTO: populated by collect_fabric_agents.py) ---
-FABRIC_DATA_AGENT_ID=${PREV_AGENT_ID}
-FABRIC_DATA_AGENT_API_VERSION=${PREV_AGENT_API}
-GRAPH_DATA_AGENT_ID=${PREV_GRAPH_AGENT_ID}
-TELEMETRY_DATA_AGENT_ID=${PREV_TELEMETRY_AGENT_ID}
+# --- Cosmos DB Gremlin (required when GRAPH_BACKEND=cosmosdb) ---
+COSMOS_GREMLIN_ENDPOINT=${AZD_COSMOS_GREMLIN_ENDPOINT:-${COSMOS_GREMLIN_ENDPOINT:-}}
+COSMOS_GREMLIN_PRIMARY_KEY=${COSMOS_GREMLIN_PRIMARY_KEY:-}
+COSMOS_GREMLIN_DATABASE=${PREV_COSMOS_GREMLIN_DB}
+COSMOS_GREMLIN_GRAPH=${PREV_COSMOS_GREMLIN_GRAPH}
 
-# --- Fabric Connections in Foundry (USER: set after creating in AI Foundry portal) ---
-GRAPH_FABRIC_CONNECTION_NAME=${PREV_GRAPH_CONN}
-TELEMETRY_FABRIC_CONNECTION_NAME=${PREV_TELEMETRY_CONN}
-
-# --- fabric-query-api (AUTO: from deployment) ---
-FABRIC_QUERY_API_URI=${FABRIC_QUERY_API_URI:-}
-FABRIC_QUERY_API_PRINCIPAL_ID=${FABRIC_QUERY_API_PRINCIPAL_ID:-}
+# --- Cosmos DB NoSQL / Telemetry (AUTO: from deployment) ---
+COSMOS_NOSQL_ENDPOINT=${AZD_COSMOS_NOSQL_ENDPOINT:-${COSMOS_NOSQL_ENDPOINT:-}}
+COSMOS_NOSQL_DATABASE=${AZD_COSMOS_NOSQL_DATABASE:-${PREV_COSMOS_NOSQL_DB}}
 EOF
+# --------------------------------------------------------------------------
+# 5. Auto-populate Cosmos DB Gremlin credentials (if deployed)
+# --------------------------------------------------------------------------
+# Bicep outputs: COSMOS_GREMLIN_ACCOUNT_NAME, COSMOS_GREMLIN_ENDPOINT
+# (no AZURE_ prefix — unlike other outputs)
+COSMOS_ACCOUNT="${AZD_COSMOS_GREMLIN_ACCOUNT_NAME:-${COSMOS_GREMLIN_ACCOUNT_NAME:-}}"
+if [ -n "$COSMOS_ACCOUNT" ]; then
+  echo ""
+  echo "Auto-populating Cosmos DB Gremlin credentials..."
+  COSMOS_EP="${AZD_COSMOS_GREMLIN_ENDPOINT:-${COSMOS_GREMLIN_ENDPOINT:-}}"
+  if [ -z "$COSMOS_EP" ]; then
+    # Gremlin endpoint is account-name.gremlin.cosmos.azure.com
+    # (NOT documentEndpoint which is for the SQL/NoSQL API)
+    COSMOS_EP="${COSMOS_ACCOUNT}.gremlin.cosmos.azure.com"
+  fi
+  COSMOS_KEY=$(az cosmosdb keys list --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query primaryMasterKey -o tsv 2>/dev/null || true)
+  if [ -n "$COSMOS_KEY" ]; then
+    # Patch the values in-place in azure_config.env
+    sed -i "s|^COSMOS_GREMLIN_ENDPOINT=.*|COSMOS_GREMLIN_ENDPOINT=$COSMOS_EP|" "$CONFIG_FILE"
+    sed -i "s|^COSMOS_GREMLIN_PRIMARY_KEY=.*|COSMOS_GREMLIN_PRIMARY_KEY=$COSMOS_KEY|" "$CONFIG_FILE"
+    echo "  ✓ Cosmos DB Gremlin credentials populated"
+    # Also populate the NoSQL endpoint (same account)
+    COSMOS_NOSQL_EP="${AZD_COSMOS_NOSQL_ENDPOINT:-${COSMOS_NOSQL_ENDPOINT:-}}"
+    if [ -z "$COSMOS_NOSQL_EP" ]; then
+      # Query the separate NoSQL account (account-nosql), not the Gremlin account
+      COSMOS_NOSQL_EP=$(az cosmosdb show --name "${COSMOS_ACCOUNT}-nosql" --resource-group "$RG" --query documentEndpoint -o tsv 2>/dev/null || true)
+    fi
+    if [ -n "$COSMOS_NOSQL_EP" ]; then
+      sed -i "s|^COSMOS_NOSQL_ENDPOINT=.*|COSMOS_NOSQL_ENDPOINT=$COSMOS_NOSQL_EP|" "$CONFIG_FILE"
+      echo "  ✓ Cosmos DB NoSQL endpoint populated"
+    fi
+  else
+    echo "  ⚠ Could not fetch Cosmos DB key — set COSMOS_GREMLIN_PRIMARY_KEY manually in azure_config.env"
+  fi
+fi
 
 echo "  ✓ azure_config.env written"
 

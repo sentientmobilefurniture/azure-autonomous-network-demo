@@ -44,7 +44,7 @@ Approximately 10 historical incident records spanning mid-2025 to early 2026. Ea
 
 - Live topology or dependency questions — that's the GraphExplorerAgent.
 - What procedure to follow — that's the RunbookKBAgent.
-- Real-time telemetry or alert data — that's in the Eventhouse.
+- Real-time telemetry or alert data — that's in the telemetry database.
 
 If asked something outside your scope, say what knowledge source would be appropriate.
 

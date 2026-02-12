@@ -1,5 +1,5 @@
 """
-Generate relationship / junction table CSV files for Fabric Lakehouse.
+Generate relationship / junction table CSV files for network data.
 
 Outputs 2 CSV files:
   - FactMPLSPathHops.csv   (MPLSPath --ROUTES_VIA--> nodes)
@@ -9,7 +9,7 @@ Outputs 2 CSV files:
 import csv
 import os
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "lakehouse")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "network")
 
 
 def write_csv(filename: str, headers: list[str], rows: list[list]) -> None:
@@ -80,7 +80,7 @@ def generate_service_dependencies() -> None:
 
 
 def main() -> None:
-    print("Generating routing data (Lakehouse junction tables)...")
+    print("Generating routing data (network junction tables)...")
     generate_mpls_path_hops()
     generate_service_dependencies()
     print(f"\nAll files written to {os.path.abspath(OUTPUT_DIR)}")

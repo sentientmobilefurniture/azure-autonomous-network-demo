@@ -26,18 +26,6 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# Fabric-perspective log emitter (imported lazily to avoid circular imports)
-def _emit_fabric_log(level: str, msg: str) -> None:
-    """Emit a synthetic fabric-query-api log to the fabric SSE channel."""
-    from app.routers.logs import broadcast_fabric_log
-    from datetime import datetime, timezone as _tz
-    broadcast_fabric_log({
-        "ts": datetime.now(_tz.utc).strftime("%H:%M:%S.%f")[:-3],
-        "level": level,
-        "name": "fabric-query-api",
-        "msg": msg,
-    })
-
 # ---------------------------------------------------------------------------
 # Paths & config
 # ---------------------------------------------------------------------------
@@ -153,6 +141,8 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             self.ui_step = 0
             self.total_tokens = 0
             self.response_text = ""
+            self.run_failed = False
+            self.run_error_detail = ""
 
         def _elapsed(self) -> str:
             return f"{time.time() - self.t0:.1f}s"
@@ -171,19 +161,13 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 # Extract structured error info if available
                 code = getattr(err, "code", None) or (err.get("code") if isinstance(err, dict) else None) or "unknown"
                 msg = getattr(err, "message", None) or (err.get("message") if isinstance(err, dict) else str(err))
+                self.run_failed = True
+                self.run_error_detail = f"[{code}] {msg}"
                 logger.error(
                     "Orchestrator run failed: [%s] %s  (steps completed: %d, elapsed: %s)",
-                    code, msg, handler.ui_step if hasattr(handler, 'ui_step') else '?',
-                    handler._elapsed() if hasattr(handler, '_elapsed') else '?',
+                    code, msg, self.ui_step,
+                    self._elapsed(),
                 )
-                _put("error", {
-                    "message": (
-                        f"Agent run interrupted \u2014 A backend query returned an error. "
-                        f"The graph schema or data may not match the query. "
-                        f"{handler.ui_step} steps completed before the error.\n\n"
-                        f"Error detail: [{code}] {msg}"
-                    ),
-                })
 
         # -- Step lifecycle --------------------------------------------------
 
@@ -228,8 +212,6 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                                     failed_query = obj if isinstance(obj, str) else json.dumps(obj)
                                 except Exception:
                                     failed_query = str(args_raw)
-                        elif tc_type == "fabric_dataagent":
-                            failed_agent = "FabricDataAgent"
                         elif tc_type == "azure_ai_search":
                             failed_agent = "AzureAISearch"
 
@@ -237,20 +219,6 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     "Step FAILED: agent=%s  duration=%s  code=%s  error=%s\n  query=%s",
                     failed_agent, duration, err_code, err_msg, failed_query[:500] if failed_query else "(none)",
                 )
-
-                # Emit fabric-perspective logs for failed Graph/Telemetry calls
-                if failed_agent and ("Graph" in failed_agent or "Telemetry" in failed_agent):
-                    endpoint = "/query/graph" if "Graph" in failed_agent else "/query/telemetry"
-                    query_type = "GQL" if "Graph" in failed_agent else "KQL"
-                    _emit_fabric_log("INFO", f"▶ POST {endpoint}  (from {failed_agent})")
-                    if failed_query:
-                        try:
-                            q_obj = json.loads(failed_query) if failed_query.startswith("{") else None
-                            q_body = q_obj.get("query", failed_query) if q_obj else failed_query
-                        except Exception:
-                            q_body = failed_query
-                        _emit_fabric_log("DEBUG", f"{query_type} query:\n{q_body[:500]}")
-                    _emit_fabric_log("ERROR", f"◀ POST {endpoint} FAILED [{err_code}]: {err_msg}")
 
                 self.ui_step += 1
                 _put("step_complete", {
@@ -304,8 +272,6 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         if out:
                             response = str(out)
 
-                    elif tc_type == "fabric_dataagent":
-                        agent_name = "FabricDataAgent"
                     elif tc_type == "azure_ai_search":
                         agent_name = "AzureAISearch"
 
@@ -320,26 +286,6 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         logger.info("  ↳ query: %s", query[:300])
                     if response:
                         logger.info("  ↳ response (%d chars): %s", len(response), response[:200])
-
-                    # Emit fabric-perspective logs for Graph/Telemetry agents
-                    if agent_name and ("Graph" in agent_name or "Telemetry" in agent_name):
-                        endpoint = "/query/graph" if "Graph" in agent_name else "/query/telemetry"
-                        query_type = "GQL" if "Graph" in agent_name else "KQL"
-                        _emit_fabric_log("INFO", f"▶ POST {endpoint}  (from {agent_name})")
-                        if query:
-                            # Try to extract the actual query string
-                            try:
-                                q_obj = json.loads(query) if query.startswith("{") else None
-                                q_body = q_obj.get("query", query) if q_obj else query
-                            except Exception:
-                                q_body = query
-                            _emit_fabric_log("DEBUG", f"{query_type} query:\n{q_body[:500]}")
-                        if response:
-                            resp_preview = response[:300].replace("\n", " ")
-                            _emit_fabric_log("INFO", f"{query_type} response ({len(response)} chars, {duration}): {resp_preview}")
-                        else:
-                            _emit_fabric_log("WARNING", f"{query_type} returned empty response ({duration})")
-                        _emit_fabric_log("INFO", f"◀ POST {endpoint} → 200  ({duration})")
 
                     _put("step_start", {"step": self.ui_step, "agent": agent_name})
                     _put("step_complete", {
@@ -361,8 +307,9 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
 
     # -- Thread target -------------------------------------------------------
 
+    MAX_RUN_ATTEMPTS = 2  # initial + 1 retry on failure
+
     def _thread_target():
-        handler = SSEEventHandler()
         try:
             _put("run_start", {
                 "run_id": "",
@@ -380,27 +327,101 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     content=alert_text,
                 )
 
-                with agents_client.runs.stream(
-                    thread_id=thread.id,
-                    agent_id=orchestrator_id,
-                    event_handler=handler,
-                ) as stream:
-                    stream.until_done()
+                last_error_detail = ""
+                for attempt in range(1, MAX_RUN_ATTEMPTS + 1):
+                    handler = SSEEventHandler()
 
-                # Emit the full response text
-                if handler.response_text:
-                    _put("message", {"text": handler.response_text})
-                else:
-                    # Fallback: fetch messages if streaming didn't capture text
-                    messages = agents_client.messages.list(thread_id=thread.id)
-                    text = ""
-                    for msg in reversed(list(messages)):
-                        if msg.role == "assistant":
-                            for block in msg.content:
-                                if hasattr(block, "text"):
-                                    text += block.text.value + "\n"
-                    if text:
-                        _put("message", {"text": text.strip()})
+                    if attempt > 1:
+                        # Post a recovery message so the orchestrator knows
+                        # the previous attempt failed and can adjust its approach
+                        recovery_msg = (
+                            f"[SYSTEM] The previous investigation attempt failed with: "
+                            f"{last_error_detail}\n\n"
+                            f"Please retry the investigation. If a sub-agent tool call "
+                            f"failed, try a different or simpler query, or skip that "
+                            f"data source and continue with the information you have."
+                        )
+                        agents_client.messages.create(
+                            thread_id=thread.id,
+                            role="user",
+                            content=recovery_msg,
+                        )
+                        _put("step_thinking", {
+                            "agent": "Orchestrator",
+                            "status": f"Retrying investigation (attempt {attempt}/{MAX_RUN_ATTEMPTS})...",
+                        })
+                        logger.info(
+                            "Orchestrator retry attempt %d/%d after error: %s",
+                            attempt, MAX_RUN_ATTEMPTS, last_error_detail[:300],
+                        )
+
+                    with agents_client.runs.stream(
+                        thread_id=thread.id,
+                        agent_id=orchestrator_id,
+                        event_handler=handler,
+                    ) as stream:
+                        stream.until_done()
+
+                    # Check if the run failed
+                    if handler.run_failed:
+                        last_error_detail = handler.run_error_detail
+                        if attempt < MAX_RUN_ATTEMPTS:
+                            logger.warning(
+                                "Orchestrator run failed, will retry (attempt %d/%d): %s",
+                                attempt, MAX_RUN_ATTEMPTS, last_error_detail[:300],
+                            )
+                            continue
+                        else:
+                            # Final attempt also failed — emit the error
+                            _put("error", {
+                                "message": (
+                                    f"Agent run interrupted — A backend query returned an error. "
+                                    f"{handler.ui_step} steps completed before the error. "
+                                    f"Retried {MAX_RUN_ATTEMPTS} times.\n\n"
+                                    f"Error detail: {last_error_detail}"
+                                ),
+                            })
+                            break
+
+                    # Check if the run succeeded with response text
+                    if handler.response_text:
+                        # Success — emit the response and break
+                        _put("message", {"text": handler.response_text})
+                        break
+                    else:
+                        # Try to fetch messages — the run may have completed
+                        # but streaming didn't capture the text
+                        messages = agents_client.messages.list(thread_id=thread.id)
+                        text = ""
+                        for msg in reversed(list(messages)):
+                            if msg.role == "assistant":
+                                for block in msg.content:
+                                    if hasattr(block, "text"):
+                                        text += block.text.value + "\n"
+                        if text:
+                            _put("message", {"text": text.strip()})
+                            break
+
+                        # No response text AND no error means the run died silently
+                        # Capture the error for the retry message
+                        last_error_detail = (
+                            f"Run produced no response after {handler.ui_step} steps."
+                        )
+                        if attempt < MAX_RUN_ATTEMPTS:
+                            logger.warning(
+                                "Orchestrator run produced no response, will retry (attempt %d/%d)",
+                                attempt, MAX_RUN_ATTEMPTS,
+                            )
+                            continue
+                        else:
+                            # Final attempt also failed — emit what we have
+                            _put("error", {
+                                "message": (
+                                    f"Investigation did not produce a final response "
+                                    f"after {MAX_RUN_ATTEMPTS} attempts. "
+                                    f"{handler.ui_step} steps were completed."
+                                ),
+                            })
 
                 _put("run_complete", {
                     "steps": handler.ui_step,
@@ -419,8 +440,24 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
     t = threading.Thread(target=_thread_target, daemon=True)
     t.start()
 
+    # Yield events with a per-event timeout to detect stuck investigations.
+    # Normal runs emit events every few seconds; 2 min of silence means
+    # the orchestrator or a sub-agent is hung.
+    EVENT_TIMEOUT = 120  # seconds
     while True:
-        item = await queue.get()
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=EVENT_TIMEOUT)
+        except asyncio.TimeoutError:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": (
+                        "Investigation appears stuck — no progress for 2 minutes. "
+                        "Try submitting the alert again."
+                    ),
+                }),
+            }
+            break
         if item is None:
             break
         yield item

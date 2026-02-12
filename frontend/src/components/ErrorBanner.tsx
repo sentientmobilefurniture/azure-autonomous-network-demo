@@ -8,7 +8,7 @@ interface ErrorBannerProps {
 
 export function ErrorBanner({ message, stepCount, onRetry }: ErrorBannerProps) {
   const detail = message.includes('404')
-    ? 'A backend data source returned 404 — the Fabric graph model may still be refreshing. This usually resolves within 30–45 minutes.'
+    ? 'A backend data source returned 404 — the graph database may be temporarily unavailable.'
     : message.includes('429')
       ? 'Rate-limited by Azure AI. Wait a moment and retry.'
       : message.includes('400')
