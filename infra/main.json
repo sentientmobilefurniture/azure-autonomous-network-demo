@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "15183913960107110062"
+      "templateHash": "14774573023655099931"
     }
   },
   "parameters": {
@@ -244,7 +244,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "8718537026908405972"
+              "templateHash": "12351960469960248339"
             }
           },
           "parameters": {
@@ -269,7 +269,7 @@
             },
             "skuName": {
               "type": "string",
-              "defaultValue": "basic",
+              "defaultValue": "standard",
               "allowedValues": [
                 "free",
                 "basic",
@@ -536,7 +536,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "6489786991975819675"
+              "templateHash": "12103281304265601758"
             }
           },
           "parameters": {
@@ -581,20 +581,6 @@
                 "description": "Maximum throughput for autoscale (RU/s)"
               }
             },
-            "telemetryDatabaseName": {
-              "type": "string",
-              "defaultValue": "telemetrydb",
-              "metadata": {
-                "description": "Name of the NoSQL database for telemetry"
-              }
-            },
-            "telemetryMaxThroughput": {
-              "type": "int",
-              "defaultValue": 1000,
-              "metadata": {
-                "description": "Maximum throughput for autoscale on telemetry containers (RU/s)"
-              }
-            },
             "tags": {
               "type": "object",
               "defaultValue": {},
@@ -606,9 +592,13 @@
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "Developer IP to allow through the Cosmos DB firewall (leave empty to skip)"
+                "description": "Developer IP address for firewall exceptions (optional)"
               }
             }
+          },
+          "variables": {
+            "noSqlAccountName": "[format('{0}-nosql', parameters('accountName'))]",
+            "telemetryDbName": "telemetry"
           },
           "resources": [
             {
@@ -696,9 +686,9 @@
             {
               "type": "Microsoft.DocumentDB/databaseAccounts",
               "apiVersion": "2024-11-15",
-              "name": "[format('{0}-nosql', parameters('accountName'))]",
+              "name": "[variables('noSqlAccountName')]",
               "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
+              "tags": "[union(parameters('tags'), createObject('component', 'telemetry-store'))]",
               "kind": "GlobalDocumentDB",
               "properties": {
                 "databaseAccountOfferType": "Standard",
@@ -721,92 +711,14 @@
             {
               "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
               "apiVersion": "2024-11-15",
-              "name": "[format('{0}/{1}', format('{0}-nosql', parameters('accountName')), parameters('telemetryDatabaseName'))]",
+              "name": "[format('{0}/{1}', variables('noSqlAccountName'), variables('telemetryDbName'))]",
               "properties": {
                 "resource": {
-                  "id": "[parameters('telemetryDatabaseName')]"
+                  "id": "[variables('telemetryDbName')]"
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('{0}-nosql', parameters('accountName')))]"
-              ]
-            },
-            {
-              "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
-              "apiVersion": "2024-11-15",
-              "name": "[format('{0}/{1}/{2}', format('{0}-nosql', parameters('accountName')), parameters('telemetryDatabaseName'), 'AlertStream')]",
-              "properties": {
-                "resource": {
-                  "id": "AlertStream",
-                  "partitionKey": {
-                    "paths": [
-                      "/SourceNodeType"
-                    ],
-                    "kind": "Hash",
-                    "version": 2
-                  },
-                  "indexingPolicy": {
-                    "indexingMode": "consistent",
-                    "automatic": true,
-                    "includedPaths": [
-                      {
-                        "path": "/*"
-                      }
-                    ],
-                    "excludedPaths": [
-                      {
-                        "path": "/\"_etag\"/?"
-                      }
-                    ]
-                  }
-                },
-                "options": {
-                  "autoscaleSettings": {
-                    "maxThroughput": "[parameters('telemetryMaxThroughput')]"
-                  }
-                }
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', format('{0}-nosql', parameters('accountName')), parameters('telemetryDatabaseName'))]"
-              ]
-            },
-            {
-              "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
-              "apiVersion": "2024-11-15",
-              "name": "[format('{0}/{1}/{2}', format('{0}-nosql', parameters('accountName')), parameters('telemetryDatabaseName'), 'LinkTelemetry')]",
-              "properties": {
-                "resource": {
-                  "id": "LinkTelemetry",
-                  "partitionKey": {
-                    "paths": [
-                      "/LinkId"
-                    ],
-                    "kind": "Hash",
-                    "version": 2
-                  },
-                  "indexingPolicy": {
-                    "indexingMode": "consistent",
-                    "automatic": true,
-                    "includedPaths": [
-                      {
-                        "path": "/*"
-                      }
-                    ],
-                    "excludedPaths": [
-                      {
-                        "path": "/\"_etag\"/?"
-                      }
-                    ]
-                  }
-                },
-                "options": {
-                  "autoscaleSettings": {
-                    "maxThroughput": "[parameters('telemetryMaxThroughput')]"
-                  }
-                }
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', format('{0}-nosql', parameters('accountName')), parameters('telemetryDatabaseName'))]"
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('noSqlAccountName'))]"
               ]
             }
           ],
@@ -856,30 +768,30 @@
             "cosmosNoSqlEndpoint": {
               "type": "string",
               "metadata": {
-                "description": "The Cosmos DB NoSQL endpoint (https://<account>.documents.azure.com:443/)"
+                "description": "The NoSQL account endpoint"
               },
-              "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', format('{0}-nosql', parameters('accountName'))), '2024-11-15').documentEndpoint]"
-            },
-            "cosmosNoSqlAccountId": {
-              "type": "string",
-              "metadata": {
-                "description": "The Cosmos DB NoSQL account resource ID (for private endpoint)"
-              },
-              "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('{0}-nosql', parameters('accountName')))]"
-            },
-            "cosmosNoSqlAccountName": {
-              "type": "string",
-              "metadata": {
-                "description": "The Cosmos DB NoSQL account name"
-              },
-              "value": "[format('{0}-nosql', parameters('accountName'))]"
+              "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('noSqlAccountName')), '2024-11-15').documentEndpoint]"
             },
             "telemetryDatabaseName": {
               "type": "string",
               "metadata": {
-                "description": "The NoSQL telemetry database name"
+                "description": "The telemetry database name"
               },
-              "value": "[parameters('telemetryDatabaseName')]"
+              "value": "[variables('telemetryDbName')]"
+            },
+            "cosmosNoSqlAccountId": {
+              "type": "string",
+              "metadata": {
+                "description": "The NoSQL account resource ID"
+              },
+              "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('noSqlAccountName'))]"
+            },
+            "cosmosNoSqlAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "The NoSQL account name"
+              },
+              "value": "[variables('noSqlAccountName')]"
             }
           }
         }

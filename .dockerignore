@@ -1,0 +1,33 @@
+# Dependencies & virtual environments
+**/node_modules
+**/.venv
+**/__pycache__
+
+# Git
+.git
+.gitignore
+
+# Azure/IaC
+.azure
+infra
+hooks
+
+# Documentation
+documentation
+fabric_implementation_references
+*.md
+
+# Frontend build artifacts (not needed for API)
+frontend/dist
+
+# Data files (uploaded separately)
+data/telemetry
+data/tickets
+data/runbooks
+
+# Misc
+**/.DS_Store
+**/*.pyc
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache

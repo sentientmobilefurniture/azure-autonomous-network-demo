@@ -11,7 +11,8 @@ WORKDIR /app
 
 # Layer 1: Install dependencies (cached unless pyproject.toml changes)
 COPY api/pyproject.toml api/uv.lock* ./
-RUN uv sync --no-dev --no-install-project 2>/dev/null || uv pip install --system -r <(uv pip compile pyproject.toml)
+RUN uv sync --no-dev --no-install-project 2>/dev/null || \
+    (uv pip compile pyproject.toml -o requirements.txt && uv pip install --system -r requirements.txt)
 
 # Layer 2: Copy application code
 COPY api/app ./app
