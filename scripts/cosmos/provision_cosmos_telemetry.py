@@ -130,7 +130,6 @@ async def _clear_container(container) -> int:
     items = []
     async for item in container.query_items(
         query="SELECT c.id, c.SourceNodeType, c.LinkId FROM c",
-        enable_cross_partition_query=True,
     ):
         items.append(item)
 
