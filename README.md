@@ -117,7 +117,19 @@ uv run python scripts/provision_eventhouse.py
 uv run python scripts/provision_ontology.py   # ~30 min for graph indexing
 ```
 
-### 4. Grant Fabric access to the Container App
+### 4. Discover Fabric IDs
+
+After creating Fabric resources, discover their IDs and write them to `azure_config.env`:
+
+```bash
+uv run python scripts/populate_fabric_config.py
+```
+
+This populates `FABRIC_CAPACITY_ID`, `FABRIC_WORKSPACE_ID`, `FABRIC_LAKEHOUSE_ID`,
+`FABRIC_EVENTHOUSE_ID`, `FABRIC_KQL_DB_ID`, `FABRIC_KQL_DB_NAME`, and
+`EVENTHOUSE_QUERY_URI`.
+
+### 5. Grant Fabric access to the Container App
 
 The `fabric-query-api` Container App must be a Fabric workspace member to execute
 GQL/KQL queries using its managed identity:
@@ -130,16 +142,16 @@ This reads `FABRIC_WORKSPACE_ID` and `FABRIC_QUERY_API_PRINCIPAL_ID` from
 `azure_config.env` and assigns the Contributor role via the Fabric REST API.
 Re-running is safe — it skips if the role already exists.
 
-### 5. Verify the deployed API
+### 6. Verify the deployed API
 
 ```bash
-uv run python scripts/test_fabric_query_api.py
+uv run python scripts/testing_scripts/test_fabric_query_api.py
 ```
 
 This smoke-tests both `/query/graph` (GQL) and `/query/telemetry` (KQL) on the
 deployed Container App.
 
-### 6. Provision Foundry agents
+### 7. Provision Foundry agents
 
 ```bash
 uv run python scripts/provision_agents.py
@@ -149,17 +161,17 @@ Creates 5 agents: Orchestrator + GraphExplorer + Telemetry + RunbookKB +
 HistoricalTicket. GraphExplorer and Telemetry use `OpenApiTool` pointing at
 the deployed `fabric-query-api`.
 
-### 7. Test the multi-agent flow (CLI)
+### 8. Test the multi-agent flow (CLI)
 
 ```bash
-uv run python scripts/test_orchestrator.py
+uv run python scripts/testing_scripts/test_orchestrator.py
 ```
 
-### 8. Run the UI locally
+### 9. Run the UI locally
 
 ```bash
-# Terminal 1 — FastAPI backend
-cd api && uv run uvicorn app.main:app --reload --port 8000
+# Terminal 1 — FastAPI backend (source env for Azure SDK credentials)
+cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # Terminal 2 — React frontend
 cd frontend && npm run dev
@@ -182,17 +194,26 @@ Container App revision. No need to re-run `azd up` for code-only changes.
 
 ## Operations
 
-### Starting the UI locally
+### Starting all services locally
 
 ```bash
-# Terminal 1 — Backend API
-cd api && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Terminal 1 — Backend API (source env for PROJECT_ENDPOINT, AI_FOUNDRY_PROJECT_NAME, etc.)
+cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # Terminal 2 — Frontend
 cd frontend && npm run dev
+
+# Terminal 3 (optional) — fabric-query-api locally (for local GQL/KQL testing)
+cd fabric-query-api && source ../azure_config.env && uv run uvicorn main:app --host 0.0.0.0 --port 8100 --reload
 ```
 
-Open http://localhost:5173. The Vite dev server proxies `/api/*` and `/health` to the backend.
+Open http://localhost:5173. The Vite dev server proxies `/api/*`, `/api/logs`,
+`/api/fabric-logs`, and `/health` to the backend.
+
+> **Note:** The backend API talks to the **deployed** `fabric-query-api` in Azure
+> (via the agents' `OpenApiTool`), not the local one. Running fabric-query-api
+> locally on :8100 is only useful for direct testing with
+> `scripts/testing_scripts/test_fabric_query_api.py` or curl.
 
 ### Restarting the frontend
 
@@ -212,14 +233,47 @@ automatically. To fully restart:
 
 ```bash
 lsof -ti:8000 | xargs -r kill -9
-cd api && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Killing everything
+### Killing everything locally
 
 ```bash
 # Kill frontend + backend + fabric-query-api (local)
 lsof -ti:8000,5173,5174,8100 | xargs -r kill -9
+```
+
+---
+
+### Updating Container App environment variables
+
+When Fabric IDs change (e.g. after re-provisioning ontology), update the
+Container App's env vars:
+
+```bash
+source azure_config.env
+CA_NAME=<container-app-name>   # from azure_config.env or Azure portal
+RG=$AZURE_RESOURCE_GROUP
+
+# Update a single env var
+az containerapp update --name $CA_NAME --resource-group $RG \
+  --set-env-vars "FABRIC_GRAPH_MODEL_ID=$FABRIC_GRAPH_MODEL_ID"
+
+# Or redeploy with all env vars refreshed
+azd deploy fabric-query-api
+```
+
+### Managing azd environments
+
+```bash
+# List environments
+azd env list
+
+# Switch to a different environment
+azd env select <env-name>
+
+# View current environment variables
+azd env get-values
 ```
 
 ### Container App management
@@ -277,13 +331,13 @@ For debugging without the UI:
 
 ```bash
 # Default alert
-uv run python scripts/test_orchestrator.py
+uv run python scripts/testing_scripts/test_orchestrator.py
 
 # Custom alert
-uv run python scripts/test_orchestrator.py "08:15:00 MAJOR ROUTER-SYD-01 BGP_FLAP BGP session down"
+uv run python scripts/testing_scripts/test_orchestrator.py "08:15:00 MAJOR ROUTER-SYD-01 BGP_FLAP BGP session down"
 
 # Quiet mode (final response only)
-uv run python scripts/test_orchestrator.py --quiet
+uv run python scripts/testing_scripts/test_orchestrator.py --quiet
 ```
 
 ---
@@ -361,6 +415,54 @@ Set `DEBUG_ENDPOINTS=1` as an env var on the Container App to enable `/debug/raw
 which returns the raw Fabric API response without normalization. Useful for
 diagnosing GQL issues. Disabled by default in production.
 
+## Teardown
+
+### Full teardown (all Azure resources + Fabric workspace)
+
+```bash
+bash infra/nuclear_teardown.sh
+```
+
+This script:
+1. Deletes the Fabric workspace via REST API (not managed by Bicep)
+2. Runs `azd down --force --purge` to delete all Azure resources
+3. Purges soft-deleted Cognitive Services accounts
+4. Deletes lingering resource group
+5. Clears the azd environment state
+
+> **Warning:** This is irreversible. All data, agents, indices, and Fabric
+> resources will be permanently deleted.
+
+### Partial teardown — Azure only (keep Fabric)
+
+```bash
+azd down --force --purge
+```
+
+This removes all Azure resources (AI Foundry, Search, Storage, Container Apps)
+but leaves the Fabric workspace intact. You can re-deploy with `azd up` and
+re-run `assign_fabric_role.py` + `provision_agents.py`.
+
+### Pause Fabric capacity (save costs)
+
+Fabric capacity (F-SKU) incurs charges while running (~$1.05/hr for F8). Pause
+it when not actively demoing:
+
+```bash
+source azure_config.env
+
+# Pause (stops billing)
+az fabric capacity suspend --capacity-name <capacity-name> --resource-group $AZURE_RESOURCE_GROUP
+
+# Resume
+az fabric capacity resume --capacity-name <capacity-name> --resource-group $AZURE_RESOURCE_GROUP
+```
+
+You can also pause/resume from the Azure portal under the Fabric capacity resource.
+While paused, Fabric queries will fail — the agents will return errors.
+
+---
+
 ## TODO
 
 ### Automation
@@ -383,7 +485,7 @@ diagnosing GQL issues. Disabled by default in production.
 - [x] Verify that v2 architecture works with current UI
 - [x] Fix event streaming not working
 - [x] Final test before merging v2architecture
-- [ ] Revamp UI for better presentation and readability
+- [x] Revamp UI for better presentation and readability
 - [ ] Deploy main API to Azure Container Apps
 - [ ] Deploy frontend to Azure Static Web Apps
 
@@ -391,6 +493,7 @@ diagnosing GQL issues. Disabled by default in production.
 - [x] Format query and response text with markdown
 - [x] Query Fabric graph directly (GQL via REST API)
 - [x] Create and test graph query tool — FunctionTool PoC → OpenApiTool production
+- [ ] Prep the codebase for dual-graph architecture. Shift fabric specific files into specific locations, genericize graph APIs to allow easy swap out, restructure agent prompts with core model and graphdb-specific model (and build from those components) and control all these via the GRAPH_BACKEND param in azure_config.env
 - [ ] **Neo4j graph backend** — Replace Fabric GraphModel with Neo4j for demo. Enables real-time graph mutations from the UI (add/remove nodes, trigger faults, visualize topology live). Cypher ≈ GQL. Fabric remains the production-scale story; Neo4j is the interactive demo story.
 - [ ] Real-time graph visualization in UI (D3-force / Neovis.js over Bolt websockets)
 - [ ] Click on a node, select a particular type of error or scenario, trigger it!

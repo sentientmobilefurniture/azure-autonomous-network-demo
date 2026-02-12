@@ -26,6 +26,18 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+# Fabric-perspective log emitter (imported lazily to avoid circular imports)
+def _emit_fabric_log(level: str, msg: str) -> None:
+    """Emit a synthetic fabric-query-api log to the fabric SSE channel."""
+    from app.routers.logs import broadcast_fabric_log
+    from datetime import datetime, timezone as _tz
+    broadcast_fabric_log({
+        "ts": datetime.now(_tz.utc).strftime("%H:%M:%S.%f")[:-3],
+        "level": level,
+        "name": "fabric-query-api",
+        "msg": msg,
+    })
+
 # ---------------------------------------------------------------------------
 # Paths & config
 # ---------------------------------------------------------------------------
@@ -225,6 +237,21 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     "Step FAILED: agent=%s  duration=%s  code=%s  error=%s\n  query=%s",
                     failed_agent, duration, err_code, err_msg, failed_query[:500] if failed_query else "(none)",
                 )
+
+                # Emit fabric-perspective logs for failed Graph/Telemetry calls
+                if failed_agent and ("Graph" in failed_agent or "Telemetry" in failed_agent):
+                    endpoint = "/query/graph" if "Graph" in failed_agent else "/query/telemetry"
+                    query_type = "GQL" if "Graph" in failed_agent else "KQL"
+                    _emit_fabric_log("INFO", f"▶ POST {endpoint}  (from {failed_agent})")
+                    if failed_query:
+                        try:
+                            q_obj = json.loads(failed_query) if failed_query.startswith("{") else None
+                            q_body = q_obj.get("query", failed_query) if q_obj else failed_query
+                        except Exception:
+                            q_body = failed_query
+                        _emit_fabric_log("DEBUG", f"{query_type} query:\n{q_body[:500]}")
+                    _emit_fabric_log("ERROR", f"◀ POST {endpoint} FAILED [{err_code}]: {err_msg}")
+
                 self.ui_step += 1
                 _put("step_complete", {
                     "step": self.ui_step,
@@ -289,6 +316,31 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         response = response[:2000] + "…"
 
                     logger.info("Emitting step %d: agent=%s duration=%s", self.ui_step, agent_name, duration)
+                    if query:
+                        logger.info("  ↳ query: %s", query[:300])
+                    if response:
+                        logger.info("  ↳ response (%d chars): %s", len(response), response[:200])
+
+                    # Emit fabric-perspective logs for Graph/Telemetry agents
+                    if agent_name and ("Graph" in agent_name or "Telemetry" in agent_name):
+                        endpoint = "/query/graph" if "Graph" in agent_name else "/query/telemetry"
+                        query_type = "GQL" if "Graph" in agent_name else "KQL"
+                        _emit_fabric_log("INFO", f"▶ POST {endpoint}  (from {agent_name})")
+                        if query:
+                            # Try to extract the actual query string
+                            try:
+                                q_obj = json.loads(query) if query.startswith("{") else None
+                                q_body = q_obj.get("query", query) if q_obj else query
+                            except Exception:
+                                q_body = query
+                            _emit_fabric_log("DEBUG", f"{query_type} query:\n{q_body[:500]}")
+                        if response:
+                            resp_preview = response[:300].replace("\n", " ")
+                            _emit_fabric_log("INFO", f"{query_type} response ({len(response)} chars, {duration}): {resp_preview}")
+                        else:
+                            _emit_fabric_log("WARNING", f"{query_type} returned empty response ({duration})")
+                        _emit_fabric_log("INFO", f"◀ POST {endpoint} → 200  ({duration})")
+
                     _put("step_start", {"step": self.ui_step, "agent": agent_name})
                     _put("step_complete", {
                         "step": self.ui_step,

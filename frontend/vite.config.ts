@@ -28,10 +28,9 @@ export default defineConfig({
           });
         },
       },
-      '/fabric-api/logs': {
-        target: 'http://localhost:8100',
+      '/api/fabric-logs': {
+        target: 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/fabric-api/, '/api'),
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes) => {
             proxyRes.headers['cache-control'] = 'no-cache';

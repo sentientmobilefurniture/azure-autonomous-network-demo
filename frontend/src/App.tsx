@@ -34,7 +34,7 @@ export default function App() {
       <div className="flex-1 min-h-0">
         <PanelGroup orientation="vertical" className="h-full">
           {/* Zone 2: Metrics bar — draggable bottom edge */}
-          <Panel defaultSize={30} minSize={15} maxSize={60}>
+          <Panel defaultSize={30} minSize={15}>
             <div className="h-full border-b border-white/10">
               <MetricsBar />
             </div>

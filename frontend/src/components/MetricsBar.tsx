@@ -76,7 +76,7 @@ export function MetricsBar() {
         <ResizeHandle />
         <Panel defaultSize={28} minSize={12}>
           <div className="h-full px-1">
-            <LogStream url="/fabric-api/logs" title="Fabric" />
+            <LogStream url="/api/fabric-logs" title="Fabric" />
           </div>
         </Panel>
       </PanelGroup>

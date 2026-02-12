@@ -412,9 +412,9 @@ class _SSELogHandler(logging.Handler):
 
 
 _sse_handler = _SSELogHandler()
-_sse_handler.setLevel(logging.INFO)
+_sse_handler.setLevel(logging.DEBUG)
 _sse_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_sse_handler.addFilter(lambda r: r.name.startswith(("fabric-query-api", "azure", "uvicorn")))
+_sse_handler.addFilter(lambda r: r.name.startswith(("fabric-query-api",)))
 logging.getLogger().addHandler(_sse_handler)
 
 
