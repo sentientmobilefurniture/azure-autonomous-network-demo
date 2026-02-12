@@ -15,7 +15,7 @@ When a primary MPLS path fails (typically due to a transport link cut), traffic 
 - Verify the secondary path's constituent `TransportLink` entities are all in `Status = Active`
 
 ### 2. Verify Alternate Path Capacity
-- Query time-series `UtilizationPct` on the secondary path's transport links from Eventhouse
+- Query time-series `UtilizationPct` on the secondary path's transport links from Cosmos DB
 - **Safe threshold**: Current utilisation + expected traffic < **80%** of link capacity
 - If above 80%: reroute is risky, may cause congestion. Escalate to capacity engineering.
 

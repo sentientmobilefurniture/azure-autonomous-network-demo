@@ -1,14 +1,14 @@
 [project]
 name = "graph-query-api"
 version = "0.5.0"
-description = "Micro-API for executing graph (GQL/Gremlin) and KQL queries for Foundry agents"
+description = "Micro-API for executing graph (GQL/Gremlin) and telemetry (Cosmos SQL) queries for Foundry agents"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "azure-identity>=1.19.0",
     "httpx>=0.28.0",
-    "azure-kusto-data>=4.6.0",
+    "azure-cosmos>=4.9.0",
     "gremlinpython>=3.7.0",
 ]
 

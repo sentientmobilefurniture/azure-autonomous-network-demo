@@ -1,5 +1,5 @@
 // infra/modules/cosmos-gremlin.bicep
-// Azure Cosmos DB account with Gremlin API, database, and graph.
+// Azure Cosmos DB account with Gremlin API (graph) and NoSQL API (telemetry).
 
 @description('Name of the Cosmos DB account')
 param accountName string
@@ -19,10 +19,17 @@ param partitionKeyPath string = '/partitionKey'
 @description('Maximum throughput for autoscale (RU/s)')
 param maxThroughput int = 1000
 
+@description('Name of the NoSQL database for telemetry')
+param telemetryDatabaseName string = 'telemetrydb'
+
+@description('Maximum throughput for autoscale on telemetry containers (RU/s)')
+param telemetryMaxThroughput int = 1000
+
 @description('Tags to apply to all resources')
 param tags object = {}
 
 // ─── Cosmos DB Account with Gremlin capability ───────────────────────────────
+// NOTE: An account with EnableGremlin can also host NoSQL (SQL API) databases.
 
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
   name: accountName
@@ -94,6 +101,82 @@ resource graph 'Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs@20
   }
 }
 
+// ─── NoSQL Database (telemetry) ──────────────────────────────────────────────
+
+resource telemetryDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = {
+  name: telemetryDatabaseName
+  parent: cosmosAccount
+  properties: {
+    resource: {
+      id: telemetryDatabaseName
+    }
+  }
+}
+
+// ─── NoSQL Container: AlertStream ────────────────────────────────────────────
+
+resource alertStreamContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  name: 'AlertStream'
+  parent: telemetryDatabase
+  properties: {
+    resource: {
+      id: 'AlertStream'
+      partitionKey: {
+        paths: ['/SourceNodeType']
+        kind: 'Hash'
+        version: 2
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/*' }
+        ]
+        excludedPaths: [
+          { path: '/"_etag"/?' }
+        ]
+      }
+    }
+    options: {
+      autoscaleSettings: {
+        maxThroughput: telemetryMaxThroughput
+      }
+    }
+  }
+}
+
+// ─── NoSQL Container: LinkTelemetry ──────────────────────────────────────────
+
+resource linkTelemetryContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  name: 'LinkTelemetry'
+  parent: telemetryDatabase
+  properties: {
+    resource: {
+      id: 'LinkTelemetry'
+      partitionKey: {
+        paths: ['/LinkId']
+        kind: 'Hash'
+        version: 2
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/*' }
+        ]
+        excludedPaths: [
+          { path: '/"_etag"/?' }
+        ]
+      }
+    }
+    options: {
+      autoscaleSettings: {
+        maxThroughput: telemetryMaxThroughput
+      }
+    }
+  }
+}
+
 // ─── Outputs ─────────────────────────────────────────────────────────────────
 
 @description('The Gremlin endpoint hostname (without protocol)')
@@ -113,3 +196,9 @@ output cosmosAccountId string = cosmosAccount.id
 
 @description('The primary key for key-based Gremlin auth')
 output primaryKey string = cosmosAccount.listKeys().primaryMasterKey
+
+@description('The Cosmos DB NoSQL endpoint (https://<account>.documents.azure.com:443/)')
+output cosmosNoSqlEndpoint string = cosmosAccount.properties.documentEndpoint
+
+@description('The NoSQL telemetry database name')
+output telemetryDatabaseName string = telemetryDatabase.name

@@ -37,11 +37,11 @@ WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
 GRAPH_MODEL_ID = os.getenv("FABRIC_GRAPH_MODEL_ID", "")
 
 # ---------------------------------------------------------------------------
-# KQL / Eventhouse settings (used by /query/telemetry, all backends)
+# Cosmos DB NoSQL settings (used by /query/telemetry, all backends)
 # ---------------------------------------------------------------------------
 
-EVENTHOUSE_QUERY_URI = os.getenv("EVENTHOUSE_QUERY_URI", "")
-KQL_DB_NAME = os.getenv("FABRIC_KQL_DB_NAME", "")
+COSMOS_NOSQL_ENDPOINT = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
+COSMOS_NOSQL_DATABASE = os.getenv("COSMOS_NOSQL_DATABASE", "telemetrydb")
 
 # ---------------------------------------------------------------------------
 # Cosmos DB Gremlin settings (used by GRAPH_BACKEND=cosmosdb)
@@ -65,7 +65,6 @@ credential = DefaultAzureCredential()
 BACKEND_REQUIRED_VARS: dict[GraphBackendType, tuple[str, ...]] = {
     GraphBackendType.FABRIC: (
         "FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID",
-        "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME",
     ),
     GraphBackendType.COSMOSDB: (
         "COSMOS_GREMLIN_ENDPOINT",
@@ -74,7 +73,7 @@ BACKEND_REQUIRED_VARS: dict[GraphBackendType, tuple[str, ...]] = {
     GraphBackendType.MOCK: (),
 }
 
-# Telemetry (KQL) vars — optional; /query/telemetry fails gracefully without them
+# Telemetry (Cosmos NoSQL) vars — optional; /query/telemetry fails gracefully without them
 TELEMETRY_REQUIRED_VARS: tuple[str, ...] = (
-    "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME",
+    "COSMOS_NOSQL_ENDPOINT", "COSMOS_NOSQL_DATABASE",
 )

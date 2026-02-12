@@ -49,7 +49,7 @@ Full architecture documentation: `documentation/ARCHITECTURE.md`
 | Agent | Tool | Data Source |
 |-------|------|-------------|
 | GraphExplorerAgent | `OpenApiTool` | graph-query-api → Fabric GraphModel (GQL) |
-| TelemetryAgent | `OpenApiTool` | graph-query-api → Fabric Eventhouse (KQL) |
+| TelemetryAgent | `OpenApiTool` | graph-query-api → Cosmos DB NoSQL (SQL) |
 | RunbookKBAgent | `AzureAISearchTool` | runbooks-index (hybrid search) |
 | HistoricalTicketAgent | `AzureAISearchTool` | tickets-index (hybrid search) |
 | Orchestrator | `ConnectedAgentTool` | Wired to all 4 above |
@@ -68,7 +68,7 @@ for the full rationale.
 |---------|---------------|-----|
 | `azure-ai-projects` | `>=1.0.0,<2.0.0` | **v2 has breaking API changes** — different client setup, different method names |
 | `azure-ai-agents` | `==1.2.0b6` | Specific beta with `OpenApiTool`, `ConnectedAgentTool`, `AzureAISearchTool` |
-| `azure-kusto-data` | `>=4.6.0` | KQL queries against Eventhouse |
+| `azure-cosmos` | `>=4.9.0` | SQL queries against Cosmos DB NoSQL |
 
 ### SDK patterns that MUST be followed
 
@@ -192,7 +192,7 @@ Zone 2 and Zone 3 use a vertical `PanelGroup` (react-resizable-panels). MetricsB
 ```
 1. azd up                         → Azure resources + graph-query-api deployed
 2. provision_lakehouse.py          → Fabric workspace + lakehouse + CSV data
-3. provision_eventhouse.py         → Eventhouse + KQL tables + CSV data
+3. provision_cosmos_telemetry.py    → Cosmos DB NoSQL telemetry containers + CSV data
 4. provision_ontology.py           → Ontology (graph index) on lakehouse data
 5. populate_fabric_config.py       → Discover Fabric IDs → azure_config.env
 6. assign_fabric_role.py           → Grant Container App identity Fabric workspace access

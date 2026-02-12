@@ -6,7 +6,7 @@ Demonstrate that a fully autonomous network operations centre can be built
 today as an Azure-native product using generally available services. No
 third-party orchestration frameworks, no bespoke graph databases, no custom
 ML pipelines. Every component — knowledge graph, telemetry store, search
-indices, agent runtime, model hosting — runs on Azure Fabric, Foundry, and
+indices, agent runtime, model hosting — runs on Azure Cosmos DB, Foundry, and
 AI Search.
 
 The demo answers one question: **when a fibre is cut and hundreds of alerts
@@ -99,8 +99,8 @@ degraded" backward through dependencies to "LINK-SYD-MEL-FIBRE-01 is dark."
 
 | Store | Azure Service | Contents | Query method |
 |-------|---------------|----------|--------------|
-| **Topology graph** | Fabric Ontology + Lakehouse | 8 entity types, 7 relationship types, ~50 nodes | GQL via Fabric Data Agent |
-| **Telemetry** | Fabric Eventhouse (KQL DB) | `AlertStream` (alerts with severity, optical power, BER, CPU, packet loss), `LinkTelemetry` (5-min interval readings per link) | KQL via Fabric Data Agent |
+| **Topology graph** | Azure Cosmos DB (Gremlin) | 8 entity types, 7 relationship types, ~50 nodes | Gremlin via graph-query-api |
+| **Telemetry** | Azure Cosmos DB NoSQL | `AlertStream` (alerts with severity, optical power, BER, CPU, packet loss), `LinkTelemetry` (5-min interval readings per link) | SQL via graph-query-api |
 | **Runbooks** | Azure AI Search (`runbooks-index`) | 5 operational runbooks: fibre cut, BGP peer loss, alert storm triage, traffic reroute, customer communication | Hybrid search (vector + keyword) |
 | **Tickets** | Azure AI Search (`tickets-index`) | 10 historical incidents (Aug 2025 – Feb 2026) with root cause, resolution, timing, lessons learned | Hybrid search (vector + keyword) |
 
@@ -113,8 +113,8 @@ Five Foundry agents, each scoped to one responsibility:
 | Agent | Role | Data source | Tool |
 |-------|------|-------------|------|
 | **Orchestrator** | Supervisor. Receives alert, coordinates investigation, synthesises diagnosis. Does not access data directly. | — | ConnectedAgentTool (all 4 below) |
-| **GraphExplorerAgent** | Topology and dependency analysis. Forward trace (link → path → service → SLA) and reverse trace (service → path → link). | Fabric Ontology/Lakehouse | FabricTool → Fabric Data Agent |
-| **TelemetryAgent** | Raw data retrieval. Returns alerts, telemetry readings, metric values without interpretation. The orchestrator interprets. | Fabric Eventhouse | FabricTool → Fabric Data Agent |
+| **GraphExplorerAgent** | Topology and dependency analysis. Forward trace (link → path → service → SLA) and reverse trace (service → path → link). | Cosmos DB Gremlin | OpenApiTool → graph-query-api |
+| **TelemetryAgent** | Raw data retrieval. Returns alerts, telemetry readings, metric values without interpretation. The orchestrator interprets. | Cosmos DB NoSQL | OpenApiTool → graph-query-api |
 | **RunbookKBAgent** | Procedure lookup. Returns SOPs, diagnostic steps, escalation paths, communication templates. | AI Search `runbooks-index` | AzureAISearchTool |
 | **HistoricalTicketAgent** | Precedent search. Finds past incidents with matching root cause type, corridor, or failure pattern. | AI Search `tickets-index` | AzureAISearchTool |
 
@@ -181,11 +181,11 @@ breach windows.
 
 | Claim | Evidence |
 |-------|----------|
-| **Azure can host a knowledge plane** | Fabric Ontology encodes network topology as a queryable graph with typed entities and relationships. Not a flat database — real semantic structure with multi-hop traversal. |
+| **Azure can host a knowledge plane** | Cosmos DB Gremlin encodes network topology as a queryable graph with typed entities and relationships. Not a flat database — real semantic structure with multi-hop traversal. |
 | **Agents can reason over structured knowledge** | GraphExplorerAgent traces 3-hop dependency chains (link → path → service → SLA) to determine blast radius from a single root cause. |
-| **Agents combine structured + unstructured knowledge** | Topology from the graph, telemetry from Eventhouse, runbooks and tickets from vector search — four data modalities fused into one diagnosis. |
+| **Agents combine structured + unstructured knowledge** | Topology from the graph, telemetry from Cosmos DB NoSQL, runbooks and tickets from vector search — four data modalities fused into one diagnosis. |
 | **Multi-agent orchestration works at production quality** | Orchestrator delegates to four specialists, synthesises their outputs into a structured situation report, cites sources, and does not fabricate. |
-| **The entire stack is Azure-native** | Fabric (Lakehouse, Eventhouse, Ontology, Data Agent), AI Foundry (agents, GPT-4.1), AI Search, Azure Storage. No external dependencies. |
+| **The entire stack is Azure-native** | Cosmos DB (Gremlin graph, NoSQL telemetry), AI Foundry (agents, GPT-4.1), AI Search, Azure Storage. No external dependencies. |
 | **This is the path to autonomous operations** | Today: agents diagnose and recommend. Next: agents execute (MPLS failover, ticket creation, customer notification) with human approval gates. Eventually: humans outside the loop for low-risk actions. |
 
 ---
@@ -213,8 +213,8 @@ gating based on risk classification.
 ## End goal
 
 A fully Azure-native autonomous network operations platform that a telco
-can deploy on their own Azure tenant. Fabric for the knowledge plane
-(topology, telemetry, ontology). Foundry for the reasoning plane (agents,
+can deploy on their own Azure tenant. Cosmos DB for the knowledge plane
+(topology graph, telemetry store). Foundry for the reasoning plane (agents,
 models, orchestration). AI Search for operational knowledge (runbooks,
 tickets). No vendor lock-in to third-party AIOps platforms. The telco owns
 the data, the models, the agents, and the knowledge graph — all running on

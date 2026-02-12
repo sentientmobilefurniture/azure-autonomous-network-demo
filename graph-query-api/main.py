@@ -3,7 +3,7 @@ Graph Query API — Micro-service for graph and telemetry queries.
 
 Exposes two POST endpoints:
   POST /query/graph      — Execute a graph query (GQL, Gremlin, or mock via GRAPH_BACKEND)
-  POST /query/telemetry  — Execute a KQL query against the Fabric Eventhouse
+  POST /query/telemetry  — Execute a SQL query against Cosmos DB NoSQL telemetry containers
 
 The graph backend is selected by the GRAPH_BACKEND env var:
   fabric   → GQL queries against Fabric GraphModel REST API (default)
@@ -76,7 +76,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(
     title="Graph Query API",
     version="0.5.0",
-    description=f"Graph ({GRAPH_BACKEND.value}) and KQL queries for Foundry agents.",
+    description=f"Graph ({GRAPH_BACKEND.value}) and telemetry queries for Foundry agents.",
     lifespan=_lifespan,
 )
 

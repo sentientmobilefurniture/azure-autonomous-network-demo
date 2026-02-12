@@ -3,7 +3,7 @@ info:
   title: Graph Query API
   version: "0.5.0"
   description: |
-    Micro-API for querying network topology (mock mode) and KQL.
+    Micro-API for querying network topology (mock mode) and telemetry.
     Used by Foundry agents via OpenApiTool.
     Backend: Mock (static responses, no external dependency)
 # NOTE: Template placeholders ({base_url}, etc.) are substituted
@@ -67,11 +67,12 @@ paths:
   /query/telemetry:
     post:
       operationId: query_telemetry
-      summary: Execute a KQL query against the Fabric Eventhouse
+      summary: Execute a SQL query against telemetry data in Cosmos DB
       description: |
-        Submits a KQL query to the Fabric Eventhouse (NetworkDB).
+        Submits a Cosmos SQL query to a telemetry container in Azure Cosmos DB NoSQL.
         Returns columns and rows of alert or telemetry data.
-        Tables available: AlertStream (~5000 rows), LinkTelemetry (~8640 rows).
+        Containers available: AlertStream (~5000 docs), LinkTelemetry (~8640 docs).
+        Use standard SQL syntax: SELECT, FROM c, WHERE, ORDER BY, TOP, GROUP BY.
       requestBody:
         required: true
         content:
@@ -80,22 +81,21 @@ paths:
               type: object
               required:
                 - query
-                - eventhouse_query_uri
-                - kql_db_name
+                - container_name
               properties:
                 query:
                   type: string
                   description: |
-                    A KQL query string targeting AlertStream or LinkTelemetry tables.
-                    Example: AlertStream | where Severity == 'CRITICAL' | top 5 by Timestamp desc
-                eventhouse_query_uri:
+                    A Cosmos SQL query string.
+                    Always use FROM c as the alias.
+                    Example: SELECT c.AlertId, c.Severity, c.Description FROM c WHERE c.Severity = 'CRITICAL' ORDER BY c.Timestamp DESC OFFSET 0 LIMIT 5
+                container_name:
                   type: string
-                  enum: ["{eventhouse_query_uri}"]
-                  description: Kusto query URI for the Eventhouse. Always use the value shown.
-                kql_db_name:
-                  type: string
-                  enum: ["{kql_db_name}"]
-                  description: KQL database name. Always use the value shown.
+                  enum: ["AlertStream", "LinkTelemetry"]
+                  description: |
+                    The Cosmos DB container to query.
+                    Use "AlertStream" for network alerts.
+                    Use "LinkTelemetry" for link telemetry readings.
       responses:
         "200":
           description: Query results (check 'error' field for query failures)

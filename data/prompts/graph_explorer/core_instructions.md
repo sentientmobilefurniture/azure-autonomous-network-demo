@@ -29,7 +29,7 @@ You have access to a `query_graph` tool that executes queries against the networ
 
 ## What you cannot answer
 
-- Time-series questions about alerts, utilisation, or telemetry — those are in the Eventhouse, not the ontology.
+- Time-series questions about alerts, utilisation, or telemetry — those are in the telemetry database, not the ontology.
 - Operational procedures or runbook guidance — that's a different knowledge source.
 - Historical incident data — that's in the tickets index.
 

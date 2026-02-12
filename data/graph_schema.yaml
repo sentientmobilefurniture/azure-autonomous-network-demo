@@ -9,7 +9,7 @@
 # ============================================================================
 
 # Directory containing CSV files (relative to project root)
-data_dir: data/lakehouse
+data_dir: data/network
 
 # ---------------------------------------------------------------------------
 # Vertices

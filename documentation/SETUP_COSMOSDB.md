@@ -49,23 +49,20 @@ This loads:
 
 The loader is idempotent — re-running it drops and recreates all data.
 
-### 3. Set up Eventhouse (telemetry)
+### 3. Set up telemetry (Cosmos DB NoSQL)
 
-The telemetry backend (KQL queries via `/query/telemetry`) requires a Fabric
-Eventhouse regardless of graph backend. You need a Fabric workspace with an
-Eventhouse provisioned:
+The telemetry backend (SQL queries via `/query/telemetry`) uses a Cosmos DB
+NoSQL account. Infrastructure is provisioned by `azd up` alongside the Gremlin
+graph account.
 
-```bash
-uv run python scripts/fabric/provision_eventhouse.py
-```
-
-Then populate the config:
+Load telemetry data:
 
 ```bash
-uv run python scripts/fabric/populate_fabric_config.py
+uv run python scripts/cosmos/provision_cosmos_telemetry.py
 ```
 
-This writes `EVENTHOUSE_QUERY_URI` and `FABRIC_KQL_DB_NAME` to `azure_config.env`.
+`postprovision.sh` automatically writes `COSMOS_NOSQL_ENDPOINT` and
+`COSMOS_NOSQL_DATABASE` to `azure_config.env`.
 
 > **Note:** If you don't need telemetry queries, you can skip this step. The
 > graph-query-api will start with warnings about missing telemetry env vars but
@@ -84,7 +81,7 @@ Or update individual env vars:
 ```bash
 source azure_config.env
 az containerapp update --name <ca-name> --resource-group $AZURE_RESOURCE_GROUP \
-  --set-env-vars "EVENTHOUSE_QUERY_URI=$EVENTHOUSE_QUERY_URI" "FABRIC_KQL_DB_NAME=$FABRIC_KQL_DB_NAME"
+  --set-env-vars "COSMOS_NOSQL_ENDPOINT=$COSMOS_NOSQL_ENDPOINT" "COSMOS_NOSQL_DATABASE=$COSMOS_NOSQL_DATABASE"
 ```
 
 ### 5. Verify
@@ -103,7 +100,7 @@ Container App.
 The graph topology is defined declaratively in `data/graph_schema.yaml`:
 
 ```yaml
-data_dir: data/lakehouse
+data_dir: data/network
 
 vertices:
   - label: CoreRouter
@@ -147,7 +144,7 @@ against the Cosmos DB Gremlin endpoint. Results are normalized to a
 
 - **Cosmos DB Gremlin:** Autoscale to 1000 RU/s max (~$0.012/hr at minimum)
 - **Container App:** 0.25 vCPU, 0.5 GiB (~$0.012/hr)
-- **No Fabric capacity needed** for the graph (only for Eventhouse telemetry)
+- **No Fabric capacity needed** for graph or telemetry (both use Cosmos DB)
 
 ---
 
@@ -174,5 +171,5 @@ az cosmosdb keys list --name $COSMOS_ACCOUNT --resource-group $RG --query primar
 ### Empty graph results
 
 - Re-run `uv run python scripts/cosmos/provision_cosmos_gremlin.py`
-- Check that CSV files exist in `data/lakehouse/`
+- Check that CSV files exist in `data/network/`
 - Verify in Azure portal → Cosmos DB → Data Explorer that vertices exist

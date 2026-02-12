@@ -46,8 +46,8 @@ htmlcov/
 .mypy_cache/
 
 # --- Generated data (recreated by data/scripts/) ---
-data/lakehouse/
-data/eventhouse/
+data/network/
+data/telemetry/
 data/cosmosdb/
 
 # --- Azure Functions (local dev artifacts) ---

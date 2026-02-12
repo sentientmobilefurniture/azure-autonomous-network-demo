@@ -45,13 +45,13 @@ The system has strong architectural foundations (error-as-200 pattern, backend a
 
 ### 3b. Provisioning ordering not enforced
 
-The 9-step provisioning pipeline has strict ordering dependencies documented only in READMEs:
+The provisioning pipeline has strict ordering dependencies documented only in READMEs:
 
 ```
-azd up → indexers → lakehouse → eventhouse → ontology → populate_config → assign_role → provision_agents
+azd up → indexers → cosmos_graph → cosmos_telemetry → provision_agents
 ```
 
-No script validates its prerequisites exist. Running out of order produces **silently broken state**: agents created with empty tool URLs, ontology referencing non-existent lakehouses, search indexes with zero documents.
+No script validates its prerequisites exist. Running out of order produces **silently broken state**: agents created with empty tool URLs, Cosmos DB containers missing data, search indexes with zero documents.
 
 ### 3c. Half-provisioned agent state
 
@@ -75,7 +75,7 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | **SSE consumer hangs forever if sentinel fails** | HIGH | `api/app/orchestrator.py` — `queue.get()` with no timeout |
 | **Log subscriber coroutine leak** | HIGH | `api/app/routers/logs.py` — evicted subscribers never receive sentinel; generator hangs forever |
 | **Thread-safety on subscriber set** | HIGH | `api/app/routers/logs.py` + `graph-query-api/main.py` — `set` iterated and mutated from different threads |
-| **KustoClient leaked on URI change** | HIGH | `graph-query-api/router_telemetry.py` — old client never closed |
+| **CosmosClient leaked on URI change** | HIGH | `graph-query-api/router_telemetry.py` — old client never closed |
 | **Gremlin WSS no reconnection** | HIGH | `graph-query-api/backends/cosmosdb.py` — dead WebSocket causes all queries to fail permanently |
 | **Gremlin close() not thread-safe** | HIGH | `graph-query-api/backends/cosmosdb.py` — concurrent close + query = corruption |
 | **Backend singleton race** | MEDIUM | `graph-query-api/router_graph.py` — no lock on init |
@@ -162,7 +162,7 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 |---|----------|-------|
 | 1 | Import-time crash | `DefaultAzureCredential()` at module import. No identity = crash before mock backend can load. |
 | 2 | No credential recreation | If identity provider goes down temporarily, no way to recreate credential without restart. |
-| 3 | Mock requires KQL vars | `BACKEND_REQUIRED_VARS` lists KQL env vars for mock, contradicting offline purpose. |
+| 3 | Mock requires telemetry vars | `BACKEND_REQUIRED_VARS` lists telemetry env vars for mock, contradicting offline purpose. |
 
 ### 6.7 graph-query-api — `main.py`
 
@@ -188,9 +188,9 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 
 | # | Category | Issue |
 |---|----------|-------|
-| 1 | KustoClient leaked | When URI changes, new client created but old one never closed. Leaks HTTP connections. |
+| 1 | CosmosClient leaked | When URI changes, new client created but old one never closed. Leaks HTTP connections. |
 | 2 | IndexError on empty results | `primary_results[0]` can raise `IndexError` — guard only checks for `None`, not empty list. |
-| 3 | All rows loaded into memory | No pagination. KQL returning millions of rows could OOM the container. |
+| 3 | All rows loaded into memory | No pagination. SQL queries returning millions of rows could OOM the container. |
 
 ### 6.10 graph-query-api — `backends/fabric.py`
 

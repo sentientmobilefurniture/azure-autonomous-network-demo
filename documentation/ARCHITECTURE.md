@@ -17,7 +17,7 @@
 Multi-agent NOC diagnosis system. An alert enters via the frontend, flows through
 a FastAPI backend that streams SSE progress, and reaches an orchestrator agent in
 Azure AI Foundry. The orchestrator delegates to four specialist agents, each backed
-by a distinct data source in Microsoft Fabric or Azure AI Search.
+by a distinct data source in Azure Cosmos DB or Azure AI Search.
 
 Three deployable services:
 - **API** (port 8000) — FastAPI backend, orchestrator bridge, SSE streaming
@@ -47,14 +47,14 @@ Three deployable services:
               ┌──────────────────┐   ┌──────────────────┐  ┌──────────────┐  ┌──────────────────┐
               │ graph-query-api │   │ graph-query-api │  │ runbooks-    │  │ tickets-         │
               │ POST /query/     │   │ POST /query/     │  │ index        │  │ index            │
-              │ graph            │   │ telemetry (KQL)  │  │ (hybrid)     │  │ (hybrid)         │
+              │ graph            │   │ telemetry (SQL)  │  │ (hybrid)     │  │ (hybrid)         │
               └────────┬─────────┘   └────────┬─────────┘  └──────────────┘  └──────────────────┘
                        │ dispatches           │
                        ▼ via GRAPH_BACKEND    ▼
               ┌──────────────────┐   ┌───────────────┐
-              │  Backend layer   │   │ Fabric        │
-              │  ┌─ fabric.py   │   │ Eventhouse    │
-              │  ├─ cosmosdb.py │   │ (KQL/Kusto)   │
+              │  Backend layer   │   │ Cosmos DB     │
+              │  ┌─ fabric.py   │   │ NoSQL         │
+              │  ├─ cosmosdb.py │   │ (SQL API)     │
               │  └─ mock.py     │   └───────────────┘
               └──────────────────┘
 ```
@@ -89,8 +89,8 @@ Three deployable services:
 ├── data/                       # Source data (checked in)
 │   ├── runbooks/               # Markdown runbook files → uploaded to blob → AI Search
 │   ├── tickets/                # JSON ticket files → uploaded to blob → AI Search
-│   ├── lakehouse/              # CSV topology data → loaded into Fabric Lakehouse
-│   ├── eventhouse/             # CSV telemetry data → ingested into Fabric Eventhouse
+│   ├── network/                # CSV topology data (vertices & edges)
+│   ├── telemetry/              # CSV telemetry data (alerts & link metrics)
 │   ├── prompts/                # Agent system prompts — see "Agent Prompt Architecture"
 │   │   ├── foundry_orchestrator_agent.md
 │   │   ├── foundry_telemetry_agent_v2.md
@@ -141,14 +141,14 @@ Three deployable services:
 │       │   ├── agents.py       # GET /api/agents → list of agent metadata
 │       │   └── logs.py         # GET /api/logs + /api/fabric-logs → SSE log streams
 │       └── mcp/
-│           └── server.py       # FastMCP tool stubs (query_eventhouse, search_tickets, …)
+│           └── server.py       # FastMCP tool stubs (query_telemetry, search_tickets, …)
 │
 ├── graph-query-api/           # Graph & telemetry microservice — V4 architecture
 │   ├── main.py                 # Slim app factory: middleware, health, log SSE, router mounts
 │   ├── config.py               # GRAPH_BACKEND enum, env var loading, credential
 │   ├── models.py               # Pydantic request/response models (shared across backends)
 │   ├── router_graph.py         # POST /query/graph — dispatches to backend via Protocol
-│   ├── router_telemetry.py     # POST /query/telemetry — KQL via Kusto SDK
+│   ├── router_telemetry.py     # POST /query/telemetry — SQL via Cosmos SDK
 │   ├── backends/               # Backend abstraction layer (V4)
 │   │   ├── __init__.py         # GraphBackend Protocol + get_backend() factory
 │   │   ├── fabric.py           # Fabric GraphModel GQL via REST API (production)
@@ -158,7 +158,7 @@ Three deployable services:
 │   │   ├── fabric.yaml         # GQL description, workspace_id/graph_model_id params
 │   │   ├── cosmosdb.yaml       # Gremlin description, no Fabric-specific params
 │   │   └── mock.yaml           # Generic description
-│   ├── pyproject.toml          # Python deps (fastapi, uvicorn, azure-identity, azure-kusto-data)
+│   ├── pyproject.toml          # Python deps (fastapi, uvicorn, azure-identity, azure-cosmos)
 │   └── Dockerfile              # python:3.11-slim, uv for deps, port 8100
 │
 ├── frontend/                   # React SPA — NOC Dashboard
@@ -254,12 +254,12 @@ The `error` field is key to error resilience — see [Error Resilience](#error-r
   returned as **HTTP 200 with `error` in the response body**
 - Backend is closed on app shutdown via `close_graph_backend()`
 
-#### `router_telemetry.py` — KQL Queries
+#### `router_telemetry.py` — SQL Queries
 
-- `POST /query/telemetry` — KQL queries against Fabric Eventhouse
-- Thread-safe cached `KustoClient` (recreated if URI changes)
-- Sync KQL execution wrapped in `asyncio.to_thread()` 
-- `KustoServiceError` caught → 200 + error payload (not HTTP 400)
+- `POST /query/telemetry` — SQL queries against Cosmos DB NoSQL
+- Thread-safe cached `CosmosClient` (recreated if URI changes)
+- Sync SQL execution wrapped in `asyncio.to_thread()` 
+- `CosmosHttpResponseError` caught → 200 + error payload (not HTTP 400)
 - Auto-serialises `datetime` values via `.isoformat()`
 
 #### `backends/` — Protocol + Implementations
@@ -321,7 +321,7 @@ Three standalone OpenAPI 3.0.3 specs in `openapi/`, each consumed by Foundry's
 | `cosmosdb.yaml` | Gremlin query language, Gremlin examples | None (server-side config) |
 | `mock.yaml` | Generic "send any query string" | None |
 
-All specs share the same `/query/telemetry` definition (KQL, unchanged across backends).
+All specs share the same `/query/telemetry` definition (SQL, unchanged across backends).
 Each 200 response schema includes an `error` field (nullable string) with a description
 instructing the LLM to read the error and retry with corrected syntax.
 
@@ -408,7 +408,7 @@ Five Foundry agents, each scoped to one responsibility:
 |-------|------|-------------|-----------|
 | **Orchestrator** | Supervisor — coordinates investigation, synthesises diagnosis | — | `ConnectedAgentTool` → 4 sub-agents |
 | **GraphExplorerAgent** | Topology & dependency analysis (forward/reverse trace) | Fabric GraphModel (GQL) | `OpenApiTool` → `/query/graph` |
-| **TelemetryAgent** | Raw telemetry & alert retrieval | Fabric Eventhouse (KQL) | `OpenApiTool` → `/query/telemetry` |
+| **TelemetryAgent** | Raw telemetry & alert retrieval | Cosmos DB NoSQL (SQL) | `OpenApiTool` → `/query/telemetry` |
 | **RunbookKBAgent** | Procedure lookup (SOPs, diagnostics, escalation) | AI Search `runbooks-index` | `AzureAISearchTool` |
 | **HistoricalTicketAgent** | Precedent search (past incidents, resolution patterns) | AI Search `tickets-index` | `AzureAISearchTool` |
 
@@ -818,6 +818,11 @@ azure_config.env → preprovision.sh → azd up (Bicep) → postprovision.sh →
                                        ├─ Container Apps Environment (ACR + Log Analytics)
                                        └─ graph-query-api Container App (deployed by azd deploy)
 
+# Cosmos DB flow (default):
+provision_cosmos_gremlin.py ── CSV topology data ──────▶ Cosmos DB Gremlin (graph)
+provision_cosmos_telemetry.py ─ CSV telemetry data ────▶ Cosmos DB NoSQL (telemetry)
+
+# Fabric flow (alternative):
 provision_lakehouse.py ─── CSV topology data ──────────▶ Fabric Lakehouse
 provision_eventhouse.py ── CSV telemetry data ─────────▶ Fabric Eventhouse (KQL)
 provision_ontology.py ──── ontology definition ────────▶ Fabric Ontology (graph index)
@@ -844,7 +849,7 @@ User types alert in frontend
       ├─ GraphExplorerAgent → OpenApiTool → graph-query-api /query/graph
       │   → dispatches to backends/{GRAPH_BACKEND}.py → Fabric/Cosmos/Mock
       ├─ TelemetryAgent → OpenApiTool → graph-query-api /query/telemetry
-      │   → KustoClient → Fabric Eventhouse
+      │   → CosmosClient → Cosmos DB NoSQL
       ├─ RunbookKBAgent → AzureAISearchTool → runbooks-index
       └─ HistoricalTicketAgent → AzureAISearchTool → tickets-index
   → Each sub-agent call yields SSE events (step_start, step_thinking, step_complete)
@@ -855,7 +860,7 @@ User types alert in frontend
 ### Error Recovery Flow
 
 ```
-Sub-agent tool call returns error (e.g., bad KQL syntax)
+Sub-agent tool call returns error (e.g., bad SQL syntax)
   → graph-query-api catches exception, returns 200 + {error: "..."}
   → Sub-agent LLM reads error message
   → Sub-agent retries with corrected query (prompt instructs self-repair)
@@ -890,7 +895,7 @@ CORS_ORIGINS must be updated to the production frontend URL before deploying.
 |---------|---------|-------|
 | `azure-ai-projects` | `>=1.0.0,<2.0.0` | v2 has breaking API changes |
 | `azure-ai-agents` | `1.2.0b6` | `OpenApiTool`, `ConnectedAgentTool`, `AzureAISearchTool` |
-| `azure-kusto-data` | `>=4.6.0` | KQL queries against Eventhouse |
+| `azure-cosmos` | `>=4.7.0` | SQL queries against Cosmos DB NoSQL |
 | `fastapi` | `>=0.115` | ASGI framework |
 | `sse-starlette` | `>=2.0` | SSE responses |
 | `mcp[cli]` | `>=1.9.0` | FastMCP server framework |

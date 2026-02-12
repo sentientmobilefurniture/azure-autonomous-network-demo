@@ -150,6 +150,7 @@ PREV_GPT_CAPACITY="${GPT_CAPACITY_1K_TPM:-10}"
 PREV_GRAPH_BACKEND="${GRAPH_BACKEND:-cosmosdb}"
 PREV_COSMOS_GREMLIN_DB="${COSMOS_GREMLIN_DATABASE:-networkgraph}"
 PREV_COSMOS_GREMLIN_GRAPH="${COSMOS_GREMLIN_GRAPH:-topology}"
+PREV_COSMOS_NOSQL_DB="${COSMOS_NOSQL_DATABASE:-telemetrydb}"
 
 cat > "$CONFIG_FILE" <<EOF
 # ============================================================================
@@ -240,6 +241,10 @@ COSMOS_GREMLIN_ENDPOINT=${COSMOS_GREMLIN_ENDPOINT:-}
 COSMOS_GREMLIN_PRIMARY_KEY=${COSMOS_GREMLIN_PRIMARY_KEY:-}
 COSMOS_GREMLIN_DATABASE=${PREV_COSMOS_GREMLIN_DB}
 COSMOS_GREMLIN_GRAPH=${PREV_COSMOS_GREMLIN_GRAPH}
+
+# --- Cosmos DB NoSQL / Telemetry (AUTO: from deployment) ---
+COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
+COSMOS_NOSQL_DATABASE=${PREV_COSMOS_NOSQL_DB}
 EOF
 # --------------------------------------------------------------------------
 # 5. Auto-populate Cosmos DB Gremlin credentials (if deployed)
@@ -259,7 +264,16 @@ if [ -n "$COSMOS_ACCOUNT" ]; then
     # Patch the values in-place in azure_config.env
     sed -i "s|^COSMOS_GREMLIN_ENDPOINT=.*|COSMOS_GREMLIN_ENDPOINT=$COSMOS_EP|" "$CONFIG_FILE"
     sed -i "s|^COSMOS_GREMLIN_PRIMARY_KEY=.*|COSMOS_GREMLIN_PRIMARY_KEY=$COSMOS_KEY|" "$CONFIG_FILE"
-    echo "  ✓ Cosmos DB credentials populated"
+    echo "  ✓ Cosmos DB Gremlin credentials populated"
+    # Also populate the NoSQL endpoint (same account)
+    COSMOS_NOSQL_EP="${COSMOS_NOSQL_ENDPOINT:-}"
+    if [ -z "$COSMOS_NOSQL_EP" ]; then
+      COSMOS_NOSQL_EP=$(az cosmosdb show --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query documentEndpoint -o tsv 2>/dev/null || true)
+    fi
+    if [ -n "$COSMOS_NOSQL_EP" ]; then
+      sed -i "s|^COSMOS_NOSQL_ENDPOINT=.*|COSMOS_NOSQL_ENDPOINT=$COSMOS_NOSQL_EP|" "$CONFIG_FILE"
+      echo "  ✓ Cosmos DB NoSQL endpoint populated"
+    fi
   else
     echo "  ⚠ Could not fetch Cosmos DB key — set COSMOS_GREMLIN_PRIMARY_KEY manually in azure_config.env"
   fi

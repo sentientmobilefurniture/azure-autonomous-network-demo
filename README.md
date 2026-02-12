@@ -18,7 +18,7 @@ Foundry delegates to four specialists:
 | Agent | Data Source | Tool |
 |-------|-----------|------|
 | **GraphExplorer** | Network topology graph | `OpenApiTool` → `graph-query-api /query/graph` |
-| **Telemetry** | Metrics & alerts in Fabric Eventhouse | `OpenApiTool` → `graph-query-api /query/telemetry` |
+| **Telemetry** | Metrics & alerts in Cosmos DB NoSQL | `OpenApiTool` → `graph-query-api /query/telemetry` |
 | **RunbookKB** | Operational procedures | `AzureAISearchTool` → `runbooks-index` |
 | **HistoricalTicket** | Past incident records | `AzureAISearchTool` → `tickets-index` |
 
@@ -159,7 +159,7 @@ Open http://localhost:5173
 │   ├── main.py                 # FastAPI app with lifespan management
 │   ├── config.py               # Env var loading, backend selector enum
 │   ├── router_graph.py         # POST /query/graph
-│   ├── router_telemetry.py     # POST /query/telemetry (KQL)
+│   ├── router_telemetry.py     # POST /query/telemetry (SQL)
 │   ├── backends/
 │   │   ├── fabric.py           # Fabric REST API (GQL)
 │   │   ├── cosmosdb.py         # Cosmos DB Gremlin (gremlinpython)
@@ -180,7 +180,7 @@ Open http://localhost:5173
 │
 ├── data/
 │   ├── graph_schema.yaml       # Declarative graph schema manifest
-│   ├── lakehouse/              # CSV topology data (vertices & edges)
+│   ├── network/                # CSV topology data (vertices & edges)
 │   ├── runbooks/               # Markdown operating procedures
 │   ├── tickets/                # Historical incident tickets
 │   ├── prompts/                # Agent system prompts
@@ -342,6 +342,6 @@ All configuration lives in `azure_config.env` (single source of truth). Key sect
 | Graph Backend | `GRAPH_BACKEND` (`fabric`/`cosmosdb`/`mock`) | User (before `azd up`) |
 | Cosmos DB | `COSMOS_GREMLIN_ENDPOINT`, `COSMOS_GREMLIN_PRIMARY_KEY` | `postprovision.sh` |
 | Fabric | `FABRIC_WORKSPACE_ID`, `FABRIC_GRAPH_MODEL_ID` | `populate_fabric_config.py` |
-| Telemetry | `EVENTHOUSE_QUERY_URI`, `FABRIC_KQL_DB_NAME` | `populate_fabric_config.py` |
+| Telemetry | `COSMOS_NOSQL_ENDPOINT`, `COSMOS_NOSQL_DATABASE` | `postprovision.sh` |
 
 See `azure_config.env.template` for the complete list with inline documentation.

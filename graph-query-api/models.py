@@ -27,8 +27,7 @@ class GraphQueryResponse(BaseModel):
 
 class TelemetryQueryRequest(BaseModel):
     query: str
-    eventhouse_query_uri: str = ""
-    kql_db_name: str = ""
+    container_name: str = "AlertStream"
 
 
 class TelemetryQueryResponse(BaseModel):

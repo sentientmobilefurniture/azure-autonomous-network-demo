@@ -17,9 +17,8 @@ dependencies = [
     # Foundry Agent Service (Day 3)
     "azure-ai-projects>=1.0.0,<2.0.0",
     "azure-ai-agents==1.2.0b6",
-    # Eventhouse KQL queries & ingestion (Day 3-4)
-    "azure-kusto-data>=4.6.0",
-    "azure-kusto-ingest>=4.6.0",
+    # Cosmos DB NoSQL (telemetry queries & ingestion)
+    "azure-cosmos>=4.9.0",
     "pandas>=2.2.0",
     # OpenAPI spec parsing (provision_agents)
     "pyyaml>=6.0",

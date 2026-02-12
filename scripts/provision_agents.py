@@ -175,8 +175,6 @@ def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
       {base_url}              — graph-query-api Container App URI
       {workspace_id}          — Fabric workspace GUID
       {graph_model_id}        — GraphModel item GUID
-      {eventhouse_query_uri}  — Kusto query URI
-      {kql_db_name}           — KQL database name
 
     If *keep_path* is given (e.g. "/query/graph"), all other paths are
     removed from the spec so the agent only sees its own endpoint.
@@ -186,8 +184,6 @@ def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
         "{base_url}": config["graph_query_api_uri"].rstrip("/"),
         "{workspace_id}": os.environ.get("FABRIC_WORKSPACE_ID", ""),
         "{graph_model_id}": os.environ.get("FABRIC_GRAPH_MODEL_ID", ""),
-        "{eventhouse_query_uri}": os.environ.get("EVENTHOUSE_QUERY_URI", ""),
-        "{kql_db_name}": os.environ.get("FABRIC_KQL_DB_NAME", ""),
     }
     for placeholder, value in replacements.items():
         raw = raw.replace(placeholder, value)
@@ -217,7 +213,7 @@ def _make_telemetry_openapi_tool(config: dict) -> OpenApiTool:
     return OpenApiTool(
         name="query_telemetry",
         spec=spec,
-        description="Execute a KQL query against the Fabric Eventhouse to retrieve alert and link telemetry data.",
+        description="Execute a Cosmos SQL query against telemetry data (AlertStream or LinkTelemetry) in Azure Cosmos DB.",
         auth=OpenApiAnonymousAuthDetails(),
     )
 
@@ -296,7 +292,7 @@ def create_graph_explorer_agent(agents_client, model: str, config: dict) -> dict
 
 
 def create_telemetry_agent(agents_client, model: str, config: dict) -> dict:
-    """Create the TelemetryAgent with OpenApiTool (KQL via graph-query-api)."""
+    """Create the TelemetryAgent with OpenApiTool (Cosmos SQL via graph-query-api)."""
     instructions, description = load_prompt("foundry_telemetry_agent_v2.md")
 
     tools = []

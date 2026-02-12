@@ -325,6 +325,10 @@ COSMOS_GREMLIN_PRIMARY_KEY=${COSMOS_GREMLIN_PRIMARY_KEY:-}
 COSMOS_GREMLIN_DATABASE=${COSMOS_GREMLIN_DATABASE:-networkgraph}
 COSMOS_GREMLIN_GRAPH=${COSMOS_GREMLIN_GRAPH:-topology}
 
+# --- Cosmos DB NoSQL / Telemetry (AUTO: populated after azd up) ---
+COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
+COSMOS_NOSQL_DATABASE=${COSMOS_NOSQL_DATABASE:-telemetrydb}
+
 # --- Fabric (not used in cosmosdb flow, but preserved if present) ---
 FABRIC_SKU=${FABRIC_SKU:-F8}
 AZURE_FABRIC_ADMIN=${AZURE_FABRIC_ADMIN:-}
@@ -493,6 +497,42 @@ else
     echo "   • Connection refused: Check Cosmos DB firewall settings"
     echo ""
     echo "   To retry this step only: source azure_config.env && uv run python scripts/cosmos/provision_cosmos_gremlin.py"
+    exit 1
+  fi
+fi
+
+# ── Step 5b: Load Cosmos DB telemetry data ──────────────────────────
+
+if $SKIP_DATA; then
+  step "Step 5b: Cosmos DB telemetry data (SKIPPED)"
+  info "Keeping existing telemetry data in Cosmos DB."
+else
+  step "Step 5b: Loading telemetry data into Cosmos DB"
+
+  # Verify Cosmos NoSQL endpoint is set
+  if [[ -z "${COSMOS_NOSQL_ENDPOINT:-}" ]]; then
+    fail "COSMOS_NOSQL_ENDPOINT not set in azure_config.env."
+    fail "Ensure azd up completed successfully and postprovision.sh ran."
+    echo ""
+    info "Manual fix: check your Cosmos DB account in Azure Portal and set:"
+    echo "   COSMOS_NOSQL_ENDPOINT=https://<account>.documents.azure.com:443/"
+    exit 1
+  fi
+
+  info "Loading telemetry data from data/telemetry/"
+  info "Cosmos DB: $COSMOS_NOSQL_ENDPOINT / $COSMOS_NOSQL_DATABASE"
+  info "Containers: AlertStream (pk: /SourceNodeType), LinkTelemetry (pk: /LinkId)"
+  echo ""
+
+  if uv run python scripts/cosmos/provision_cosmos_telemetry.py 2>&1; then
+    ok "Telemetry data loaded into Cosmos DB"
+  else
+    fail "Cosmos DB telemetry loading failed."
+    fail "Common issues:"
+    echo "   • 401/403: Check RBAC — your identity needs Cosmos DB Data Contributor on the account"
+    echo "   • 429: Cosmos DB throttling — increase maxThroughput or wait and retry"
+    echo ""
+    echo "   To retry: source azure_config.env && uv run python scripts/cosmos/provision_cosmos_telemetry.py"
     exit 1
   fi
 fi

@@ -426,7 +426,7 @@ vertices co-located.
 - **Vertices for entities** — CoreRouter, AggSwitch, BaseStation, Service, etc.
 - **Edges for relationships** — routes_via, aggregates, depends_on, monitors
 - **Properties on edges** — bandwidth, latency_ms, weight, dependency_strength
-- **Keep vertices lightweight** — store bulk telemetry in Eventhouse, not on graph properties
+- **Keep vertices lightweight** — store bulk telemetry in Cosmos DB NoSQL containers, not on graph properties
 
 ---
 

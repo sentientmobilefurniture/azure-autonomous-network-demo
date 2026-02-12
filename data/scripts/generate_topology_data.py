@@ -1,5 +1,5 @@
 """
-Generate static topology CSV files for Fabric Lakehouse entity tables.
+Generate static topology CSV files for network entity tables.
 
 Outputs 8 CSV files:
   - DimCoreRouter.csv
@@ -15,7 +15,7 @@ Outputs 8 CSV files:
 import csv
 import os
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "lakehouse")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "network")
 
 
 def write_csv(filename: str, headers: list[str], rows: list[list]) -> None:
@@ -144,7 +144,7 @@ def generate_sla_policies() -> None:
 
 
 def main() -> None:
-    print("Generating topology data (Lakehouse entity tables)...")
+    print("Generating topology data (network entity tables)...")
     generate_core_routers()
     generate_transport_links()
     generate_agg_switches()

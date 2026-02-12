@@ -162,8 +162,6 @@ module graphQueryApi 'modules/container-app.bicep' = {
     memory: '0.5Gi'
     env: union([
       { name: 'GRAPH_BACKEND', value: graphBackend }
-      { name: 'EVENTHOUSE_QUERY_URI', value: '' }
-      { name: 'FABRIC_KQL_DB_NAME', value: '' }
     ], deployFabric ? [
       { name: 'FABRIC_WORKSPACE_ID', value: '' }
       { name: 'FABRIC_GRAPH_MODEL_ID', value: '' }
@@ -172,6 +170,8 @@ module graphQueryApi 'modules/container-app.bicep' = {
       { name: 'COSMOS_GREMLIN_DATABASE', value: 'networkgraph' }
       { name: 'COSMOS_GREMLIN_GRAPH', value: 'topology' }
       { name: 'COSMOS_GREMLIN_PRIMARY_KEY', secretRef: 'cosmos-gremlin-key' }
+      { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosGremlin!.outputs.cosmosNoSqlEndpoint }
+      { name: 'COSMOS_NOSQL_DATABASE', value: cosmosGremlin!.outputs.telemetryDatabaseName }
     ] : [])
     secrets: deployCosmosGremlin ? [
       { name: 'cosmos-gremlin-key', value: cosmosGremlin!.outputs.primaryKey }
@@ -208,3 +208,5 @@ output GRAPH_QUERY_API_URI string = graphQueryApi.outputs.uri
 output GRAPH_QUERY_API_PRINCIPAL_ID string = graphQueryApi.outputs.principalId
 output COSMOS_GREMLIN_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.gremlinEndpoint : ''
 output COSMOS_GREMLIN_ACCOUNT_NAME string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosAccountName : ''
+output COSMOS_NOSQL_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosNoSqlEndpoint : ''
+output COSMOS_NOSQL_DATABASE string = deployCosmosGremlin ? cosmosGremlin!.outputs.telemetryDatabaseName : ''
