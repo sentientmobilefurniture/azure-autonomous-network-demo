@@ -15,24 +15,23 @@ CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
 if [ -f "$CONFIG_FILE" ]; then
   echo "Syncing azure_config.env → azd env..."
 
-  # Variables that Bicep needs (mapped to azd env var names)
-  declare -A ENV_MAP=(
-    ["AZURE_LOCATION"]="AZURE_LOCATION"
-    ["GPT_CAPACITY_1K_TPM"]="GPT_CAPACITY_1K_TPM"
-    ["GRAPH_BACKEND"]="GRAPH_BACKEND"
-  )
-
   # Source the config file to read values
   set -a
   source "$CONFIG_FILE"
   set +a
 
-  for config_key in "${!ENV_MAP[@]}"; do
-    azd_key="${ENV_MAP[$config_key]}"
-    value="${!config_key:-}"
+  # Sync selected variables to azd env for Bicep
+  # (POSIX-compatible — no associative arrays)
+  for var_name in AZURE_LOCATION GPT_CAPACITY_1K_TPM GRAPH_BACKEND; do
+    value=""
+    case "$var_name" in
+      AZURE_LOCATION)      value="${AZURE_LOCATION:-}" ;;
+      GPT_CAPACITY_1K_TPM) value="${GPT_CAPACITY_1K_TPM:-}" ;;
+      GRAPH_BACKEND)       value="${GRAPH_BACKEND:-}" ;;
+    esac
     if [ -n "$value" ]; then
-      azd env set "$azd_key" "$value"
-      echo "  → $azd_key=$value"
+      azd env set "$var_name" "$value"
+      echo "  → $var_name=$value"
     fi
   done
 else

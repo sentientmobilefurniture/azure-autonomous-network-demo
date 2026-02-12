@@ -136,9 +136,15 @@ def _normalise_results(raw_results: list) -> dict:
 
 
 def _submit_query(query: str, max_retries: int = 3) -> list:
-    """Submit a Gremlin query with retry on 429 / transient errors."""
-    gremlin_client = _get_client()
+    """Submit a Gremlin query with retry on 429 / transient / connection errors.
+
+    If the WebSocket connection drops (idle timeout, DNS change, etc.) the
+    singleton client is discarded and a fresh connection is established on
+    the next attempt.
+    """
+    global _gremlin_client
     for attempt in range(1, max_retries + 1):
+        gremlin_client = _get_client()           # may create a fresh client
         t0 = time.time()
         try:
             callback = gremlin_client.submit(message=query, bindings={})
@@ -176,6 +182,27 @@ def _submit_query(query: str, max_retries: int = 3) -> list:
                 time.sleep(backoff)
                 continue
             raise  # non-retryable or final attempt
+        except Exception as e:
+            # Connection/transport error (WebSocket dropped, DNS failure, etc.)
+            # Discard the dead client so the next attempt opens a fresh connection.
+            elapsed_ms = (time.time() - t0) * 1000
+            logger.warning(
+                "Gremlin connection error in %.0fms (attempt %d/%d): %s: %s",
+                elapsed_ms, attempt, max_retries, type(e).__name__, e,
+            )
+            with _gremlin_lock:
+                if _gremlin_client is gremlin_client:   # guard against races
+                    try:
+                        gremlin_client.close()
+                    except Exception:
+                        pass
+                    _gremlin_client = None
+            if attempt < max_retries:
+                backoff = 2 ** attempt
+                logger.info("Reconnecting in %ds...", backoff)
+                time.sleep(backoff)
+                continue
+            raise
     # Should not reach here
     raise RuntimeError("Exhausted retries for Gremlin query")
 

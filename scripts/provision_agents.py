@@ -416,28 +416,44 @@ def main():
         print("\n[3/5] Resolving connections...")
         search_conn_id = get_search_connection_id(config)
 
-        # 3. Create sub-agents
+        # 3. Create sub-agents (with partial-failure recovery)
         print("\n[4/5] Creating specialist agents...")
-        graph_agent = create_graph_explorer_agent(
-            agents_client, config["model"], config,
-        )
-        telemetry_agent = create_telemetry_agent(
-            agents_client, config["model"], config,
-        )
-        runbook_agent = create_runbook_kb_agent(
-            agents_client, config["model"], search_conn_id, config["runbooks_index"],
-        )
-        ticket_agent = create_historical_ticket_agent(
-            agents_client, config["model"], search_conn_id, config["tickets_index"],
-        )
+        agent_specs = [
+            ("GraphExplorerAgent", create_graph_explorer_agent,
+             (agents_client, config["model"], config)),
+            ("TelemetryAgent", create_telemetry_agent,
+             (agents_client, config["model"], config)),
+            ("RunbookKBAgent", create_runbook_kb_agent,
+             (agents_client, config["model"], search_conn_id, config["runbooks_index"])),
+            ("HistoricalTicketAgent", create_historical_ticket_agent,
+             (agents_client, config["model"], search_conn_id, config["tickets_index"])),
+        ]
 
-        sub_agents = [graph_agent, telemetry_agent, runbook_agent, ticket_agent]
+        sub_agents: list[dict] = []
+        try:
+            for name, create_fn, create_args in agent_specs:
+                agent = create_fn(*create_args)
+                sub_agents.append(agent)
+        except Exception as exc:
+            print(f"\n  ✗ Failed to create {name}: {exc}")
+            if sub_agents:
+                print(f"  {len(sub_agents)} agent(s) were created before the failure:")
+                for sa in sub_agents:
+                    print(f"    {sa['name']}: {sa['id']}")
+                print("\n  Re-run with --force to clean up orphaned agents and retry.")
+            sys.exit(1)
 
         # 4. Create orchestrator wired to sub-agents
         print("\n[5/5] Creating orchestrator...")
-        orchestrator = create_orchestrator(
-            agents_client, config["model"], sub_agents,
-        )
+        try:
+            orchestrator = create_orchestrator(
+                agents_client, config["model"], sub_agents,
+            )
+        except Exception as exc:
+            print(f"\n  ✗ Failed to create orchestrator: {exc}")
+            print(f"  {len(sub_agents)} sub-agents were created successfully.")
+            print("  Re-run with --force to clean up and retry.")
+            sys.exit(1)
 
     # 5. Save results
     all_agents = {

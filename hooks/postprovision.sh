@@ -69,6 +69,18 @@ echo "Uploading tickets to blob container 'tickets'..."
 upload_with_retry "tickets" "$PROJECT_ROOT/data/tickets"
 
 # --------------------------------------------------------------------------
+# 2b. Upload telemetry CSVs to blob storage (enables --from-blob ingestion
+#     and future Azure Data Factory / native connector pipelines)
+# --------------------------------------------------------------------------
+echo ""
+echo "Uploading telemetry CSVs to blob container 'telemetry-data'..."
+upload_with_retry "telemetry-data" "$PROJECT_ROOT/data/telemetry"
+
+echo ""
+echo "Uploading network CSVs to blob container 'network-data'..."
+upload_with_retry "network-data" "$PROJECT_ROOT/data/network"
+
+# --------------------------------------------------------------------------
 # 3. Populate azure_config.env for downstream scripts
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
@@ -186,7 +198,9 @@ if [ -n "$COSMOS_ACCOUNT" ]; then
   echo "Auto-populating Cosmos DB Gremlin credentials..."
   COSMOS_EP="${AZD_COSMOS_GREMLIN_ENDPOINT:-${COSMOS_GREMLIN_ENDPOINT:-}}"
   if [ -z "$COSMOS_EP" ]; then
-    COSMOS_EP=$(az cosmosdb show --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query documentEndpoint -o tsv 2>/dev/null || true)
+    # Gremlin endpoint is account-name.gremlin.cosmos.azure.com
+    # (NOT documentEndpoint which is for the SQL/NoSQL API)
+    COSMOS_EP="${COSMOS_ACCOUNT}.gremlin.cosmos.azure.com"
   fi
   COSMOS_KEY=$(az cosmosdb keys list --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query primaryMasterKey -o tsv 2>/dev/null || true)
   if [ -n "$COSMOS_KEY" ]; then
@@ -197,7 +211,8 @@ if [ -n "$COSMOS_ACCOUNT" ]; then
     # Also populate the NoSQL endpoint (same account)
     COSMOS_NOSQL_EP="${AZD_COSMOS_NOSQL_ENDPOINT:-${COSMOS_NOSQL_ENDPOINT:-}}"
     if [ -z "$COSMOS_NOSQL_EP" ]; then
-      COSMOS_NOSQL_EP=$(az cosmosdb show --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query documentEndpoint -o tsv 2>/dev/null || true)
+      # Query the separate NoSQL account (account-nosql), not the Gremlin account
+      COSMOS_NOSQL_EP=$(az cosmosdb show --name "${COSMOS_ACCOUNT}-nosql" --resource-group "$RG" --query documentEndpoint -o tsv 2>/dev/null || true)
     fi
     if [ -n "$COSMOS_NOSQL_EP" ]; then
       sed -i "s|^COSMOS_NOSQL_ENDPOINT=.*|COSMOS_NOSQL_ENDPOINT=$COSMOS_NOSQL_EP|" "$CONFIG_FILE"

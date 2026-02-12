@@ -166,6 +166,7 @@ module roles 'modules/roles.bicep' = {
     searchPrincipalId: search.outputs.principalId
     foundryPrincipalId: aiFoundry.outputs.foundryPrincipalId
     cosmosNoSqlAccountName: deployCosmosGremlin ? 'cosmos-gremlin-${resourceToken}-nosql' : ''
+    containerAppPrincipalId: graphQueryApi.outputs.principalId
   }
 }
 

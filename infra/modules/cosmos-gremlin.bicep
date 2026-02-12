@@ -221,6 +221,9 @@ output gremlinGraphName string = graph.name
 @description('The Cosmos DB account resource ID')
 output cosmosAccountId string = cosmosAccount.id
 
+// NOTE: Gremlin wire protocol requires key-based auth (no AAD/MI support).
+// Key must pass to container-app.bicep as a secret. For production, use Key Vault.
+#disable-next-line outputs-should-not-contain-secrets
 @description('The primary key for key-based Gremlin auth')
 output primaryKey string = cosmosAccount.listKeys().primaryMasterKey
 

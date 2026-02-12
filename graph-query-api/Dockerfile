@@ -10,7 +10,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
-COPY main.py config.py models.py router_graph.py router_telemetry.py ./
+COPY *.py ./
 COPY backends/ ./backends/
 COPY openapi/ ./openapi/
 

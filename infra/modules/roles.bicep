@@ -23,6 +23,9 @@ param foundryPrincipalId string
 @description('Name of the Cosmos DB NoSQL account (optional, for data-plane RBAC)')
 param cosmosNoSqlAccountName string = ''
 
+@description('Principal ID of the Container App managed identity (for Cosmos DB NoSQL data access)')
+param containerAppPrincipalId string = ''
+
 // ---------------------------------------------------------------------------
 // Built-in Role Definition GUIDs
 // ---------------------------------------------------------------------------
@@ -187,6 +190,18 @@ resource userCosmosDbDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlR
   name: guid(cosmosNoSqlAccount.id, principalId, roles.cosmosDbDataContributor)
   properties: {
     principalId: principalId
+    roleDefinitionId: '${cosmosNoSqlAccount.id}/sqlRoleDefinitions/${roles.cosmosDbDataContributor}'
+    scope: cosmosNoSqlAccount.id
+  }
+}
+
+// Container App MI → Cosmos DB Built-in Data Contributor on NoSQL account
+// Required for graph-query-api to query telemetry via DefaultAzureCredential
+resource containerAppCosmosDbDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (!empty(cosmosNoSqlAccountName) && !empty(containerAppPrincipalId)) {
+  parent: cosmosNoSqlAccount
+  name: guid(cosmosNoSqlAccount.id, containerAppPrincipalId, roles.cosmosDbDataContributor)
+  properties: {
+    principalId: containerAppPrincipalId
     roleDefinitionId: '${cosmosNoSqlAccount.id}/sqlRoleDefinitions/${roles.cosmosDbDataContributor}'
     scope: cosmosNoSqlAccount.id
   }

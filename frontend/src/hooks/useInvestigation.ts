@@ -32,6 +32,12 @@ export function useInvestigation() {
     setRunMeta(null);
     startTimeRef.current = Date.now();
 
+    // Auto-abort after 5 minutes to prevent indefinite "processing..." hangs
+    const timeoutId = setTimeout(() => {
+      setErrorMessage('Investigation timed out after 5 minutes.');
+      ctrl.abort();
+    }, 300_000);
+
     try {
       await fetchEventSource('/api/alert', {
         method: 'POST',
@@ -95,6 +101,7 @@ export function useInvestigation() {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('SSE stream error:', err);
     } finally {
+      clearTimeout(timeoutId);
       setRunning(false);
       setSteps((prev) => {
         setRunMeta((m) => ({

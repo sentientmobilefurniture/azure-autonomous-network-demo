@@ -440,8 +440,24 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
     t = threading.Thread(target=_thread_target, daemon=True)
     t.start()
 
+    # Yield events with a per-event timeout to detect stuck investigations.
+    # Normal runs emit events every few seconds; 2 min of silence means
+    # the orchestrator or a sub-agent is hung.
+    EVENT_TIMEOUT = 120  # seconds
     while True:
-        item = await queue.get()
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=EVENT_TIMEOUT)
+        except asyncio.TimeoutError:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": (
+                        "Investigation appears stuck — no progress for 2 minutes. "
+                        "Try submitting the alert again."
+                    ),
+                }),
+            }
+            break
         if item is None:
             break
         yield item

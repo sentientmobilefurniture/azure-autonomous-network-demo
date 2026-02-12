@@ -26,6 +26,7 @@
 - [ ] Generalize prompt, ontology, etc... dataset wise. We should try to build these things from services.
 - [x] Prep the codebase for dual-graph architecture. Shift graph-specific files into specific locations, genericize graph APIs to allow easy swap out, restructure agent prompts with core model and graphdb-specific model (and build from those components) and control all these via the GRAPH_BACKEND param in azure_config.env
 - [x] Add graceful failure - If orchestrator run fails, retry with the entire thread including the error message. 
+- [x] Fix slow cosmosdb data ingestion — Async bulk upserts (50 concurrent), CSVs uploaded to blob storage, `--from-blob` flag for native blob-sourced ingestion
 - [ ] Make the agent flow even more WOWZA - Agent analyzing/auditing/classifying? Parallel execution doing some other stuff? The possibility of finetuning - THIS SHOULD ALL BE IN A KNOWLEDGE GRAPH DRREEEEEEAM deck
 - [ ] Verify that the cosmosDB stuff works
 - [ ] **Neo4j graph backend** — Add Neo4j for demo. Enables real-time graph mutations from the UI (add/remove nodes, trigger faults, visualize topology live). Cypher ≈ GQL.

@@ -14,5 +14,5 @@ dependencies = [
     "azure-ai-agents==1.2.0b6",
 ]
 
-[tool.uv]
-dev-dependencies = []
+[dependency-groups]
+dev = []
