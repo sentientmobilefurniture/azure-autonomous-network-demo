@@ -9,6 +9,7 @@ dependencies = [
     "azure-identity>=1.19.0",
     "httpx>=0.28.0",
     "azure-kusto-data>=4.6.0",
+    "gremlinpython>=3.7.0",
 ]
 
 [dependency-groups]

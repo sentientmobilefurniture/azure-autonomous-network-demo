@@ -23,7 +23,7 @@ param principalId string
 @description('Tags to apply to all resources')
 param tags object = {}
 
-@description('Admin email for Fabric capacity (required)')
+@description('Admin email for Fabric capacity (only used on Fabric path)')
 param fabricAdminEmail string = ''
 
 @description('SKU for Fabric capacity (F2-F2048). PAUSE when not in use to control cost.')
@@ -32,6 +32,14 @@ param fabricSkuName string = 'F8'
 
 @description('GPT model capacity in 1K TPM units (e.g. 10 = 10K tokens/min, 100 = 100K TPM)')
 param gptCapacity int = 300
+
+@description('Graph backend: "fabric" deploys Fabric capacity, "cosmosdb" deploys Cosmos DB Gremlin. Controls which infra path is provisioned.')
+@allowed(['fabric', 'cosmosdb'])
+param graphBackend string = 'fabric'
+
+// Derived flags for conditional deployment
+var deployFabric = graphBackend == 'fabric' && !empty(fabricAdminEmail)
+var deployCosmosGremlin = graphBackend == 'cosmosdb'
 
 
 // ---------------------------------------------------------------------------
@@ -81,7 +89,7 @@ module storage 'modules/storage.bicep' = {
   }
 }
 
-module fabric 'modules/fabric.bicep' = if (!empty(fabricAdminEmail)) {
+module fabric 'modules/fabric.bicep' = if (deployFabric) {
   scope: rg
   params: {
     name: 'fab${resourceToken}'
@@ -89,6 +97,23 @@ module fabric 'modules/fabric.bicep' = if (!empty(fabricAdminEmail)) {
     tags: tags
     adminEmail: fabricAdminEmail
     skuName: fabricSkuName
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cosmos DB Gremlin (graphBackend == 'cosmosdb')
+// ---------------------------------------------------------------------------
+
+module cosmosGremlin 'modules/cosmos-gremlin.bicep' = if (deployCosmosGremlin) {
+  scope: rg
+  params: {
+    accountName: 'cosmos-gremlin-${resourceToken}'
+    location: location
+    databaseName: 'networkgraph'
+    graphName: 'topology'
+    partitionKeyPath: '/partitionKey'
+    maxThroughput: 1000
+    tags: union(tags, { component: 'graph-backend' })
   }
 }
 
@@ -135,12 +160,19 @@ module fabricQueryApi 'modules/container-app.bicep' = {
     maxReplicas: 2
     cpu: '0.25'
     memory: '0.5Gi'
-    env: [
-      { name: 'FABRIC_WORKSPACE_ID', value: '' }        // populated by provision scripts; fallback for request body values
-      { name: 'FABRIC_GRAPH_MODEL_ID', value: '' }
+    env: union([
+      { name: 'GRAPH_BACKEND', value: graphBackend }
       { name: 'EVENTHOUSE_QUERY_URI', value: '' }
       { name: 'FABRIC_KQL_DB_NAME', value: '' }
-    ]
+    ], deployFabric ? [
+      { name: 'FABRIC_WORKSPACE_ID', value: '' }
+      { name: 'FABRIC_GRAPH_MODEL_ID', value: '' }
+    ] : [], deployCosmosGremlin ? [
+      { name: 'COSMOS_GREMLIN_ENDPOINT', value: cosmosGremlin!.outputs.gremlinEndpoint }
+      { name: 'COSMOS_GREMLIN_DATABASE', value: 'networkgraph' }
+      { name: 'COSMOS_GREMLIN_GRAPH', value: 'topology' }
+      { name: 'COSMOS_GREMLIN_PRIMARY_KEY', secretRef: 'cosmos-gremlin-key' }
+    ] : [])
   }
 }
 
@@ -167,7 +199,9 @@ output AZURE_AI_FOUNDRY_PROJECT_NAME string = aiFoundry.outputs.projectName
 output AZURE_SEARCH_NAME string = search.outputs.name
 output AZURE_SEARCH_ENDPOINT string = search.outputs.endpoint
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
-output AZURE_FABRIC_CAPACITY_NAME string = !empty(fabricAdminEmail) ? fabric!.outputs.name : ''
+output AZURE_FABRIC_CAPACITY_NAME string = deployFabric ? fabric!.outputs.name : ''
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerAppsEnv.outputs.registryEndpoint
 output FABRIC_QUERY_API_URI string = fabricQueryApi.outputs.uri
 output FABRIC_QUERY_API_PRINCIPAL_ID string = fabricQueryApi.outputs.principalId
+output COSMOS_GREMLIN_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.gremlinEndpoint : ''
+output COSMOS_GREMLIN_ACCOUNT_NAME string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosAccountName : ''

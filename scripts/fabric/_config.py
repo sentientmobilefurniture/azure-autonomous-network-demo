@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_FILE = str(PROJECT_ROOT / "azure_config.env")
 DATA_DIR = PROJECT_ROOT / "data"
 
