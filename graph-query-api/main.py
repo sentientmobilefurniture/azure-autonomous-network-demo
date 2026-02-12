@@ -28,12 +28,11 @@ from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 
 from config import GRAPH_BACKEND, GraphBackendType, BACKEND_REQUIRED_VARS, TELEMETRY_REQUIRED_VARS
-from models import GraphQueryRequest
 from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router, close_telemetry_backend
 

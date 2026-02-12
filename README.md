@@ -49,7 +49,7 @@ The `graph-query-api` microservice supports two backends, controlled by the
 | `cosmosdb` | Azure Cosmos DB (Gremlin API) | `azd up` provisions automatically | **Default.** Fully automated setup. |
 | `mock` | Static JSON responses | No external dependencies | Local development & testing. |
 
-Setup guide: **[Cosmos DB Setup](documentation/SETUP_COSMOSDB.md)**
+Setup guide: **[Cosmos DB Setup](documentation/deprecated/SETUP_COSMOSDB.md)** (archived — `deploy.sh` now automates this)
 
 ---
 
@@ -72,14 +72,28 @@ azd auth login
 
 ## Quick Start
 
-### 1. Configure
+### Option A: Automated (recommended)
+
+```bash
+cp azure_config.env.template azure_config.env
+chmod +x deploy.sh && ./deploy.sh
+```
+
+`deploy.sh` handles the entire pipeline: infrastructure provisioning, data loading,
+search index creation, Cosmos DB graph + telemetry loading, agent provisioning,
+and starting local services. Run with `--help` for options (e.g., `--skip-infra`,
+`--skip-agents`).
+
+### Option B: Step-by-step
+
+#### 1. Configure
 
 ```bash
 cp azure_config.env.template azure_config.env
 # Edit azure_config.env — set GRAPH_BACKEND, etc.
 ```
 
-### 2. Deploy infrastructure
+#### 2. Deploy infrastructure
 
 ```bash
 azd up -e <env-name>
@@ -96,21 +110,24 @@ Resources deployed:
 - Container Apps Environment (ACR + Log Analytics)
 - `graph-query-api` Container App (system-assigned managed identity)
 - Cosmos DB Gremlin account + database + graph
+- Cosmos DB NoSQL containers (telemetry)
 
-### 3. Set up your graph backend
+#### 3. Load Cosmos DB data
 
-Follow the backend-specific guide:
+```bash
+source azure_config.env
+uv run python scripts/cosmos/provision_cosmos_gremlin.py
+uv run python scripts/cosmos/provision_cosmos_telemetry.py
+```
 
-- **Cosmos DB** → [documentation/SETUP_COSMOSDB.md](documentation/SETUP_COSMOSDB.md)
-
-### 4. Create search indices
+#### 4. Create search indices
 
 ```bash
 uv run python scripts/create_runbook_indexer.py
 uv run python scripts/create_tickets_indexer.py
 ```
 
-### 5. Provision AI agents
+#### 5. Provision AI agents
 
 ```bash
 uv run python scripts/provision_agents.py
@@ -119,7 +136,7 @@ uv run python scripts/provision_agents.py
 Creates 5 Foundry agents: Orchestrator + GraphExplorer + Telemetry + RunbookKB +
 HistoricalTicket.
 
-### 6. Run the demo
+#### 6. Run the demo
 
 ```bash
 # Terminal 1 — Backend API
@@ -140,6 +157,7 @@ Open http://localhost:5173
 ├── azure.yaml                  # azd service definitions & hooks
 ├── azure_config.env            # Runtime config (single source of truth, gitignored)
 ├── azure_config.env.template   # Template for azure_config.env
+├── deploy.sh                   # End-to-end deployment script
 ├── pyproject.toml              # Python deps for scripts/ (uv-managed)
 │
 ├── api/                        # FastAPI backend (port 8000)
@@ -184,7 +202,8 @@ Open http://localhost:5173
 │   ├── create_runbook_indexer.py
 │   ├── create_tickets_indexer.py
 │   ├── cosmos/                 # Cosmos DB-specific scripts
-│   │   └── provision_cosmos_gremlin.py   # YAML-manifest-driven graph loader
+│   │   ├── provision_cosmos_gremlin.py   # YAML-manifest-driven graph loader
+│   │   └── provision_cosmos_telemetry.py # CSV telemetry data → Cosmos NoSQL
 │   └── testing_scripts/        # Smoke tests & CLI orchestrator
 │
 ├── hooks/
@@ -194,12 +213,11 @@ Open http://localhost:5173
 └── documentation/
     ├── ARCHITECTURE.md         # Full architecture reference
     ├── SCENARIO.md             # Demo scenario narrative
-    ├── SETUP_COSMOSDB.md       # Cosmos DB backend setup guide
+    ├── TASKS.md                # Task tracking
     ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
     ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
     ├── assets/                 # Screenshots & diagrams
-    ├── ui_states/              # UI state screenshots
-    └── previous_dev_phases/    # Archived design docs
+    └── deprecated/             # Archived docs (SETUP_COSMOSDB.md, etc.)
 ```
 
 ---

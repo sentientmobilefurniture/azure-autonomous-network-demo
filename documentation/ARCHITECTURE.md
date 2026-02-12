@@ -67,6 +67,7 @@ Three deployable services:
 ├── azure.yaml                  # azd project definition (hooks, service targets)
 ├── azure_config.env            # Runtime config — single source of truth (gitignored)
 ├── azure_config.env.template   # Checked-in template for azure_config.env
+├── deploy.sh                   # End-to-end deployment script (all steps)
 ├── pyproject.toml              # Python deps for scripts/ (uv-managed)
 │
 ├── infra/                      # Bicep IaC (deployed by `azd up`)
@@ -78,6 +79,7 @@ Three deployable services:
 │       ├── storage.bicep       # Storage account + blob containers
 │       ├── container-apps-environment.bicep  # Log Analytics + ACR + Managed Environment
 │       ├── container-app.bicep              # Generic Container App (managed identity)
+│       ├── cosmos-gremlin.bicep              # Cosmos DB Gremlin + NoSQL (graph + telemetry)
 │       └── roles.bicep         # RBAC assignments
 │
 ├── hooks/                      # azd lifecycle hooks
@@ -109,23 +111,21 @@ Three deployable services:
 │   ├── provision_agents.py     # Create all 5 Foundry agents (orchestrator + 4 sub-agents)
 │   ├── agent_ids.json          # Output: provisioned agent IDs
 │   ├── cosmos/                 # Cosmos DB-specific scripts
-│   │   └── provision_cosmos_gremlin.py   # YAML-manifest-driven Gremlin graph loader
+│   │   ├── provision_cosmos_gremlin.py   # YAML-manifest-driven Gremlin graph loader
+│   │   └── provision_cosmos_telemetry.py # CSV telemetry data → Cosmos NoSQL
 │   └── testing_scripts/        # CLI test & debug utilities
 │       ├── test_orchestrator.py    # Stream orchestrator run with metadata
-│       ├── test_graph_query_api.py # Deployment smoke test for graph-query-api
-│       └── test_function_tool.py   # PoC — Foundry agent with FunctionTool (archived)
+│       └── test_graph_query_api.py # Deployment smoke test for graph-query-api
 │
 ├── api/                        # FastAPI backend (NOC API)
-│   ├── pyproject.toml          # Python deps (fastapi, sse-starlette, mcp, azure SDKs)
+│   ├── pyproject.toml          # Python deps (fastapi, sse-starlette, azure SDKs)
 │   └── app/
 │       ├── main.py             # App factory, CORS, router mounts, /health
 │       ├── orchestrator.py     # Foundry agent bridge — sync SDK → async SSE with retry
-│       ├── routers/
-│       │   ├── alert.py        # POST /api/alert → SSE stream of orchestrator steps
-│       │   ├── agents.py       # GET /api/agents → list of agent metadata
-│       │   └── logs.py         # GET /api/logs → SSE log stream
-│       └── mcp/
-│           └── server.py       # FastMCP tool stubs (query_telemetry, search_tickets, …)
+│       └── routers/
+│           ├── alert.py        # POST /api/alert → SSE stream of orchestrator steps
+│           ├── agents.py       # GET /api/agents → list of agent metadata
+│           └── logs.py         # GET /api/logs → SSE log stream
 │
 ├── graph-query-api/           # Graph & telemetry microservice — V4 architecture
 │   ├── main.py                 # Slim app factory: middleware, health, log SSE, router mounts
@@ -174,13 +174,11 @@ Three deployable services:
 ├── documentation/              # Architecture docs, design specs, scenario description
 │   ├── ARCHITECTURE.md         # This file
 │   ├── SCENARIO.md             # Demo scenario description
-│   ├── SETUP_COSMOSDB.md       # Cosmos DB backend setup guide
-│   ├── V4GRAPH.md              # V4 graph model design spec
+│   ├── TASKS.md                # Task tracking
 │   ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
 │   ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
 │   ├── assets/                 # Screenshots & diagrams
-│   ├── ui_states/              # UI state screenshots
-│   └── previous_dev_phases/    # Archived design docs (V2, V3)
+│   └── deprecated/             # Archived docs (SETUP_COSMOSDB.md, etc.)
 │
 └── .github/
     └── copilot-instructions.md # Copilot context for this project
@@ -507,12 +505,11 @@ with the remaining agents and produces a partial but useful report.
 |---------|-----------------|---------|
 | SSE streaming | Not native; requires Durable Functions workarounds | `StreamingResponse` / `sse-starlette` native |
 | Orchestrator timeout | 230 s max (Consumption), needs Durable for longer | No limit (process stays alive) |
-| MCP server hosting | Separate deployment or complex setup | FastMCP mounts directly on the ASGI app |
 | Cold start | Yes (Consumption plan) | Container Apps: scales to zero, minimal cold start |
-| Single codebase | Separate Function App project | REST + MCP + SSE all in one process |
+| Single codebase | Separate Function App project | REST + SSE all in one process |
 
 **Decision:** FastAPI on Azure Container Apps. Single Python process serves the REST
-API, SSE streaming, and MCP tools. No cold-start penalty with min-replicas=1.
+API and SSE streaming. No cold-start penalty with min-replicas=1.
 
 ### Single `azure_config.env` for All Config
 
@@ -543,7 +540,7 @@ and provides full control over query construction and error handling
 The graph endpoint (`/query/graph`) is decoupled from any specific graph database
 via a `GraphBackend` Protocol. Switching backends requires only changing
 `GRAPH_BACKEND` env var and re-provisioning agents. No code changes to the agent
-layer, API, or frontend. See `documentation/V4GRAPH.md` for the full design spec.
+layer, API, or frontend.
 
 ---
 
@@ -644,14 +641,28 @@ location, so names are globally unique and reproducible.
 | `storage.bicep` | Storage account + blob containers (runbooks, tickets) |
 | `container-apps-environment.bicep` | Log Analytics workspace + ACR + Managed Environment |
 | `container-app.bicep` | Generic Container App template (managed identity) |
+| `cosmos-gremlin.bicep` | Cosmos DB account (Gremlin API + NoSQL), database, graph, telemetry containers |
 | `roles.bicep` | RBAC assignments (user + service principals) |
 
-### Deployment: `azd up` and `azd deploy`
+### Deployment: `deploy.sh` (End-to-End) and `azd up`
 
-`azd up` runs the full infrastructure + service deployment cycle:
+The primary deployment method is `deploy.sh`, which orchestrates the entire
+pipeline in one command:
+
+1. Prerequisites check and Azure login
+2. Environment selection / creation
+3. `azd up` (infra + graph-query-api container deployment)
+4. Search index creation (runbooks + tickets)
+5. Cosmos DB graph data loading (`provision_cosmos_gremlin.py`)
+6. Cosmos DB telemetry data loading (`provision_cosmos_telemetry.py`)
+7. graph-query-api health verification
+8. AI Foundry agent provisioning (5 agents)
+9. Local API + Frontend startup
+
+`azd up` runs the infrastructure + service deployment cycle:
 1. `preprovision.sh` syncs `azure_config.env` → azd environment variables
 2. Bicep provisions all Azure resources (Container Apps Environment + ACR, etc.)
-3. `azd deploy` builds and deploys `graph-query-api` (Docker image built in ACR via `remoteBuild`)
+3. Builds and deploys `graph-query-api` (Docker image built in ACR via `remoteBuild`)
 4. `postprovision.sh` uploads data to blob, writes deployment outputs to `azure_config.env`
 
 For code-only changes to `graph-query-api`, use `azd deploy graph-query-api`
@@ -686,8 +697,8 @@ it's user-set or auto-populated.
 | `GPT_CAPACITY_1K_TPM` | user | preprovision → Bicep |
 | **AI Search** | | |
 | `AI_SEARCH_NAME` | postprovision | scripts (create_*_indexer) |
-| `RUNBOOKS_INDEX_NAME` | user | scripts (create_runbook_indexer), API (MCP) |
-| `TICKETS_INDEX_NAME` | user | scripts (create_tickets_indexer), API (MCP) |
+| `RUNBOOKS_INDEX_NAME` | user | scripts (create_runbook_indexer) |
+| `TICKETS_INDEX_NAME` | user | scripts (create_tickets_indexer) |
 | **Storage** | | |
 | `STORAGE_ACCOUNT_NAME` | postprovision | scripts |
 | `RUNBOOKS_CONTAINER_NAME` | user | scripts, must match Bicep container name |
@@ -697,11 +708,14 @@ it's user-set or auto-populated.
 | **graph-query-api** | | |
 | `GRAPH_QUERY_API_URI` | postprovision (azd output) | scripts (provision_agents) |
 | `GRAPH_QUERY_API_PRINCIPAL_ID` | postprovision (azd output) | scripts |
-| **Cosmos DB** | | |
-| `COSMOS_GREMLIN_ENDPOINT` | user | graph-query-api |
-| `COSMOS_GREMLIN_PRIMARY_KEY` | user | graph-query-api |
-| `COSMOS_GREMLIN_DATABASE` | user | graph-query-api |
-| `COSMOS_GREMLIN_GRAPH` | user | graph-query-api |
+| **Cosmos DB Gremlin** | | |
+| `COSMOS_GREMLIN_ENDPOINT` | postprovision | graph-query-api |
+| `COSMOS_GREMLIN_PRIMARY_KEY` | postprovision | graph-query-api |
+| `COSMOS_GREMLIN_DATABASE` | user (default: networkgraph) | graph-query-api |
+| `COSMOS_GREMLIN_GRAPH` | user (default: topology) | graph-query-api |
+| **Cosmos DB NoSQL (Telemetry)** | | |
+| `COSMOS_NOSQL_ENDPOINT` | postprovision | graph-query-api |
+| `COSMOS_NOSQL_DATABASE` | user (default: telemetrydb) | graph-query-api |
 | **App / CORS** | | |
 | `CORS_ORIGINS` | user | API (main.py CORS middleware) |
 
@@ -788,15 +802,15 @@ Sub-agent tool call returns error (e.g., bad SQL syntax)
 
 | Component | Local | Production |
 |-----------|-------|------------|
-| API | `uvicorn :8000` | Azure Container Apps |
+| API | `uvicorn :8000` | Local only (not an azd service) |
 | graph-query-api | `uvicorn :8100` | Azure Container Apps (via `azd deploy`) |
-| Frontend | Vite dev server `:5173` | Azure Static Web Apps |
+| Frontend | Vite dev server `:5173` | Local only (not an azd service) |
 | Infra | n/a | `azd up` → Azure |
 
-Production deployment uses `azd up` for infrastructure and `azd deploy` for
-services. The `graph-query-api` service is configured with `remoteBuild: true`
-in `azure.yaml` so Docker images are built in ACR (cross-platform safe).
-CORS_ORIGINS must be updated to the production frontend URL before deploying.
+Only `graph-query-api` is defined as a service in `azure.yaml`. The API and
+frontend are run locally. The `graph-query-api` service is configured with
+`remoteBuild: true` in `azure.yaml` so Docker images are built in ACR
+(cross-platform safe).
 
 ---
 
@@ -809,7 +823,6 @@ CORS_ORIGINS must be updated to the production frontend URL before deploying.
 | `azure-cosmos` | `>=4.7.0` | SQL queries against Cosmos DB NoSQL |
 | `fastapi` | `>=0.115` | ASGI framework |
 | `sse-starlette` | `>=2.0` | SSE responses |
-| `mcp[cli]` | `>=1.9.0` | FastMCP server framework |
 | `react` | `18.x` | UI library |
 | `framer-motion` | `11.x` | Animation |
 | `@microsoft/fetch-event-source` | `^2.0.1` | POST-capable SSE client |

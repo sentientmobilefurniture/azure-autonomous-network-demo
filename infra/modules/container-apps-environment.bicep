@@ -12,6 +12,9 @@ param location string
 @description('Resource tags')
 param tags object = {}
 
+@description('Subnet ID for VNet integration. When set, all outbound traffic routes through the VNet, enabling private DNS resolution for Cosmos DB private endpoints.')
+param infrastructureSubnetId string = ''
+
 // ---------------------------------------------------------------------------
 // Log Analytics Workspace
 // ---------------------------------------------------------------------------
@@ -49,6 +52,10 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2023-05-01'
   location: location
   tags: tags
   properties: {
+    vnetConfiguration: !empty(infrastructureSubnetId) ? {
+      infrastructureSubnetId: infrastructureSubnetId
+      internal: false   // Keep external ingress — Foundry OpenApiTool calls from outside
+    } : null
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {

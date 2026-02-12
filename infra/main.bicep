@@ -62,6 +62,19 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 // Module Deployments
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Virtual Network (Container Apps + Private Endpoints subnets)
+// ---------------------------------------------------------------------------
+
+module vnet 'modules/vnet.bicep' = {
+  scope: rg
+  params: {
+    name: 'vnet-${resourceToken}'
+    location: location
+    tags: tags
+  }
+}
+
 module search 'modules/search.bicep' = {
   scope: rg
   params: {
@@ -123,6 +136,7 @@ module containerAppsEnv 'modules/container-apps-environment.bicep' = {
     name: 'cae-${resourceToken}'
     location: location
     tags: tags
+    infrastructureSubnetId: vnet.outputs.containerAppsSubnetId
   }
 }
 
@@ -171,10 +185,31 @@ module roles 'modules/roles.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
+// Private Endpoints — Cosmos DB Gremlin + NoSQL over VNet backbone
+// Protects the Container App → Cosmos DB path from Azure Policy toggling
+// publicNetworkAccess. Traffic stays on the VNet regardless.
+// ---------------------------------------------------------------------------
+
+module cosmosPrivateEndpoints 'modules/cosmos-private-endpoints.bicep' = if (deployCosmosGremlin) {
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    vnetId: vnet.outputs.id
+    privateEndpointsSubnetId: vnet.outputs.privateEndpointsSubnetId
+    cosmosGremlinAccountId: cosmosGremlin!.outputs.cosmosAccountId
+    cosmosGremlinAccountName: cosmosGremlin!.outputs.cosmosAccountName
+    cosmosNoSqlAccountId: cosmosGremlin!.outputs.cosmosNoSqlAccountId
+    cosmosNoSqlAccountName: cosmosGremlin!.outputs.cosmosNoSqlAccountName
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 
 output AZURE_RESOURCE_GROUP string = rg.name
+output AZURE_VNET_NAME string = vnet.outputs.name
 output AZURE_AI_FOUNDRY_NAME string = aiFoundry.outputs.foundryName
 output AZURE_AI_FOUNDRY_ENDPOINT string = aiFoundry.outputs.foundryEndpoint
 output AZURE_AI_FOUNDRY_PROJECT_NAME string = aiFoundry.outputs.projectName

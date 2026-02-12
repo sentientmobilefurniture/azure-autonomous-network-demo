@@ -4,6 +4,7 @@ Router: POST /query/graph — dispatches to the configured graph backend.
 
 from __future__ import annotations
 
+import inspect
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -30,10 +31,6 @@ def get_graph_backend() -> GraphBackend:
         _backend = get_backend()
         logger.info("Initialised graph backend: %s", GRAPH_BACKEND.value)
     return _backend
-
-
-import asyncio
-import inspect
 
 
 async def close_graph_backend() -> None:

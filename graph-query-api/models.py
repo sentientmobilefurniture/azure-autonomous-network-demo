@@ -38,7 +38,3 @@ class TelemetryQueryResponse(BaseModel):
             "Read the message, fix your query, and retry."
         ),
     )
-
-
-class ErrorResponse(BaseModel):
-    error: str

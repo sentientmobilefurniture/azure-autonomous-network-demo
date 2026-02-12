@@ -230,5 +230,11 @@ output primaryKey string = cosmosAccount.listKeys().primaryMasterKey
 @description('The Cosmos DB NoSQL endpoint (https://<account>.documents.azure.com:443/)')
 output cosmosNoSqlEndpoint string = cosmosNoSqlAccount.properties.documentEndpoint
 
+@description('The Cosmos DB NoSQL account resource ID (for private endpoint)')
+output cosmosNoSqlAccountId string = cosmosNoSqlAccount.id
+
+@description('The Cosmos DB NoSQL account name')
+output cosmosNoSqlAccountName string = cosmosNoSqlAccount.name
+
 @description('The NoSQL telemetry database name')
 output telemetryDatabaseName string = telemetryDatabase.name
