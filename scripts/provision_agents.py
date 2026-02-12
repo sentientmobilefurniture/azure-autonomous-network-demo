@@ -44,7 +44,31 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
 AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
-OPENAPI_SPEC_FILE = PROJECT_ROOT / "fabric-query-api" / "openapi.yaml"
+OPENAPI_DIR = PROJECT_ROOT / "fabric-query-api" / "openapi"
+
+# ── Graph backend ───────────────────────────────────────────────────
+
+GRAPH_BACKEND = os.environ.get("GRAPH_BACKEND", "fabric").lower()
+
+OPENAPI_SPEC_MAP = {
+    "fabric": OPENAPI_DIR / "fabric.yaml",
+    "cosmosdb": OPENAPI_DIR / "cosmosdb.yaml",
+    "mock": OPENAPI_DIR / "mock.yaml",
+}
+
+OPENAPI_SPEC_FILE = OPENAPI_SPEC_MAP.get(GRAPH_BACKEND, OPENAPI_DIR / "fabric.yaml")
+
+LANGUAGE_FILE_MAP = {
+    "fabric": "language_gql.md",
+    "cosmosdb": "language_gremlin.md",
+    "mock": "language_mock.md",
+}
+
+GRAPH_TOOL_DESCRIPTIONS = {
+    "fabric": "Execute a GQL query against the Fabric GraphModel to explore network topology and relationships.",
+    "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore network topology and relationships.",
+    "mock": "Query the network topology graph (offline mock mode).",
+}
 
 
 # ── Config ──────────────────────────────────────────────────────────
@@ -114,6 +138,34 @@ def load_prompt(filename: str) -> tuple[str, str]:
     return text, description
 
 
+def load_graph_explorer_prompt() -> tuple[str, str]:
+    """Compose the GraphExplorer prompt from parts based on GRAPH_BACKEND.
+
+    Assembles: core_instructions + core_schema + language_{backend}
+    Also reads description.md for the agent description.
+    """
+    base = PROMPTS_DIR / "graph_explorer"
+    language_file = LANGUAGE_FILE_MAP.get(GRAPH_BACKEND, "language_gql.md")
+
+    instructions = "\n\n---\n\n".join([
+        (base / "core_instructions.md").read_text(encoding="utf-8").strip(),
+        (base / "core_schema.md").read_text(encoding="utf-8").strip(),
+        (base / language_file).read_text(encoding="utf-8").strip(),
+    ])
+
+    # Read description
+    desc_text = (base / "description.md").read_text(encoding="utf-8").strip()
+    desc_lines = [
+        line.lstrip("> ").strip()
+        for line in desc_text.splitlines()
+        if line.strip().startswith(">")
+    ]
+    description = " ".join(desc_lines) if desc_lines else desc_text
+
+    print(f"  GraphExplorer prompt: {len(instructions)} chars, backend={GRAPH_BACKEND}, language={language_file}")
+    return instructions, description
+
+
 # ── OpenAPI tool helpers ────────────────────────────────────────────
 
 def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
@@ -154,7 +206,7 @@ def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
     return OpenApiTool(
         name="query_graph",
         spec=spec,
-        description="Execute a GQL query against the Fabric GraphModel to explore network topology and relationships.",
+        description=GRAPH_TOOL_DESCRIPTIONS.get(GRAPH_BACKEND, GRAPH_TOOL_DESCRIPTIONS["fabric"]),
         auth=OpenApiAnonymousAuthDetails(),
     )
 
@@ -225,8 +277,8 @@ def get_search_connection_id(config: dict) -> str:
 
 
 def create_graph_explorer_agent(agents_client, model: str, config: dict) -> dict:
-    """Create the GraphExplorerAgent with OpenApiTool (GQL via fabric-query-api)."""
-    instructions, description = load_prompt("foundry_graph_explorer_agent_v2.md")
+    """Create the GraphExplorerAgent with OpenApiTool (graph backend via fabric-query-api)."""
+    instructions, description = load_graph_explorer_prompt()
 
     tools = []
     if config["fabric_query_api_uri"]:
@@ -352,6 +404,7 @@ def main():
     config = load_config()
     print(f"  Project endpoint: {config['project_endpoint']}")
     print(f"  Model: {config['model']}")
+    print(f"  Graph backend: {GRAPH_BACKEND}")
     api_uri = config["fabric_query_api_uri"]
     if api_uri:
         print(f"  Fabric Query API: {api_uri}")

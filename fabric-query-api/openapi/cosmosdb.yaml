@@ -1,0 +1,131 @@
+openapi: "3.0.3"
+info:
+  title: Fabric Query API
+  version: "0.5.0"
+  description: |
+    Micro-API for executing Gremlin and KQL queries.
+    Used by Foundry agents via OpenApiTool.
+    Backend: Azure Cosmos DB for Apache Gremlin
+# NOTE: Template placeholders ({base_url}, etc.) are substituted
+# at runtime by scripts/provision_agents.py.
+servers:
+  - url: "{base_url}"
+    description: Deployed Container App
+
+paths:
+  /query/graph:
+    post:
+      operationId: query_graph
+      summary: Execute a Gremlin query against the Cosmos DB graph
+      description: |
+        Submits a Gremlin traversal query to Azure Cosmos DB for Apache Gremlin.
+        Returns columns and data rows from the network topology ontology.
+        Use this to query routers, links, switches, base stations, MPLS paths,
+        services, SLA policies, and BGP sessions.
+
+        Send Gremlin queries as plain text strings (no bytecode, no lambdas).
+        Cosmos DB configuration (endpoint, database, graph) is set server-side.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: |
+                    A Gremlin traversal query string. Use exact entity IDs (uppercase with hyphens).
+                    Never use lambdas — Cosmos DB only supports string-based Gremlin.
+                    Example:
+                    g.V().hasLabel('TransportLink').has('LinkId', 'LINK-SYD-MEL-FIBRE-01')
+                      .in('routes_via').hasLabel('MPLSPath').valueMap(true)
+      responses:
+        "200":
+          description: Query results (check 'error' field for query failures)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                  error:
+                    type: string
+                    nullable: true
+                    description: |
+                      If present, the query failed. Contains the error message.
+                      Read the message, fix your query, and retry.
+
+  /query/telemetry:
+    post:
+      operationId: query_telemetry
+      summary: Execute a KQL query against the Fabric Eventhouse
+      description: |
+        Submits a KQL query to the Fabric Eventhouse (NetworkDB).
+        Returns columns and rows of alert or telemetry data.
+        Tables available: AlertStream (~5000 rows), LinkTelemetry (~8640 rows).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+                - eventhouse_query_uri
+                - kql_db_name
+              properties:
+                query:
+                  type: string
+                  description: |
+                    A KQL query string targeting AlertStream or LinkTelemetry tables.
+                    Example: AlertStream | where Severity == 'CRITICAL' | top 5 by Timestamp desc
+                eventhouse_query_uri:
+                  type: string
+                  enum: ["{eventhouse_query_uri}"]
+                  description: Kusto query URI for the Eventhouse. Always use the value shown.
+                kql_db_name:
+                  type: string
+                  enum: ["{kql_db_name}"]
+                  description: KQL database name. Always use the value shown.
+      responses:
+        "200":
+          description: Query results (check 'error' field for query failures)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                  error:
+                    type: string
+                    nullable: true
+                    description: |
+                      If present, the query failed. Contains the error message.
+                      Read the message, fix your query, and retry.

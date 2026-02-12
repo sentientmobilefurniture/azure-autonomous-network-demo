@@ -496,6 +496,7 @@ While paused, Fabric queries will fail — the agents will return errors.
 - [x] Query Fabric graph directly (GQL via REST API)
 - [x] Create and test graph query tool — FunctionTool PoC → OpenApiTool production
 - [ ] Prep the codebase for dual-graph architecture. Shift fabric specific files into specific locations, genericize graph APIs to allow easy swap out, restructure agent prompts with core model and graphdb-specific model (and build from those components) and control all these via the GRAPH_BACKEND param in azure_config.env
+- [ ] Make the agent flow even more WOWZA - Agent analyzing/auditing/classifying? Parallel execution doing some other stuff? The possibility of finetuning - THIS SHOULD ALL BE IN A KNOWLEDGE GRAPH DRREEEEEEAM deck
 - [ ] **Neo4j graph backend** — Replace Fabric GraphModel with Neo4j for demo. Enables real-time graph mutations from the UI (add/remove nodes, trigger faults, visualize topology live). Cypher ≈ GQL. Fabric remains the production-scale story; Neo4j is the interactive demo story.
 - [ ] Real-time graph visualization in UI (D3-force / Neovis.js over Bolt websockets)
 - [ ] Click on a node, select a particular type of error or scenario, trigger it!

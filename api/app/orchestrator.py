@@ -153,6 +153,8 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             self.ui_step = 0
             self.total_tokens = 0
             self.response_text = ""
+            self.run_failed = False
+            self.run_error_detail = ""
 
         def _elapsed(self) -> str:
             return f"{time.time() - self.t0:.1f}s"
@@ -171,19 +173,13 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 # Extract structured error info if available
                 code = getattr(err, "code", None) or (err.get("code") if isinstance(err, dict) else None) or "unknown"
                 msg = getattr(err, "message", None) or (err.get("message") if isinstance(err, dict) else str(err))
+                self.run_failed = True
+                self.run_error_detail = f"[{code}] {msg}"
                 logger.error(
                     "Orchestrator run failed: [%s] %s  (steps completed: %d, elapsed: %s)",
-                    code, msg, handler.ui_step if hasattr(handler, 'ui_step') else '?',
-                    handler._elapsed() if hasattr(handler, '_elapsed') else '?',
+                    code, msg, self.ui_step,
+                    self._elapsed(),
                 )
-                _put("error", {
-                    "message": (
-                        f"Agent run interrupted \u2014 A backend query returned an error. "
-                        f"The graph schema or data may not match the query. "
-                        f"{handler.ui_step} steps completed before the error.\n\n"
-                        f"Error detail: [{code}] {msg}"
-                    ),
-                })
 
         # -- Step lifecycle --------------------------------------------------
 
@@ -361,8 +357,9 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
 
     # -- Thread target -------------------------------------------------------
 
+    MAX_RUN_ATTEMPTS = 2  # initial + 1 retry on failure
+
     def _thread_target():
-        handler = SSEEventHandler()
         try:
             _put("run_start", {
                 "run_id": "",
@@ -380,27 +377,101 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     content=alert_text,
                 )
 
-                with agents_client.runs.stream(
-                    thread_id=thread.id,
-                    agent_id=orchestrator_id,
-                    event_handler=handler,
-                ) as stream:
-                    stream.until_done()
+                last_error_detail = ""
+                for attempt in range(1, MAX_RUN_ATTEMPTS + 1):
+                    handler = SSEEventHandler()
 
-                # Emit the full response text
-                if handler.response_text:
-                    _put("message", {"text": handler.response_text})
-                else:
-                    # Fallback: fetch messages if streaming didn't capture text
-                    messages = agents_client.messages.list(thread_id=thread.id)
-                    text = ""
-                    for msg in reversed(list(messages)):
-                        if msg.role == "assistant":
-                            for block in msg.content:
-                                if hasattr(block, "text"):
-                                    text += block.text.value + "\n"
-                    if text:
-                        _put("message", {"text": text.strip()})
+                    if attempt > 1:
+                        # Post a recovery message so the orchestrator knows
+                        # the previous attempt failed and can adjust its approach
+                        recovery_msg = (
+                            f"[SYSTEM] The previous investigation attempt failed with: "
+                            f"{last_error_detail}\n\n"
+                            f"Please retry the investigation. If a sub-agent tool call "
+                            f"failed, try a different or simpler query, or skip that "
+                            f"data source and continue with the information you have."
+                        )
+                        agents_client.messages.create(
+                            thread_id=thread.id,
+                            role="user",
+                            content=recovery_msg,
+                        )
+                        _put("step_thinking", {
+                            "agent": "Orchestrator",
+                            "status": f"Retrying investigation (attempt {attempt}/{MAX_RUN_ATTEMPTS})...",
+                        })
+                        logger.info(
+                            "Orchestrator retry attempt %d/%d after error: %s",
+                            attempt, MAX_RUN_ATTEMPTS, last_error_detail[:300],
+                        )
+
+                    with agents_client.runs.stream(
+                        thread_id=thread.id,
+                        agent_id=orchestrator_id,
+                        event_handler=handler,
+                    ) as stream:
+                        stream.until_done()
+
+                    # Check if the run failed
+                    if handler.run_failed:
+                        last_error_detail = handler.run_error_detail
+                        if attempt < MAX_RUN_ATTEMPTS:
+                            logger.warning(
+                                "Orchestrator run failed, will retry (attempt %d/%d): %s",
+                                attempt, MAX_RUN_ATTEMPTS, last_error_detail[:300],
+                            )
+                            continue
+                        else:
+                            # Final attempt also failed — emit the error
+                            _put("error", {
+                                "message": (
+                                    f"Agent run interrupted — A backend query returned an error. "
+                                    f"{handler.ui_step} steps completed before the error. "
+                                    f"Retried {MAX_RUN_ATTEMPTS} times.\n\n"
+                                    f"Error detail: {last_error_detail}"
+                                ),
+                            })
+                            break
+
+                    # Check if the run succeeded with response text
+                    if handler.response_text:
+                        # Success — emit the response and break
+                        _put("message", {"text": handler.response_text})
+                        break
+                    else:
+                        # Try to fetch messages — the run may have completed
+                        # but streaming didn't capture the text
+                        messages = agents_client.messages.list(thread_id=thread.id)
+                        text = ""
+                        for msg in reversed(list(messages)):
+                            if msg.role == "assistant":
+                                for block in msg.content:
+                                    if hasattr(block, "text"):
+                                        text += block.text.value + "\n"
+                        if text:
+                            _put("message", {"text": text.strip()})
+                            break
+
+                        # No response text AND no error means the run died silently
+                        # Capture the error for the retry message
+                        last_error_detail = (
+                            f"Run produced no response after {handler.ui_step} steps."
+                        )
+                        if attempt < MAX_RUN_ATTEMPTS:
+                            logger.warning(
+                                "Orchestrator run produced no response, will retry (attempt %d/%d)",
+                                attempt, MAX_RUN_ATTEMPTS,
+                            )
+                            continue
+                        else:
+                            # Final attempt also failed — emit what we have
+                            _put("error", {
+                                "message": (
+                                    f"Investigation did not produce a final response "
+                                    f"after {MAX_RUN_ATTEMPTS} attempts. "
+                                    f"{handler.ui_step} steps were completed."
+                                ),
+                            })
 
                 _put("run_complete", {
                     "steps": handler.ui_step,
