@@ -1,1025 +1,768 @@
-# V3 Graph Architecture: Neo4j Integration Plan
+# V4 Graph Architecture: Backend-Agnostic Graph Abstraction
 
-## Motivation
+## Context & Motivation
 
-Fabric GraphModel on F8 SKU cannot sustain 3 concurrent agent GQL calls without
-capacity exhaustion. The F8 crashed and auto-paused during a demo run. Scaling to
-F16+ costs significantly more and doesn't address the real opportunity: **live
-graph manipulation in the UI** — adding/removing nodes, triggering faults,
-visualizing topology changes in real time — which Fabric GraphModel doesn't
-support at all (it's a read-only query surface over Lakehouse tables).
+The demo currently works end-to-end with **Fabric GraphModel** (GQL via `fabric-query-api`).
+The previous V3 plan proposed swapping Fabric for Neo4j, but the strategic direction has
+shifted — we now want a **backend-agnostic architecture** that can swap graph backends
+via a single environment variable, with no code changes to the agent layer.
 
-Neo4j Community Edition is free, runs in a Docker container, supports read AND
-write via Cypher (which is nearly identical to GQL/ISO), has mature visualization
-libraries, and handles concurrent queries from a single container without breaking
-a sweat.
+### Why backend-agnostic?
 
-### Positioning
+1. **Fabric still works** — we don't want to break the current demo
+2. **Cosmos DB Gremlin is the next target** — Microsoft-native, sales motion, Fabric migration path
+3. **Future-proof** — any graph backend (Fabric, Cosmos DB, Neo4j, in-memory mock) should slot in
+4. **Demo flexibility** — `GRAPH_BACKEND=fabric` for customer Fabric demos, `GRAPH_BACKEND=cosmosdb`
+   for graph-manipulation demos, `GRAPH_BACKEND=mock` for offline/disconnected demos
 
-> "In production you'd use Microsoft Fabric for petabyte-scale telemetry and
-> graph analytics. For this demo we use Neo4j to show real-time graph
-> manipulation and interactive visualization — the kind of thing that makes
-> a graph database tangible."
+### The key insight (unchanged from V3)
 
-This is not anti-Fabric. It's complementary. The demo still uses Fabric
-Eventhouse for KQL telemetry queries. The graph portion moves to Neo4j because
-it unlocks capabilities that Fabric can't provide today (mutations, subscriptions,
-interactive viz).
+> The agents don't know or care whether `/query/graph` talks to Fabric, Cosmos DB, or anything else.
+> They send a query string and get back `{columns, data}`. The API contract stays the same.
 
----
-
-## Current Architecture (V2)
-
-```
-Foundry Agent (GraphExplorerAgent)
-  └─ OpenApiTool → POST fabric-query-api/query/graph
-                      └─ GQL → Fabric GraphModel REST API
-                                 └─ Read-only query over Lakehouse CSVs
-```
-
-Key constraints of V2:
-- **Read-only**: Cannot modify the graph at runtime
-- **Capacity-bound**: F8 SKU shares CUs across all Fabric workloads
-- **No visualization**: Graph data is returned as JSON rows, no spatial layout
-- **No subscriptions**: No way to push graph changes to the UI
-- **Cold start**: GraphModel needs to warm up after idle periods
+What *does* change per backend:
+- **Query language** in the agent's system prompt (GQL vs Gremlin vs Cypher)
+- **Backend implementation** in `fabric-query-api/main.py` (which SDK to call)
+- **Data loading** (how topology CSVs get into the graph)
+- **OpenAPI spec description** (which query language examples to show)
+- **Infrastructure** (Bicep modules for provisioning)
 
 ---
 
-## Proposed Architecture (V3)
+## Current State (V2 — Fabric Only)
+
+### Files that are Fabric-specific today
+
+| File | What's Fabric-specific | What's generic |
+|------|----------------------|----------------|
+| `fabric-query-api/main.py` | `_execute_gql()` function, Fabric REST API call, `_fabric_headers()` | KQL endpoint, FastAPI app, request/response models, error handling |
+| `fabric-query-api/openapi.yaml` | GQL description, `workspace_id`/`graph_model_id` params | Endpoint paths, response schema |
+| `data/prompts/foundry_graph_explorer_agent_v2.md` | GQL syntax examples, "GQL" references throughout | Entity schema, relationship schema, query patterns (logic), scope boundaries |
+| `data/prompts/foundry_orchestrator_agent.md` | None (already generic) | Everything |
+| `scripts/provision_agents.py` | `_make_graph_openapi_tool()` description says "GQL" | Everything else |
+| `azure_config.env.template` | `FABRIC_GRAPH_MODEL_ID`, `FABRIC_ONTOLOGY_ID` | All other vars |
+
+### Current request flow (Fabric)
 
 ```
-                                    ┌──────────────────────────────────┐
-                                    │  Neo4j Container App             │
-                                    │  (Community Edition, Bolt 7687)  │
-                                    │  Volume: /data (persistent)      │
-                                    └──────────┬─────┬─────────────────┘
-                                               │     │
-                          Bolt (neo4j driver)  │     │  HTTP 7474 (browser)
-                                               │     │
-     ┌─────────────────────────────────────────┘     └──────── (optional: Neo4j Browser)
-     │
-     ▼
-┌────────────────────┐
-│  graph-query-api   │  ← renamed from fabric-query-api
-│  Container App     │     (or: fabric-query-api with graph backend swap)
-│  POST /query/graph │
-│  POST /query/telem │  ← still hits Fabric Eventhouse (no change)
-│  POST /graph/mutate│  ← NEW: write operations
-│  GET  /graph/viz   │  ← NEW: full topology for visualization
-│  WS   /graph/live  │  ← NEW: WebSocket for real-time updates (stretch)
-└─────────┬──────────┘
-          │
-          │ OpenApiTool (same pattern as V2)
-          ▼
-  Foundry Agents (unchanged)
+Agent → OpenApiTool → POST /query/graph {query: "MATCH (r:CoreRouter)..."}
+  → fabric-query-api → _execute_gql() → Fabric GraphModel REST API
+  → {columns, data} → Agent
+```
+
+---
+
+## Target Architecture (V4 — Backend-Agnostic)
+
+### Control via `GRAPH_BACKEND` env var
+
+```bash
+# azure_config.env
+GRAPH_BACKEND=fabric          # Options: "fabric" | "cosmosdb" | "mock"
+```
+
+- `fabric` → current behaviour, no changes
+- `cosmosdb` → Cosmos DB for Apache Gremlin (future implementation)
+- `mock` → in-memory static responses for offline demos (stretch)
+
+### Request flow (all backends)
+
+```
+Agent → OpenApiTool → POST /query/graph {query: "..."}
+  → fabric-query-api/main.py
+  → reads GRAPH_BACKEND env
+  → dispatches to backend:
+      fabric   → backends/fabric.py   → Fabric GraphModel REST API (GQL)
+      cosmosdb → backends/cosmosdb.py → Cosmos DB Gremlin (gremlinpython)
+      mock     → backends/mock.py     → static JSON responses
+  → normalises to {columns, data}
+  → returns to agent
 ```
 
 ### What changes, what stays
 
-| Component | V2 (Fabric) | V3 (Neo4j) | Change? |
-|-----------|-------------|------------|---------|
-| **TelemetryAgent** | OpenApiTool → /query/telemetry → Kusto SDK | Same | **No change** |
-| **RunbookKBAgent** | AzureAISearchTool | Same | **No change** |
-| **HistoricalTicketAgent** | AzureAISearchTool | Same | **No change** |
-| **GraphExplorerAgent** | OpenApiTool → /query/graph → Fabric GQL | OpenApiTool → /query/graph → Neo4j Cypher | **Backend swap only** |
-| **Orchestrator** | ConnectedAgentTool to 4 sub-agents | Same | **No change** |
-| **fabric-query-api** | FastAPI + Fabric REST API | FastAPI + neo4j Python driver | **Backend swap** |
-| **OpenAPI spec** | GQL semantics in description | Cypher semantics in description | **Spec update** |
-| **Data loading** | CSVs → Fabric Lakehouse → Ontology | CSVs → Cypher CREATE/MERGE | **New script** |
-| **Frontend** | No graph viz | React Flow live topology | **New feature** |
-
-### The critical insight: the API contract doesn't change
-
-The agents don't know or care whether `/query/graph` talks to Fabric or Neo4j.
-They send a query string and get back `{columns, data}`. The OpenAPI spec can
-stay almost identical — just update the `description` field to say "Cypher" instead
-of "GQL" and update the query examples.
-
-This means:
-- `provision_agents.py` works with minimal changes (spec description updates)
-- `agent_ids.json` stays the same (agents aren't recreated unless prompts change)
-- The orchestrator, backend API, and SSE streaming are completely untouched
+| Component | Changes? | Detail |
+|-----------|----------|--------|
+| **Orchestrator agent** | No | Already generic |
+| **TelemetryAgent** | No | KQL path is unaffected |
+| **RunbookKBAgent** | No | AI Search, unrelated |
+| **HistoricalTicketAgent** | No | AI Search, unrelated |
+| **GraphExplorerAgent prompt** | Yes | Split into core schema + backend-specific query language |
+| **fabric-query-api/main.py** | Yes | Extract backend dispatch, move Fabric code to backends/ |
+| **fabric-query-api/openapi.yaml** | Yes | Make description backend-aware (template per backend) |
+| **scripts/provision_agents.py** | Yes | Compose prompt from parts, select correct OpenAPI spec |
+| **azure_config.env.template** | Yes | Add `GRAPH_BACKEND`, add Cosmos DB vars (commented) |
+| **Frontend** | No | Receives same SSE events regardless |
+| **API (main FastAPI app)** | No | Doesn't touch graph at all |
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Neo4j Container App (Core Swap)
+### Phase 0: File Reorganisation (No Behaviour Change)
 
-**Goal**: Replace Fabric GraphModel with Neo4j as the graph backend. No new
-features — just swap the data source and verify agents still work.
+**Goal**: Move Fabric-specific code into clearly labelled locations. The demo
+continues to work exactly as before — this is purely structural.
 
-#### 1.1 Deploy Neo4j as a Container App
+#### 0.1 Restructure `fabric-query-api/` internals
 
-Neo4j Community Edition Docker image: `neo4j:2026.01-community` (free, no license).
-
-**Option A: Dedicated Container App (recommended)**
-
-Deploy Neo4j as a separate Container App in the same managed environment.
-Advantages: independent scaling, persistent volume, Bolt port exposure.
-
+Current flat structure:
 ```
-# Bicep: modules/neo4j.bicep
-resource neo4j 'Microsoft.App/containerApps@2024-03-01' = {
-  properties: {
-    template: {
-      containers: [{
-        name: 'neo4j'
-        image: 'neo4j:2026.01-community'
-        env: [
-          { name: 'NEO4J_AUTH', value: 'neo4j/${neo4jPassword}' }
-          { name: 'NEO4J_PLUGINS', value: '["apoc"]' }
-        ]
-        resources: { cpu: 1, memory: '2Gi' }
-        volumeMounts: [{ volumeName: 'neo4j-data', mountPath: '/data' }]
-      }]
-      volumes: [{ name: 'neo4j-data', storageType: 'AzureFile', storageName: '...' }]
-    }
-    configuration: {
-      ingress: {
-        external: false  // internal only — graph-query-api talks to it
-        targetPort: 7687  // Bolt protocol
-      }
-    }
-  }
-}
-```
-
-Considerations:
-- **Persistent storage**: Azure Files volume mount for `/data` (graph survives restarts)
-- **Internal ingress**: Only `graph-query-api` needs to reach Neo4j (Bolt 7687)
-- **No public exposure**: Security — Neo4j Browser (7474) only exposed in dev
-- **APOC plugin**: Useful for path algorithms, data loading, export
-
-**Option B: Sidecar in graph-query-api Container App**
-
-Run Neo4j as a sidecar container alongside the FastAPI app. Simpler but couples
-the lifecycle and shares resources (CPU/memory).
-
-**Recommendation**: Option A. Keep Neo4j independent. It has different resource
-needs (memory for page cache) and different lifecycle (data persists across
-code deploys).
-
-#### 1.2 Adapt graph-query-api
-
-Replace the Fabric GQL execution path with Neo4j's Python driver:
-
-```python
-# Before (V2 — Fabric)
-import httpx
-result = await client.post(fabric_url, json={"query": gql_query})
-
-# After (V3 — Neo4j)
-from neo4j import AsyncGraphDatabase
-
-async with driver.session(database="neo4j") as session:
-    result = await session.run(cypher_query)
-    records = [record.data() async for record in result]
-```
-
-Key changes in `main.py`:
-
-| Area | V2 | V3 |
-|------|----|----|
-| Import | `httpx` | `neo4j` (async driver) |
-| Connection | `DefaultAzureCredential` → Fabric REST | `AsyncGraphDatabase.driver(bolt_uri, auth=(...))` |
-| Query execution | HTTP POST → GQL | Bolt session → Cypher |
-| Response shape | Already `{columns, data}` | Transform `Record.data()` → same shape |
-| Auth | Managed identity (OAuth token) | Username/password (from env var / Key Vault) |
-| Retry logic | 429 rate-limit retry | Not needed (Neo4j handles concurrency) |
-
-Dependencies change:
-```toml
-# pyproject.toml — remove requests, add neo4j
-dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "httpx>=0.28.0",              # still needed for health checks etc
-    "neo4j>=5.26.0",              # Neo4j async Python driver
-    "azure-identity>=1.19.0",    # still needed for Kusto (telemetry)
-    "azure-kusto-data>=4.6.0",   # telemetry endpoint unchanged
-]
-```
-
-**Interface contract preservation**: The response format `{columns, data}` stays
-identical. Agents see no difference:
-
-```python
-# V2 return from Fabric
-{"columns": [{"name": "RouterId", "type": "string"}], "data": [{"RouterId": "CORE-SYD-01"}]}
-
-# V3 return from Neo4j (same shape)
-{"columns": [{"name": "RouterId", "type": "string"}], "data": [{"RouterId": "CORE-SYD-01"}]}
-```
-
-#### 1.3 Query language mapping: GQL → Cypher
-
-The graph agents' prompts currently instruct them to write GQL. GQL (ISO/IEC
-39075) is heavily Cypher-derived, so the mapping is nearly 1:1:
-
-| GQL (current) | Cypher (Neo4j) | Notes |
-|---------------|----------------|-------|
-| `MATCH (r:CoreRouter)` | `MATCH (r:CoreRouter)` | Identical |
-| `WHERE r.RouterId = "X"` | `WHERE r.RouterId = "X"` | Identical |
-| `RETURN r.RouterId, r.City` | `RETURN r.RouterId, r.City` | Identical |
-| `(a)-[:routes_via]->(b)` | `(a)-[:routes_via]->(b)` | Identical |
-| `LIMIT 10` | `LIMIT 10` | Identical |
-
-Differences that matter:
-- GQL uses `GRAPH` clause for graph selection — not needed in Neo4j (one DB)
-- GQL has some ISO syntax sugar not in Cypher — unlikely in our simple queries
-- Neo4j supports `OPTIONAL MATCH`, `CREATE`, `MERGE`, `DELETE` — GQL doesn't
-
-**Action**: Update `GraphExplorerAgent` system prompt to say "Cypher" instead of
-"GQL" and add examples of write operations for V3 Phase 2.
-
-#### 1.4 Data loading script
-
-New script: `scripts/provision_neo4j.py`
-
-Load the same CSVs into Neo4j that currently go into Fabric Lakehouse:
-
-```python
-from neo4j import GraphDatabase
-
-def load_graph(driver):
-    with driver.session() as session:
-        # Nodes
-        session.run("""
-            LOAD CSV WITH HEADERS FROM 'file:///DimCoreRouter.csv' AS row
-            CREATE (r:CoreRouter {
-                RouterId: row.RouterId, City: row.City,
-                Region: row.Region, Vendor: row.Vendor, Model: row.Model
-            })
-        """)
-        # ... repeat for all Dim* tables
-
-        # Relationships from Fact tables
-        session.run("""
-            LOAD CSV WITH HEADERS FROM 'file:///FactServiceDependency.csv' AS row
-            MATCH (s:Service {ServiceId: row.ServiceId})
-            MATCH (d {ServiceId: row.DependsOnId})  // polymorphic
-            CREATE (s)-[:DEPENDS_ON {strength: row.DependencyStrength}]->(d)
-        """)
-```
-
-Alternatively, use the neo4j Python driver's `execute_query()` to load via
-parameterized Cypher (more portable than `LOAD CSV` which requires file access).
-
-#### 1.5 Config changes
-
-New env vars in `azure_config.env`:
-
-```bash
-# --- Neo4j (V3 graph backend) ---
-NEO4J_BOLT_URI=bolt://neo4j-container:7687      # internal Container App DNS
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=<from-key-vault-or-env>
-GRAPH_BACKEND=neo4j                              # or "fabric" — feature flag
-```
-
-The `GRAPH_BACKEND` flag allows dual-mode: fabric-query-api checks this at
-startup and configures either the Fabric GQL path or the Neo4j Cypher path.
-This is the cleanest way to avoid a hard fork while transitioning.
-
-#### 1.6 Bicep changes
-
-```
-infra/modules/neo4j.bicep               # NEW: Neo4j Container App
-infra/modules/azure-files-share.bicep   # NEW: persistent volume for Neo4j /data
-infra/main.bicep                        # Add neo4j module, output NEO4J_BOLT_URI
-```
-
----
-
-### Phase 2: Graph Mutations (Interactive Demo)
-
-**Goal**: Allow the UI to modify the graph in real time — add/remove nodes,
-simulate faults, trigger cascading failures.
-
-#### 2.1 New API endpoints
-
-Add to graph-query-api:
-
-```
-POST /graph/mutate     — Execute a write Cypher query (CREATE/MERGE/DELETE)
-GET  /graph/topology   — Return full graph as nodes+edges for visualization
-POST /graph/reset      — Reload graph from CSVs (reset to clean state)
-POST /graph/fault      — Inject a predefined fault scenario
-```
-
-The `/graph/topology` endpoint returns data shaped for React Flow:
-
-```json
-{
-  "nodes": [
-    {"id": "CORE-SYD-01", "type": "CoreRouter", "data": {"City": "Sydney", ...}, "position": {"x": 100, "y": 200}},
-    ...
-  ],
-  "edges": [
-    {"id": "e1", "source": "CORE-SYD-01", "target": "CORE-MEL-01", "type": "TransportLink", "data": {"CapacityGbps": 100}},
-    ...
-  ]
-}
-```
-
-#### 2.2 Fault injection scenarios
-
-Predefined scenarios stored as Cypher templates:
-
-```yaml
-# data/fault-scenarios.yaml
-scenarios:
-  - id: link_down
-    name: "Transport Link Failure"
-    description: "Simulate a fibre cut between two cities"
-    params: [link_id]
-    cypher: |
-      MATCH (l:TransportLink {LinkId: $link_id})
-      SET l.Status = 'DOWN', l.DownSince = datetime()
-
-  - id: router_overload
-    name: "Core Router Overload"
-    params: [router_id]
-    cypher: |
-      MATCH (r:CoreRouter {RouterId: $router_id})
-      SET r.Status = 'DEGRADED', r.CPUPercent = 98
-
-  - id: bgp_flap
-    name: "BGP Session Flap"
-    params: [session_id]
-    cypher: |
-      MATCH (b:BGPSession {SessionId: $session_id})
-      SET b.Status = 'FLAPPING', b.FlapCount = b.FlapCount + 1
-```
-
-The UI renders these as a dropdown/palette. Clicking one injects the fault into
-Neo4j, then triggers the alert → orchestrator → agent pipeline to diagnose it.
-
-#### 2.3 React Flow visualization
-
-Using `@xyflow/react` (per `react-flow-node-ts` skill reference):
-
-```tsx
-import { ReactFlow, Node, Edge, useNodesState, useEdgesState } from '@xyflow/react';
-
-// Custom node types for each entity
-const nodeTypes = {
-  CoreRouter: CoreRouterNode,
-  TransportLink: TransportLinkNode,
-  Service: ServiceNode,
-  // ...
-};
-```
-
-Layout: Use `dagre` or `elkjs` for automatic hierarchical layout of the network
-topology. Each node type gets a distinct visual treatment (icon, color, shape).
-
-Status updates: When an agent identifies a faulty component, the UI can highlight
-that node in the graph (red border, pulse animation).
-
----
-
-### Phase 3: Real-Time Updates (Stretch Goal)
-
-**Goal**: Push graph state changes to the UI without polling.
-
-Options:
-1. **WebSocket on graph-query-api** — FastAPI WebSocket endpoint, push on mutation
-2. **Azure Web PubSub** — Managed WebSocket service (skills reference available
-   for both Python and TypeScript SDKs)
-3. **SSE on /graph/live** — Simpler than WebSocket, reuse existing SSE infra
-
-Recommendation: Start with **SSE** (we already have the infrastructure). If
-bi-directional communication is needed later, upgrade to Web PubSub.
-
----
-
-## Dual-Mode Strategy: Keeping Fabric Support
-
-The cleanest way to avoid a hard fork is a **backend strategy pattern** in
-graph-query-api. This section provides the detailed design for dual-mode
-operation, including code separation, prompt composition, and caveats.
-
-### Backend Strategy Pattern
-
-```python
-# backends/base.py
-
-from typing import Protocol
-
-class GraphBackend(Protocol):
-    """Interface for graph query execution. Both Neo4j and Fabric implement this."""
-
-    async def query(self, query_string: str, params: dict | None = None) -> dict:
-        """Execute a read query. Returns {columns: [...], data: [...]}."""
-        ...
-
-    async def mutate(self, query_string: str, params: dict | None = None) -> dict:
-        """Execute a write query. Neo4j only; Fabric raises 501."""
-        ...
-
-    async def topology(self) -> dict:
-        """Return full graph as {nodes: [...], edges: [...]}. Neo4j only."""
-        ...
-
-    async def health(self) -> dict:
-        """Check backend connectivity."""
-        ...
-```
-
-```python
-# backends/neo4j.py
-
-from neo4j import AsyncGraphDatabase
-
-class Neo4jBackend:
-    def __init__(self, bolt_uri: str, username: str, password: str):
-        self._driver = AsyncGraphDatabase.driver(bolt_uri, auth=(username, password))
-
-    async def query(self, query_string: str, params: dict | None = None) -> dict:
-        async with self._driver.session(database="neo4j") as session:
-            result = await session.run(query_string, params or {})
-            records = [record.data() async for record in result]
-            columns = list(records[0].keys()) if records else []
-            return {
-                "columns": [{"name": c, "type": "string"} for c in columns],
-                "data": records,
-            }
-
-    async def mutate(self, query_string: str, params: dict | None = None) -> dict:
-        async with self._driver.session(database="neo4j") as session:
-            result = await session.run(query_string, params or {})
-            summary = await result.consume()
-            return {
-                "nodes_created": summary.counters.nodes_created,
-                "relationships_created": summary.counters.relationships_created,
-                "properties_set": summary.counters.properties_set,
-            }
-
-    async def topology(self) -> dict:
-        """Return the full graph as nodes + edges for React Flow visualization."""
-        async with self._driver.session(database="neo4j") as session:
-            # Fetch all nodes
-            node_result = await session.run(
-                "MATCH (n) RETURN labels(n)[0] AS type, properties(n) AS props, elementId(n) AS id"
-            )
-            nodes = []
-            async for record in node_result:
-                data = record.data()
-                nodes.append({
-                    "id": data["props"].get(self._primary_key(data["type"]), data["id"]),
-                    "type": data["type"],
-                    "data": data["props"],
-                })
-
-            # Fetch all relationships
-            edge_result = await session.run(
-                "MATCH (a)-[r]->(b) RETURN type(r) AS type, properties(a) AS source_props, "
-                "labels(a)[0] AS source_type, properties(b) AS target_props, labels(b)[0] AS target_type, "
-                "properties(r) AS rel_props"
-            )
-            edges = []
-            async for record in edge_result:
-                data = record.data()
-                edges.append({
-                    "source": data["source_props"].get(self._primary_key(data["source_type"])),
-                    "target": data["target_props"].get(self._primary_key(data["target_type"])),
-                    "type": data["type"],
-                    "data": data["rel_props"],
-                })
-            return {"nodes": nodes, "edges": edges}
-
-    async def health(self) -> dict:
-        try:
-            await self._driver.verify_connectivity()
-            return {"status": "ok", "backend": "neo4j"}
-        except Exception as e:
-            return {"status": "error", "backend": "neo4j", "detail": str(e)}
-
-    @staticmethod
-    def _primary_key(label: str) -> str:
-        """Map Neo4j label to its primary key property name."""
-        return {
-            "CoreRouter": "RouterId", "AggSwitch": "SwitchId",
-            "BaseStation": "StationId", "TransportLink": "LinkId",
-            "MPLSPath": "PathId", "Service": "ServiceId",
-            "SLAPolicy": "SLAPolicyId", "BGPSession": "SessionId",
-        }.get(label, "id")
-```
-
-```python
-# backends/fabric.py
-
-from fastapi import HTTPException
-
-class FabricBackend:
-    def __init__(self, credential, workspace_id: str, graph_model_id: str):
-        self._credential = credential
-        self._workspace_id = workspace_id
-        self._graph_model_id = graph_model_id
-        # httpx.AsyncClient for GQL, same as current main.py
-
-    async def query(self, query_string: str, params: dict | None = None) -> dict:
-        # Current GQL execution path (httpx → Fabric REST API)
-        ...
-
-    async def mutate(self, query_string: str, params: dict | None = None) -> dict:
-        raise HTTPException(501, "Fabric GraphModel is read-only — mutations require Neo4j backend")
-
-    async def topology(self) -> dict:
-        raise HTTPException(501, "Topology visualization not supported on Fabric backend")
-
-    async def health(self) -> dict:
-        # Token acquisition + Fabric API health check
-        ...
-```
-
-```python
-# main.py (startup — backend selection)
-
-from backends.neo4j import Neo4jBackend
-from backends.fabric import FabricBackend
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    backend_type = os.getenv("GRAPH_BACKEND", "fabric")
-    if backend_type == "neo4j":
-        app.state.graph = Neo4jBackend(
-            bolt_uri=os.environ["NEO4J_BOLT_URI"],
-            username=os.environ["NEO4J_USERNAME"],
-            password=os.environ["NEO4J_PASSWORD"],
-        )
-    else:
-        app.state.graph = FabricBackend(
-            credential=DefaultAzureCredential(),
-            workspace_id=os.environ["FABRIC_WORKSPACE_ID"],
-            graph_model_id=os.environ["FABRIC_GRAPH_MODEL_ID"],
-        )
-    # Telemetry (KQL) client is always Fabric Eventhouse — unaffected
-    app.state.kusto = KustoClient(...)
-    yield
-
-@app.post("/query/graph")
-async def query_graph(request: Request, body: QueryRequest):
-    return await request.app.state.graph.query(body.query)
-```
-
-### Code Separation Architecture
-
-The current `fabric-query-api/` is a single `main.py` monolith. Dual-mode
-requires clean separation:
-
-```
-fabric-query-api/                   (consider renaming to graph-query-api/)
-├── main.py                         # FastAPI app, routes, lifespan — GENERIC
-├── config.py                       # Env var loading, backend selection logic
-├── models.py                       # Pydantic: QueryRequest, QueryResponse, TopologyResponse
-├── backends/
-│   ├── __init__.py                 # re-exports GraphBackend protocol
-│   ├── base.py                     # GraphBackend Protocol definition
-│   ├── neo4j.py                    # Neo4jBackend implementation
-│   └── fabric.py                   # FabricBackend implementation
-├── telemetry/
-│   ├── __init__.py
-│   └── kusto.py                    # KQL execution (always Fabric Eventhouse)
-├── openapi.yaml                    # Shared spec — query endpoint descriptions
-├── pyproject.toml
+fabric-query-api/
+├── main.py          ← 458 lines, GQL + KQL + SSE logs all mixed
+├── openapi.yaml
 ├── Dockerfile
-└── uv.lock
+└── pyproject.toml
 ```
 
-**Separation rules:**
-- `backends/` contains ONLY graph-backend-specific code. No framework imports (FastAPI, Pydantic) except in type hints.
-- `telemetry/` is always Fabric Eventhouse. It never touches the graph backend.
-- `main.py` imports from `backends/` and `telemetry/` but never contains backend-specific logic.
-- `config.py` reads env vars and returns typed config objects. No I/O.
-- `models.py` defines Pydantic request/response models used by routes.
+Target structure:
+```
+fabric-query-api/
+├── main.py              ← slim: app factory, middleware, health, log streaming
+├── config.py            ← GRAPH_BACKEND enum, env var loading
+├── models.py            ← Pydantic request/response models (shared across backends)
+├── router_graph.py      ← POST /query/graph endpoint (dispatches to backend)
+├── router_telemetry.py  ← POST /query/telemetry endpoint (KQL, unchanged)
+├── backends/
+│   ├── __init__.py      ← GraphBackend protocol + get_backend() factory
+│   ├── fabric.py        ← _execute_gql() moved here (current Fabric logic)
+│   ├── cosmosdb.py      ← placeholder: raises NotImplementedError
+│   └── mock.py          ← placeholder: returns static topology data
+├── openapi/
+│   ├── fabric.yaml      ← /query/graph + /query/telemetry spec with GQL description
+│   ├── cosmosdb.yaml    ← /query/graph + /query/telemetry spec with Gremlin description
+│   └── mock.yaml        ← /query/graph + /query/telemetry spec with generic description
+├── Dockerfile
+└── pyproject.toml
+```
 
-**What goes where:**
+#### 0.2 Restructure agent prompts
 
-| Concern | File | Notes |
-|---------|------|-------|
-| `AsyncGraphDatabase.driver()` | `backends/neo4j.py` | Only imports `neo4j` package |
-| `httpx.AsyncClient` for Fabric GQL | `backends/fabric.py` | Only imports `httpx`, `azure-identity` |
-| `KustoClient` for KQL | `telemetry/kusto.py` | Always Fabric Eventhouse |
-| Route definitions (`@app.post`) | `main.py` | Delegates to `app.state.graph` |
-| `GRAPH_BACKEND` env var reading | `config.py` | Returns enum, not backend instance |
-| Response shape validation | `models.py` | Shared across backends |
-
-### Prompt Composition: OntologyCore + LanguageCore
-
-The GraphExplorerAgent's system prompt is currently a single 300+ line document
-containing both domain knowledge (entity types, relationships, instances) and
-query language instructions (GQL syntax, examples, critical rules). For dual-mode,
-we split this into two composable layers:
-
-#### Why Split?
-
-The entity model is identical regardless of backend:
-- "CoreRouter has properties RouterId, City, Region, Vendor, Model" — true for both Fabric and Neo4j
-- "TransportLink connects two CoreRouters" — true for both
-- "Service depends on MPLSPath, AggSwitch, or BaseStation" — true for both
-
-The query language differs (slightly):
-- GQL: `MATCH (r:CoreRouter) WHERE r.RouterId = "CORE-SYD-01" RETURN r.City`
-- Cypher: `MATCH (r:CoreRouter) WHERE r.RouterId = "CORE-SYD-01" RETURN r.City`
-- (These are actually identical for simple queries — but the critical rules,
-  error patterns, and advanced syntax diverge)
-
-#### File Structure
-
+Current:
 ```
 data/prompts/
-├── ontology_core.md                      # Entity types, properties, instances, relationships
-├── language_gql.md                       # GQL query patterns, syntax rules, examples
-├── language_cypher.md                    # Cypher query patterns, syntax rules, examples
-├── foundry_graph_explorer_agent.md       # Role paragraph + agent description (header/footer)
-├── foundry_orchestrator_agent.md         # Unchanged — backend-agnostic
-├── foundry_telemetry_agent_v2.md         # Unchanged
-├── foundry_runbook_kb_agent.md           # Unchanged
-├── foundry_historical_ticket_agent.md    # Unchanged
-└── alert_storm.md                        # Unchanged
+├── foundry_graph_explorer_agent_v2.md    ← 345 lines, GQL baked in everywhere
+├── foundry_telemetry_agent_v2.md
+├── foundry_orchestrator_agent.md
+├── foundry_historical_ticket_agent.md
+├── foundry_runbook_kb_agent.md
+└── alert_storm.md
 ```
 
-#### What Goes in OntologyCore
-
-Everything that describes **what the network looks like** — backend-agnostic:
-
-```markdown
-# OntologyCore — Network Topology Schema
-
-## Entity Types — Full Schema
-
-### CoreRouter (3 instances)
-Backbone routers at city level. Each city has one core router.
-
-| Column | Type | Purpose | Example Value |
-|---|---|---|---|
-| **RouterId** | String | **Primary key.** | `CORE-SYD-01` |
-| City | String | City where the router is located. | `Sydney` |
-...
-
-### TransportLink (10 instances)
-...
-
-## Relationships
-
-| Source | Relationship | Target | Meaning |
-|--------|-------------|--------|---------|
-| TransportLink | connects | CoreRouter | Physical fibre connects two routers |
-| AggSwitch | aggregates_to | CoreRouter | Switch uplinks to a backbone router |
-...
-
-## All Entity Instances
-(Full tables of all instances — same as current prompt)
-
-## Semantic Rules
-1. **Always ask for ALL affected entities.** When tracing blast radius...
-2. **If a query returns an error, read the error message and fix the query.**
-3. **Use exact entity IDs with correct casing.** IDs are uppercase with hyphens.
+Target:
+```
+data/prompts/
+├── graph_explorer/
+│   ├── core_schema.md           ← Entity types, relationships, instances (backend-agnostic)
+│   ├── core_instructions.md     ← Role, critical rules, scope boundaries (backend-agnostic)
+│   ├── language_gql.md          ← GQL syntax, GQL examples, GQL-specific rules
+│   ├── language_gremlin.md      ← Gremlin syntax, Gremlin examples, Gremlin-specific rules
+│   ├── language_mock.md         ← Generic "send natural language" instructions
+│   └── description.md           ← Foundry agent description (one-liner, backend-agnostic)
+├── foundry_telemetry_agent_v2.md        ← unchanged
+├── foundry_orchestrator_agent.md        ← unchanged
+├── foundry_historical_ticket_agent.md   ← unchanged
+├── foundry_runbook_kb_agent.md          ← unchanged
+└── alert_storm.md                       ← unchanged
 ```
 
-#### What Goes in LanguageCore (GQL variant)
-
-Everything about **how to write queries** in GQL:
-
-```markdown
-# LanguageCore — GQL (Graph Query Language)
-
-## Query Syntax
-
-You construct GQL queries using ISO GQL syntax. The tool `query_graph` executes
-your query against the graph.
-
-## Critical Syntax Rules
-
-1. **Never wrap filter values in LOWER()**. Entity IDs are case-sensitive.
-2. **Use MATCH-WHERE-RETURN pattern**: `MATCH (n:Label) WHERE n.Prop = "val" RETURN n.Prop`
-3. **Relationship traversal**: `(a)-[:REL_TYPE]->(b)`
-
-## Single-Hop Examples
-MATCH (r:CoreRouter) WHERE r.City = "Sydney" RETURN r.RouterId, r.Vendor, r.Model
-
-## 2-Hop Blast Radius
-MATCH (t:TransportLink {LinkId: "LINK-SYD-MEL-FIBRE-01"})<-[:routes_via]-(p:MPLSPath)<-[:depends_on]-(s:Service)
-RETURN p.PathId, s.ServiceId, s.CustomerName
-
-## 3-Hop with SLA Exposure
-...
-```
-
-#### What Goes in LanguageCore (Cypher variant)
-
-```markdown
-# LanguageCore — Cypher (Neo4j)
-
-## Query Syntax
-
-You construct Cypher queries to read and write the graph. The tool `query_graph`
-executes your query against Neo4j.
-
-## Critical Syntax Rules
-
-1. **Case-sensitive property matching**: `WHERE n.RouterId = "CORE-SYD-01"` (exact match)
-2. **MATCH-WHERE-RETURN pattern**: Same as GQL
-3. **Relationship traversal**: `(a)-[:REL_TYPE]->(b)` — identical to GQL
-4. **OPTIONAL MATCH**: Use when a relationship might not exist
-5. **Write operations**: `CREATE`, `MERGE`, `SET`, `DELETE` — available in Neo4j
-
-## Single-Hop Examples
-MATCH (r:CoreRouter) WHERE r.City = "Sydney" RETURN r.RouterId, r.Vendor, r.Model
-
-## 2-Hop Blast Radius
-MATCH (t:TransportLink {LinkId: "LINK-SYD-MEL-FIBRE-01"})<-[:ROUTES_VIA]-(p:MPLSPath)<-[:DEPENDS_ON]-(s:Service)
-RETURN p.PathId, s.ServiceId, s.CustomerName
-
-## Write Operations (Phase 2)
-// Mark a link as down
-MATCH (t:TransportLink {LinkId: $link_id})
-SET t.Status = "DOWN", t.DownSince = datetime()
-RETURN t.LinkId, t.Status
-
-## 3-Hop with SLA Exposure
-...
-```
-
-#### Composition at Provisioning Time
-
-The `provision_agents.py` script composes the full prompt:
+The full GraphExplorerAgent prompt is **assembled at provisioning time** by
+`provision_agents.py`:
 
 ```python
-# In provision_agents.py
-
 GRAPH_BACKEND = os.getenv("GRAPH_BACKEND", "fabric")
-language_file = "language_cypher.md" if GRAPH_BACKEND == "neo4j" else "language_gql.md"
 
-ontology = (PROMPTS_DIR / "ontology_core.md").read_text()
-language = (PROMPTS_DIR / language_file).read_text()
-header = (PROMPTS_DIR / "foundry_graph_explorer_agent.md").read_text()
+LANGUAGE_FILE_MAP = {
+    "fabric": "language_gql.md",
+    "cosmosdb": "language_gremlin.md",
+    "mock": "language_mock.md",
+}
 
-# Compose: header (role description) + ontology (schema) + language (syntax)
-graph_explorer_prompt = f"{header}\n\n{ontology}\n\n{language}"
-
-# Create or update the agent with the composed prompt
-agents_client.agents.create_agent(
-    model=MODEL_ID,
-    name="GraphExplorerAgent",
-    instructions=graph_explorer_prompt,
-    ...
-)
+def load_graph_explorer_prompt() -> str:
+    """Compose the GraphExplorer prompt from parts based on GRAPH_BACKEND."""
+    base = PROMPTS_DIR / "graph_explorer"
+    parts = [
+        (base / "core_instructions.md").read_text(),
+        (base / "core_schema.md").read_text(),
+        (base / LANGUAGE_FILE_MAP[GRAPH_BACKEND]).read_text(),
+    ]
+    return "\n\n---\n\n".join(parts)
 ```
 
-#### Evaluation: Does this split make sense?
-
-**Yes, strongly recommended.** The analysis of the current prompt reveals a
-clean, natural boundary:
-
-| Current Section | Destination | Rationale |
-|----------------|-------------|-----------|
-| Role description ("You are a network topology...") | `foundry_graph_explorer_agent.md` | Agent identity, backend-agnostic |
-| How you work ("construct a GQL query...") | `language_*.md` | Language-specific instruction |
-| Critical rules 1-3 (LOWER(), casing, patterns) | `language_*.md` | Syntax-specific rules |
-| Critical rules 4-5 (retry on error, all entities) | `ontology_core.md` | Behavior rules, backend-agnostic |
-| Entity Types — Full Schema (all 8 types) | `ontology_core.md` | Pure domain knowledge |
-| All instances tables | `ontology_core.md` | Data, not syntax |
-| Relationships — schema and meaning | `ontology_core.md` | Domain semantics |
-| Relationship GQL examples | `language_gql.md` | Query syntax examples |
-| Common Multi-Hop Query Patterns | `language_*.md` | Syntax-specific examples |
-| Foundry Agent Description | `foundry_graph_explorer_agent.md` | Agent metadata |
-
-**The split creates exactly ONE file that changes between backends**:
-`language_gql.md` → `language_cypher.md`. Everything else stays constant.
-
-**Trade-off: maintenance burden**. When adding a new entity type:
-1. Add to `ontology_core.md` (once)
-2. Add query examples to BOTH `language_gql.md` AND `language_cypher.md`
-
-This is slightly more work than a single file, but it makes the change set
-explicit. You KNOW what needs updating. With a monolithic prompt, it's easy
-to update the schema but forget to update the GQL examples for the new entity.
-
-**Future extensibility**: If a third backend appears (e.g., CosmosDB Gremlin,
-Amazon Neptune SPARQL), you add a single `language_gremlin.md` file. The
-ontology and agent identity are reused unchanged.
-
-### Caveats and Risks
-
-#### 1. Prompt size growth
-
-The current GraphExplorerAgent prompt is ~300 lines. With composition, the
-resulting prompt is the same size (header ~20 lines + ontology ~200 lines +
-language ~100 lines ≈ 320 lines). No meaningful growth. But: if the ontology
-gets larger (more entity types, more instances), the composed prompt grows
-linearly. Monitor total token count.
-
-#### 2. Agent must be re-provisioned on backend switch
-
-The GraphExplorerAgent's system prompt is set at creation time. You cannot
-hot-swap the prompt at runtime. Switching from Fabric to Neo4j requires:
-1. Change `GRAPH_BACKEND=neo4j` in env
-2. Re-run `provision_agents.py` (which will `create_or_update` the agent
-   with the new composed prompt)
-3. The orchestrator's ConnectedAgentTool reference stays the same (same agent ID)
-
-This means you cannot run both backends simultaneously with the same agent set.
-If simultaneous dual-mode is needed, you'd need two GraphExplorerAgent instances
-and swap the orchestrator's ConnectedAgentTool reference — doable but adds
-complexity.
-
-#### 3. GQL ≈ Cypher but not identical
-
-For our simple ontology queries, GQL and Cypher are 95%+ identical. But:
-
-| Feature | GQL (ISO) | Cypher (Neo4j) | Relevance |
-|---------|-----------|----------------|-----------|
-| Graph selection | `GRAPH myGraph MATCH...` | Not needed (single DB) | Low — we don't use it |
-| OPTIONAL MATCH | Not in standard | Supported | Medium — useful for blast radius |
-| CREATE/MERGE/SET/DELETE | Not supported | Full support | High — Phase 2 mutations |
-| Path functions | `ALL_SHORTEST_PATHS` | `shortestPath()`, APOC | Medium — path analysis |
-| Relationship labels | lowercase convention | UPPER_SNAKE_CASE convention | Low — style choice |
-
-The LanguageCore files should document these differences explicitly so the LLM
-doesn't accidentally use a GQL-only or Cypher-only feature in the wrong context.
-
-#### 4. Testing both paths
-
-Both backends must be tested against the same set of expected queries. A test
-matrix:
-
-```
-test_graph_queries.py
-  ├── test_single_hop_router_lookup          # must pass on both backends
-  ├── test_2hop_blast_radius                 # must pass on both
-  ├── test_3hop_sla_exposure                 # must pass on both
-  ├── test_mutation_link_down                # Neo4j only (Fabric raises 501)
-  ├── test_topology_full_graph               # Neo4j only (Fabric raises 501)
-  └── test_health_check                      # must pass on both
-```
-
-Use `pytest.mark.parametrize` or a fixture that creates both backends:
+#### 0.3 `provision_agents.py` changes
 
 ```python
-@pytest.fixture(params=["neo4j", "fabric"])
-def backend(request):
-    if request.param == "neo4j":
-        return Neo4jBackend(...)
+# Current:
+OPENAPI_SPEC_FILE = PROJECT_ROOT / "fabric-query-api" / "openapi.yaml"
+
+# New:
+GRAPH_BACKEND = os.getenv("GRAPH_BACKEND", "fabric")
+OPENAPI_DIR = PROJECT_ROOT / "fabric-query-api" / "openapi"
+
+def _get_openapi_spec_file() -> Path:
+    """Return the backend-specific OpenAPI spec for graph queries."""
+    return OPENAPI_DIR / f"{GRAPH_BACKEND}.yaml"
+```
+
+The `_make_graph_openapi_tool()` function loads the backend-specific spec and
+adjusts the description:
+
+```python
+TOOL_DESCRIPTIONS = {
+    "fabric": "Execute a GQL query against the Fabric GraphModel to explore network topology.",
+    "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore network topology.",
+    "mock": "Query the network topology graph (offline mock mode).",
+}
+
+def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
+    spec = _load_openapi_spec(config, keep_path="/query/graph")
+    return OpenApiTool(
+        name="query_graph",
+        spec=spec,
+        description=TOOL_DESCRIPTIONS[GRAPH_BACKEND],
+        auth=OpenApiAnonymousAuthDetails(),
+    )
+```
+
+#### 0.4 `azure_config.env.template` additions
+
+```bash
+# --- Graph Backend (USER: set before provisioning agents) ---
+# Controls which graph database backend is used by fabric-query-api
+# and which query language the GraphExplorer agent uses.
+# Options: "fabric" (default, GQL → Fabric GraphModel)
+#          "cosmosdb" (Gremlin → Azure Cosmos DB)
+#          "mock" (static responses, no external dependency)
+GRAPH_BACKEND=fabric
+
+# --- Cosmos DB Gremlin (required when GRAPH_BACKEND=cosmosdb) ---
+# COSMOS_GREMLIN_ENDPOINT=
+# COSMOS_GREMLIN_PRIMARY_KEY=
+# COSMOS_GREMLIN_DATABASE=networkgraph
+# COSMOS_GREMLIN_GRAPH=topology
+```
+
+---
+
+### Phase 1: Backend Abstraction Layer
+
+**Goal**: Define the `GraphBackend` protocol and implement the dispatch layer.
+After this phase, `GRAPH_BACKEND=fabric` works identically to today.
+
+#### 1.1 `fabric-query-api/backends/__init__.py` — Protocol + Factory
+
+```python
+"""Graph backend abstraction layer."""
+from __future__ import annotations
+
+import os
+from typing import Protocol
+
+
+class GraphBackend(Protocol):
+    """Interface that all graph backends must implement."""
+
+    async def execute_query(
+        self,
+        query: str,
+        **kwargs,
+    ) -> dict:
+        """Execute a graph query and return {columns: [...], data: [...]}.
+
+        The query language depends on the backend:
+        - fabric: GQL
+        - cosmosdb: Gremlin (string-based)
+        - mock: natural language or predefined keys
+
+        Returns:
+            dict with "columns" (list of {name, type}) and "data" (list of dicts)
+        """
+        ...
+
+    def close(self) -> None:
+        """Clean up resources (connections, clients)."""
+        ...
+
+
+def get_backend() -> GraphBackend:
+    """Factory: return the correct backend based on GRAPH_BACKEND env var."""
+    backend_type = os.getenv("GRAPH_BACKEND", "fabric").lower()
+
+    if backend_type == "fabric":
+        from .fabric import FabricGraphBackend
+        return FabricGraphBackend()
+    elif backend_type == "cosmosdb":
+        from .cosmosdb import CosmosDBGremlinBackend
+        return CosmosDBGremlinBackend()
+    elif backend_type == "mock":
+        from .mock import MockGraphBackend
+        return MockGraphBackend()
     else:
-        return FabricBackend(...)
+        raise ValueError(
+            f"Unknown GRAPH_BACKEND: {backend_type!r}. "
+            f"Valid options: fabric, cosmosdb, mock"
+        )
 ```
 
-#### 5. Relationship type naming convention
+#### 1.2 `fabric-query-api/backends/fabric.py` — Extract from current main.py
 
-GQL prompts currently use `lowercase_snake_case` for relationship types
-(`routes_via`, `depends_on`). Neo4j convention is `UPPER_SNAKE_CASE`
-(`ROUTES_VIA`, `DEPENDS_ON`). Decision needed:
+Move the existing `_execute_gql()`, `_fabric_headers()`, and related logic into
+a class that implements `GraphBackend`:
 
-- **Option A**: Keep `lowercase_snake_case` in Neo4j (works fine, just unconventional)
-- **Option B**: Use `UPPER_SNAKE_CASE` in Neo4j and update the LanguageCore examples
+```python
+class FabricGraphBackend:
+    """Graph backend using Fabric GraphModel REST API (GQL)."""
 
-**Recommendation**: Option B. Follow Neo4j convention. The LanguageCore files
-already separate the examples, so the naming difference is contained. The
-ontology_core.md uses semantic names (no syntax), so it's unaffected.
+    async def execute_query(self, query: str, **kwargs) -> dict:
+        workspace_id = kwargs.get("workspace_id", WORKSPACE_ID)
+        graph_model_id = kwargs.get("graph_model_id", GRAPH_MODEL_ID)
+        raw = await _execute_gql(query, workspace_id, graph_model_id)
+        result = raw.get("result", raw)
+        return {
+            "columns": result.get("columns", []),
+            "data": result.get("data", []),
+        }
 
-#### 6. Dual-mode maintenance burden
-
-The honest question: **is it worth maintaining both backends?**
-
-**For the demo**: Probably not. Neo4j is the clear winner for interactive demo
-purposes. Fabric support could be archived as a documented option without active
-maintenance.
-
-**For production credibility**: Yes. Being able to say "this runs on Fabric in
-production and Neo4j for demo" is valuable positioning. The strategy pattern
-keeps it cheap.
-
-**Recommendation**: Build both backends during Phase 1. Run the demo on Neo4j.
-Don't invest in keeping the Fabric path actively tested unless there's a
-production deployment scenario. If Fabric is needed again, the code is there —
-just needs testing.
-
-This keeps the door open for switching back to Fabric if/when Fabric gets write
-support or higher capacity SKUs become available. The telemetry path (KQL/Kusto)
-is completely unaffected — it always goes to Fabric Eventhouse regardless.
-
----
-
-## Data Model: CSV → Neo4j Node/Relationship Mapping
-
-### Current CSV entities
-
-| CSV File | Neo4j Label | Properties | Count |
-|----------|-------------|------------|-------|
-| DimCoreRouter.csv | `:CoreRouter` | RouterId, City, Region, Vendor, Model | 3 |
-| DimAggSwitch.csv | `:AggSwitch` | SwitchId, City, UplinkRouterId | 6 |
-| DimBaseStation.csv | `:BaseStation` | StationId, StationType, AggSwitchId, City | 8 |
-| DimTransportLink.csv | `:TransportLink` | LinkId, LinkType, CapacityGbps, SourceRouterId, TargetRouterId | 10 |
-| DimMPLSPath.csv | `:MPLSPath` | PathId, PathType | 5 |
-| DimService.csv | `:Service` | ServiceId, ServiceType, CustomerName, CustomerCount, ActiveUsers | 10 |
-| DimSLAPolicy.csv | `:SLAPolicy` | SLAPolicyId, ServiceId, AvailabilityPct, MaxLatencyMs, PenaltyPerHourUSD, Tier | 5 |
-| DimBGPSession.csv | `:BGPSession` | SessionId, PeerARouterId, PeerBRouterId, ASNumberA, ASNumberB | 3 |
-
-### Relationships (from Fact tables + foreign keys)
-
-| Source | Relationship | Target | From |
-|--------|-------------|--------|------|
-| TransportLink | `:CONNECTS` | CoreRouter (source) | DimTransportLink.SourceRouterId |
-| TransportLink | `:CONNECTS` | CoreRouter (target) | DimTransportLink.TargetRouterId |
-| AggSwitch | `:UPLINKS_TO` | CoreRouter | DimAggSwitch.UplinkRouterId |
-| BaseStation | `:CONNECTS_TO` | AggSwitch | DimBaseStation.AggSwitchId |
-| Service | `:DEPENDS_ON` | * (polymorphic) | FactServiceDependency |
-| MPLSPath | `:HAS_HOP` | * (ordered) | FactMPLSPathHops |
-| SLAPolicy | `:GOVERNS` | Service | DimSLAPolicy.ServiceId |
-| BGPSession | `:PEERS_WITH` | CoreRouter (A) | DimBGPSession.PeerARouterId |
-| BGPSession | `:PEERS_WITH` | CoreRouter (B) | DimBGPSession.PeerBRouterId |
-
-**Total**: ~50 nodes, ~80 relationships. Trivial for Neo4j.
-
----
-
-## Risk Assessment
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Neo4j license concern (MS seller optics) | Medium | Community Edition is fully free; position as "demo complement to Fabric" |
-| Graph data drift between Fabric and Neo4j | Low | Same source CSVs; provision script loads both |
-| Neo4j container memory usage | Low | 2Gi sufficient for 50-node graph |
-| Auth model difference (managed identity → password) | Low | Store password in Key Vault, reference via env var |
-| Agent prompt changes (GQL → Cypher) | Low | 95% identical syntax; update system prompts |
-| Dual-mode maintenance burden | Medium | Strategy pattern isolates backends; can deprecate Fabric path later |
-
----
-
-## Skills Reference Mapping
-
-Relevant skills from `/home/hanchoong/references/skills/.github/skills/`:
-
-| Skill | Usage in V3 |
-|-------|-------------|
-| `react-flow-node-ts` | **Graph visualization** — custom node types for routers, links, services |
-| `fastapi-router-py` | **API design** — new endpoints for /graph/mutate, /graph/topology |
-| `azure-ai-projects-py` (tools.md) | **OpenApiTool** — agents call Neo4j via same pattern |
-| `azure-cosmos-db-py` | **Service layer pattern** — reusable for Neo4j service class |
-| `pydantic-models-py` | **Data models** — graph node/edge types as Pydantic models |
-| `zustand-store-ts` | **Frontend state** — graph topology state management |
-| `frontend-ui-dark-ts` | **Styling** — dark theme for graph dashboard |
-| `azure-containerregistry-py` | **ACR** — push Neo4j image if customized |
-| `azure-identity-py` | **Auth** — managed identity for Kusto (telemetry still on Fabric) |
-| `azure-web-pubsub-ts/py` | **Real-time** — Phase 3 WebSocket push (stretch) |
-
----
-
-## Implementation Sequence
-
-```
-Phase 1 — Core Swap (1-2 days)
-  ├─ 1. Create modules/neo4j.bicep + Azure Files volume
-  ├─ 2. Add neo4j Python driver to graph-query-api
-  ├─ 3. Implement GraphBackend strategy pattern (Neo4j + Fabric)
-  ├─ 4. Write provision_neo4j.py (load CSVs into Neo4j)
-  ├─ 5. Update GraphExplorerAgent prompt (GQL → Cypher)
-  ├─ 6. Update openapi.yaml spec description
-  ├─ 7. Test: submit alert → agents query Neo4j → diagnosis works
-  └─ 8. Config: GRAPH_BACKEND=neo4j in azure_config.env
-
-Phase 2 — Interactive Demo (2-3 days)
-  ├─ 1. Add /graph/topology, /graph/mutate, /graph/reset endpoints
-  ├─ 2. Add /graph/fault with predefined scenarios
-  ├─ 3. Build React Flow topology panel in frontend
-  ├─ 4. Custom node types (CoreRouter, TransportLink, Service, etc.)
-  ├─ 5. Fault injection UI (click node → trigger scenario → auto-alert)
-  ├─ 6. Status highlighting (agent identifies fault → node turns red)
-  └─ 7. Reset button (reload clean graph from CSVs)
-
-Phase 3 — Real-Time (1 day, stretch)
-  ├─ 1. SSE endpoint /graph/live for topology change events
-  ├─ 2. Frontend subscribes on mount, updates React Flow state
-  └─ 3. (Optional) Upgrade to Azure Web PubSub for bi-directional
+    def close(self) -> None:
+        pass  # httpx client is per-request
 ```
 
+**The `_execute_gql()` function itself is moved here verbatim.** No logic changes.
+
+#### 1.3 `fabric-query-api/backends/cosmosdb.py` — Placeholder
+
+```python
+class CosmosDBGremlinBackend:
+    """Graph backend using Azure Cosmos DB for Apache Gremlin."""
+
+    async def execute_query(self, query: str, **kwargs) -> dict:
+        raise NotImplementedError(
+            "Cosmos DB Gremlin backend not yet implemented. "
+            "Set GRAPH_BACKEND=fabric to use Fabric GraphModel."
+        )
+
+    def close(self) -> None:
+        pass
+```
+
+#### 1.4 `fabric-query-api/backends/mock.py` — Static responses
+
+```python
+class MockGraphBackend:
+    """Graph backend returning static topology data for offline demos."""
+
+    async def execute_query(self, query: str, **kwargs) -> dict:
+        # Return a minimal static response for any query
+        return {
+            "columns": [{"name": "info", "type": "string"}],
+            "data": [{"info": f"Mock backend received query: {query[:100]}"}],
+        }
+
+    def close(self) -> None:
+        pass
+```
+
+#### 1.5 `fabric-query-api/router_graph.py` — New graph router
+
+```python
+from fastapi import APIRouter, HTTPException
+from .backends import get_backend, GraphBackend
+from .models import GraphQueryRequest, GraphQueryResponse
+
+router = APIRouter()
+_backend: GraphBackend | None = None
+
+
+def get_graph_backend() -> GraphBackend:
+    global _backend
+    if _backend is None:
+        _backend = get_backend()
+    return _backend
+
+
+@router.post("/query/graph", response_model=GraphQueryResponse)
+async def query_graph(req: GraphQueryRequest):
+    backend = get_graph_backend()
+    try:
+        result = await backend.execute_query(
+            req.query,
+            workspace_id=getattr(req, "workspace_id", ""),
+            graph_model_id=getattr(req, "graph_model_id", ""),
+        )
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Graph query error: {e}")
+    return GraphQueryResponse(
+        columns=result.get("columns", []),
+        data=result.get("data", []),
+    )
+```
+
+#### 1.6 `fabric-query-api/main.py` — Slimmed down
+
+After extraction, `main.py` becomes ~100 lines:
+- App factory + lifespan (creates/closes backend)
+- CORS middleware
+- Request logging middleware
+- Mount `router_graph` and `router_telemetry`
+- SSE log streaming
+- Health endpoint
+
+The `query_graph` and `query_telemetry` endpoints move to their respective routers.
+
 ---
 
-## Open Questions
+### Phase 2: Prompt Decomposition
 
-1. **Neo4j in Container Apps persistence**: Azure Files volume mounts on
-   Container Apps have known latency issues. Is this acceptable for a demo
-   graph of 50 nodes? (Almost certainly yes.) Alternative: use Azure Managed
-   Disk or accept ephemeral data with fast reload from CSVs.
+**Goal**: Split the GraphExplorer prompt into composable parts. After this phase,
+`provision_agents.py` assembles the prompt dynamically based on `GRAPH_BACKEND`.
 
-2. **Dual-mode or hard switch?** The strategy pattern keeps both backends alive.
-   Is it worth the maintenance, or should we just commit to Neo4j for the demo
-   and leave Fabric as a documented option?
+#### 2.1 Create `data/prompts/graph_explorer/core_instructions.md`
 
-3. **Agent prompt versioning**: If we switch prompts from GQL to Cypher, the
-   same agents can't be used with both backends simultaneously. Might need
-   separate agent sets, or a single set with "query language" as a runtime
-   parameter.
+Extracted from `foundry_graph_explorer_agent_v2.md`:
+- Role section (generic: "You are a network topology analysis agent")
+- How you work section (generic: "You have access to a `query_graph` tool")
+- Critical rules (made generic: "use exact entity IDs", "retry on error", etc.)
+- "What you can answer" / "What you cannot answer" sections
+- Foundry Agent Description
 
-4. **Neo4j Browser exposure**: Do we want to expose Neo4j's built-in browser
-   (port 7474) during demos? It's impressive but adds attack surface. Could
-   restrict to local dev only.
+**Remove**: All GQL-specific language ("GQL", "MATCH", query syntax examples)
 
-5. **Graph layout persistence**: Should node positions be stored in Neo4j
-   (as position properties) or managed client-side (localStorage/Zustand)?
-   Stored positions are shareable; client positions are simpler.
+#### 2.2 Create `data/prompts/graph_explorer/core_schema.md`
+
+Extracted from `foundry_graph_explorer_agent_v2.md`:
+- All 8 entity type tables (CoreRouter, TransportLink, AggSwitch, BaseStation, etc.)
+- All instance data tables
+- All relationship definitions (connects_to, aggregates_to, etc.)
+- Relationship examples (kept generic — just show the relationship semantics,
+  no query syntax)
+
+**Remove**: Query examples (those go in language files)
+
+#### 2.3 Create `data/prompts/graph_explorer/language_gql.md`
+
+GQL-specific content extracted from `foundry_graph_explorer_agent_v2.md`:
+- "You construct GQL queries" instruction
+- GQL syntax rules and gotchas (e.g. "never use LOWER()")
+- All GQL query examples (single-hop, multi-hop, blast radius)
+- `MATCH ... WHERE ... RETURN` patterns
+
+#### 2.4 Create `data/prompts/graph_explorer/language_gremlin.md`
+
+New file for Cosmos DB Gremlin:
+- "You construct Gremlin queries" instruction
+- Gremlin syntax rules (string-based, pass as plain text to the tool)
+- Cosmos DB-specific notes (no lambdas, no bytecode, partition key matters)
+- Equivalent query examples translated from GQL to Gremlin
+
+Example translations:
+
+| Pattern | GQL | Gremlin |
+|---------|-----|---------|
+| Find router | `MATCH (r:CoreRouter) WHERE r.RouterId = "CORE-SYD-01" RETURN r` | `g.V().hasLabel('CoreRouter').has('RouterId','CORE-SYD-01').valueMap(true)` |
+| Link → paths | `MATCH (mp:MPLSPath)-[:routes_via]->(tl:TransportLink) WHERE tl.LinkId = "..." RETURN mp` | `g.V().hasLabel('TransportLink').has('LinkId','...').in('routes_via').hasLabel('MPLSPath').valueMap(true)` |
+| Blast radius (2-hop) | `MATCH (mp:MPLSPath)-[:routes_via]->(tl:TransportLink), (svc:Service)-[:depends_on]->(mp) WHERE tl.LinkId = "..." RETURN ...` | `g.V().hasLabel('TransportLink').has('LinkId','...').in('routes_via').hasLabel('MPLSPath').as('mp').in('depends_on').hasLabel('Service').as('svc').select('mp','svc').by(valueMap(true))` |
+| Blast radius (3-hop with SLA) | 3-hop MATCH | chained `.in()/.out()` traversals with `.as()/.select()` |
+| Count by label | `MATCH (n) RETURN labels(n), count(*)` | `g.V().groupCount().by(label)` |
+| All routers | `MATCH (r:CoreRouter) RETURN r.RouterId, r.City` | `g.V().hasLabel('CoreRouter').valueMap(true)` |
+
+#### 2.5 Create `data/prompts/graph_explorer/language_mock.md`
+
+Minimal file:
+```markdown
+## Query Language: Natural Language (Mock Mode)
+
+Send a natural language description of what you want to find.
+The mock backend returns static topology data for demonstration purposes.
+Example: "find all core routers" or "what services depend on LINK-SYD-MEL-FIBRE-01"
+```
+
+#### 2.6 Create `data/prompts/graph_explorer/description.md`
+
+One-liner for Foundry agent description (backend-agnostic):
+```
+> Queries the network topology graph to answer questions about routers, links,
+> switches, base stations, MPLS paths, services, SLA policies, and BGP sessions.
+> Use this agent to discover infrastructure relationships, trace connectivity
+> paths, determine blast radius of failures, and assess SLA exposure. Does not
+> have access to real-time telemetry, operational runbooks, or historical
+> incident records.
+```
+
+---
+
+### Phase 3: OpenAPI Spec Splitting
+
+**Goal**: Create per-backend OpenAPI specs for the `/query/graph` endpoint.
+Each spec is a **complete, standalone file** — no inheritance or composition.
+
+#### 3.1 Create `fabric-query-api/openapi/fabric.yaml`
+
+Complete spec including:
+- `info` section (title: "Fabric Query API", version)
+- `servers` section (with `{base_url}` placeholder)
+- `/query/graph` with GQL description, `workspace_id`/`graph_model_id` params, GQL examples
+- `/query/telemetry` (unchanged, identical across all specs)
+- Shared response schemas
+
+This is essentially the current `openapi.yaml` renamed and moved.
+
+#### 3.2 Create `fabric-query-api/openapi/cosmosdb.yaml`
+
+Complete spec including:
+- Same structure as `fabric.yaml`
+- `/query/graph` with Gremlin description, Gremlin examples
+- **No** `workspace_id`/`graph_model_id` params (Cosmos DB config is server-side env vars)
+- `/query/telemetry` (unchanged)
+
+#### 3.3 Create `fabric-query-api/openapi/mock.yaml`
+
+Complete spec including:
+- Same structure
+- `/query/graph` with generic description ("send any query string")
+- `/query/telemetry` (unchanged)
+
+#### 3.4 Update `provision_agents.py` to select correct spec
+
+```python
+OPENAPI_SPEC_MAP = {
+    "fabric": OPENAPI_DIR / "fabric.yaml",
+    "cosmosdb": OPENAPI_DIR / "cosmosdb.yaml",
+    "mock": OPENAPI_DIR / "mock.yaml",
+}
+
+OPENAPI_SPEC_FILE = OPENAPI_SPEC_MAP[GRAPH_BACKEND]
+```
+
+---
+
+### Phase 4: Wire It All Together
+
+**Goal**: Everything connected. `GRAPH_BACKEND=fabric` works exactly like today.
+Changing to `cosmosdb` or `mock` routes correctly (cosmosdb returns 501, mock
+returns static data).
+
+#### 4.1 Update `provision_agents.py` to compose prompts
+
+Modify `load_prompt()` to handle the new graph_explorer directory structure:
+
+```python
+def load_graph_explorer_prompt() -> tuple[str, str]:
+    """Compose GraphExplorer prompt from parts based on GRAPH_BACKEND."""
+    base = PROMPTS_DIR / "graph_explorer"
+    language_file = LANGUAGE_FILE_MAP[GRAPH_BACKEND]
+
+    instructions = "\n\n---\n\n".join([
+        (base / "core_instructions.md").read_text(encoding="utf-8"),
+        (base / "core_schema.md").read_text(encoding="utf-8"),
+        (base / language_file).read_text(encoding="utf-8"),
+    ])
+
+    description = (base / "description.md").read_text(encoding="utf-8").strip()
+    # Extract > quoted lines
+    desc_lines = [
+        line.lstrip("> ").strip()
+        for line in description.splitlines()
+        if line.strip().startswith(">")
+    ]
+    description = " ".join(desc_lines) if desc_lines else description
+
+    return instructions, description
+```
+
+#### 4.2 Update `Dockerfile` for new file structure
+
+The Dockerfile currently copies `main.py` and `openapi.yaml`. Update to copy the
+new directory structure:
+
+```dockerfile
+COPY main.py config.py models.py router_graph.py router_telemetry.py ./
+COPY backends/ ./backends/
+COPY openapi/ ./openapi/
+```
+
+#### 4.3 Update `azure.yaml` if needed
+
+The service target for `fabric-query-api` should continue to work with the same
+Docker build context. No changes expected unless the build context path changes.
+
+#### 4.4 Smoke test checklist
+
+```bash
+# Test 1: GRAPH_BACKEND=fabric (default) — must behave identically to current
+source azure_config.env
+cd fabric-query-api && uv run uvicorn main:app --port 8100
+
+curl -s http://localhost:8100/health
+curl -s -X POST http://localhost:8100/query/graph \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "MATCH (r:CoreRouter) RETURN r.RouterId, r.City"}'
+# Expected: same response as today
+
+# Test 2: GRAPH_BACKEND=mock
+GRAPH_BACKEND=mock uv run uvicorn main:app --port 8100
+curl -s -X POST http://localhost:8100/query/graph \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "find all routers"}'
+# Expected: mock response with static data
+
+# Test 3: GRAPH_BACKEND=cosmosdb
+GRAPH_BACKEND=cosmosdb uv run uvicorn main:app --port 8100
+curl -s -X POST http://localhost:8100/query/graph \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "g.V().hasLabel(\"CoreRouter\").valueMap(true)"}'
+# Expected: 501 Not Implemented
+
+# Test 4: Full agent flow
+# Set GRAPH_BACKEND=fabric, reprovision agents, run test_orchestrator.py
+# Verify identical behaviour to current
+```
+
+---
+
+## Execution Order (Task Sequence)
+
+```
+Phase 0 — File Reorganisation
+  ├─ 0.1  Create fabric-query-api/{config,models,router_graph,router_telemetry}.py
+  │       Extract from main.py, main.py becomes slim app factory
+  ├─ 0.2  Create fabric-query-api/backends/{__init__,fabric,cosmosdb,mock}.py
+  │       Move _execute_gql() into backends/fabric.py
+  ├─ 0.3  Split foundry_graph_explorer_agent_v2.md into graph_explorer/ parts
+  │       {core_instructions,core_schema,language_gql,language_gremlin,language_mock,description}.md
+  ├─ 0.4  Create openapi/{fabric,cosmosdb,mock}.yaml
+  └─ 0.5  Add GRAPH_BACKEND + Cosmos DB vars to azure_config.env.template
+
+Phase 1 — Backend Abstraction
+  ├─ 1.1  Implement GraphBackend protocol in backends/__init__.py
+  ├─ 1.2  Implement FabricGraphBackend in backends/fabric.py
+  ├─ 1.3  Implement placeholders (CosmosDBGremlinBackend, MockGraphBackend)
+  └─ 1.4  Wire router_graph.py to use get_backend()
+
+Phase 2 — Prompt Composition
+  ├─ 2.1  Update provision_agents.py with load_graph_explorer_prompt()
+  ├─ 2.2  Update provision_agents.py with backend-specific OpenAPI spec selection
+  └─ 2.3  Verify: re-provision agents with GRAPH_BACKEND=fabric, run test_orchestrator.py
+
+Phase 3 — Integration Test
+  ├─ 3.1  Smoke test: GRAPH_BACKEND=fabric (must be identical to current behaviour)
+  ├─ 3.2  Smoke test: GRAPH_BACKEND=mock (returns static data)
+  ├─ 3.3  Smoke test: GRAPH_BACKEND=cosmosdb (returns 501)
+  └─ 3.4  Full flow test: submit alert, verify agent uses correct query language
+
+Phase 4 — Cleanup
+  ├─ 4.1  Update Dockerfile for new file structure
+  ├─ 4.2  Update ARCHITECTURE.md to document new structure
+  ├─ 4.3  Move foundry_graph_explorer_agent_v2.md to data/prompts/deprecated/
+  └─ 4.4  Move fabric-query-api/openapi.yaml to deprecated/
+```
+
+---
+
+## File Change Summary
+
+### New files to create
+
+| File | Purpose |
+|------|---------|
+| `fabric-query-api/config.py` | `GRAPH_BACKEND` enum, env var loading |
+| `fabric-query-api/models.py` | Shared Pydantic models |
+| `fabric-query-api/router_graph.py` | `/query/graph` endpoint + backend dispatch |
+| `fabric-query-api/router_telemetry.py` | `/query/telemetry` endpoint (KQL, extracted) |
+| `fabric-query-api/backends/__init__.py` | `GraphBackend` protocol + `get_backend()` factory |
+| `fabric-query-api/backends/fabric.py` | Fabric GraphModel backend (moved from main.py) |
+| `fabric-query-api/backends/cosmosdb.py` | Cosmos DB Gremlin placeholder |
+| `fabric-query-api/backends/mock.py` | Static response placeholder |
+| `fabric-query-api/openapi/fabric.yaml` | GQL OpenAPI spec (current openapi.yaml) |
+| `fabric-query-api/openapi/cosmosdb.yaml` | Gremlin OpenAPI spec |
+| `fabric-query-api/openapi/mock.yaml` | Generic OpenAPI spec |
+| `data/prompts/graph_explorer/core_instructions.md` | Role, rules, scope (backend-agnostic) |
+| `data/prompts/graph_explorer/core_schema.md` | Entity & relationship schema (backend-agnostic) |
+| `data/prompts/graph_explorer/language_gql.md` | GQL syntax + examples |
+| `data/prompts/graph_explorer/language_gremlin.md` | Gremlin syntax + examples |
+| `data/prompts/graph_explorer/language_mock.md` | Mock mode instructions |
+| `data/prompts/graph_explorer/description.md` | Agent description one-liner |
+
+### Files to modify
+
+| File | Change |
+|------|--------|
+| `fabric-query-api/main.py` | Slim down to app factory + middleware + router mounts |
+| `fabric-query-api/Dockerfile` | Update COPY commands for new structure |
+| `scripts/provision_agents.py` | Compose prompt from parts, select backend-specific OpenAPI spec |
+| `azure_config.env.template` | Add `GRAPH_BACKEND` + Cosmos DB vars |
+
+### Files to deprecate (move to deprecated/)
+
+| File | Reason |
+|------|--------|
+| `data/prompts/foundry_graph_explorer_agent_v2.md` | Replaced by `graph_explorer/` directory |
+| `fabric-query-api/openapi.yaml` | Replaced by `openapi/{fabric,cosmosdb,mock}.yaml` |
+
+### Files that DO NOT change
+
+| File | Reason |
+|------|--------|
+| `data/prompts/foundry_orchestrator_agent.md` | Already backend-agnostic |
+| `data/prompts/foundry_telemetry_agent_v2.md` | KQL, unrelated to graph backend |
+| `data/prompts/foundry_runbook_kb_agent.md` | AI Search, unrelated |
+| `data/prompts/foundry_historical_ticket_agent.md` | AI Search, unrelated |
+| `api/` (entire directory) | Doesn't touch graph — calls fabric-query-api via agents |
+| `frontend/` (entire directory) | Receives same SSE events regardless of backend |
+| `infra/` | No Bicep changes in Phase 0-4 (Cosmos DB Bicep comes in a future phase) |
+| All `scripts/` except `provision_agents.py` | Fabric provisioning scripts are unaffected |
+
+---
+
+## Request/Response Contract (Unchanged)
+
+The API contract between agents and fabric-query-api does **not change**:
+
+### Request (POST /query/graph)
+```json
+{
+  "query": "<query string in backend-appropriate language>",
+  "workspace_id": "<optional, Fabric only>",
+  "graph_model_id": "<optional, Fabric only>"
+}
+```
+
+### Response
+```json
+{
+  "columns": [{"name": "RouterId", "type": "string"}, ...],
+  "data": [{"RouterId": "CORE-SYD-01", "City": "Sydney"}, ...]
+}
+```
+
+For Cosmos DB Gremlin, the backend normalises `valueMap(true)` output into the
+same `{columns, data}` shape. This normalisation happens in `backends/cosmosdb.py`,
+not in the agent or router.
+
+---
+
+## Risk & Mitigation
+
+| Risk | Mitigation |
+|------|------------|
+| Breaking current Fabric flow during refactor | Phase 0 is pure file moves, test after each step |
+| Agent prompt quality regression | Keep the current `_v2.md` as fallback until validated |
+| OpenAPI spec divergence | Each backend spec is a complete standalone file, no inheritance complexity |
+| Cosmos DB response shape differs from Fabric | Normalisation in backend layer, not in agent/router |
+| Prompt too long after composition | Monitor token count — schema is ~200 lines, language ~100 lines |
+
+---
+
+## Future Phases (Out of Scope for This Plan)
+
+These come after the abstraction layer is in place:
+
+- **Phase 5**: Implement `backends/cosmosdb.py` with gremlinpython SDK
+  (see `custom_skills/azure-cosmosdb-gremlin-py/`)
+- **Phase 6**: Cosmos DB Bicep module (`infra/modules/cosmos-gremlin.bicep`)
+  (see `custom_skills/azure-cosmosdb-gremlin-py/references/bicep-provisioning.md`)
+- **Phase 7**: Data loading script (`scripts/provision_cosmos_gremlin.py`)
+  (see `custom_skills/azure-cosmosdb-gremlin-py/references/data-loading.md`)
+- **Phase 8**: Graph visualisation in frontend (React Flow / D3)
+- **Phase 9**: Live graph mutation endpoints (`POST /graph/mutate`)

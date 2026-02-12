@@ -241,6 +241,27 @@ result = run_gremlin(
 )
 ```
 
+#### Read a Single Result (`.one()`)
+
+For point reads where exactly one result is expected, use `.one()` instead of
+`.all().result()` to get a single dict directly:
+
+```python
+def run_gremlin_one(query: str, bindings: dict | None = None) -> dict:
+    """Execute a Gremlin query and return a single result."""
+    gremlin_client = get_gremlin_client()
+    return gremlin_client.submit(
+        message=query,
+        bindings=bindings or {},
+    ).one()
+
+# Usage — returns a single vertex dict, not a list
+router = run_gremlin_one(
+    "g.V([pk, id_val])",
+    bindings={"pk": "router", "id_val": "CORE-SYD-01"},
+)
+```
+
 #### Traverse Relationships
 
 ```python
@@ -426,6 +447,82 @@ Azure Cosmos DB for Apache Gremlin provides a documented migration path to
 This is explicitly mentioned in the [Cosmos DB Gremlin docs](https://learn.microsoft.com/en-us/azure/cosmos-db/gremlin/overview):
 > *"Are you looking to implement an OLAP graph or migrate an existing Apache
 > Gremlin application? Consider Graph in Microsoft Fabric."*
+
+---
+
+## Troubleshooting & Diagnostic Queries
+
+Azure Cosmos DB for Apache Gremlin exposes diagnostic logs via Azure Monitor.
+Enable **Diagnostic Settings** on the Cosmos DB account and send logs to a
+Log Analytics workspace (resource-specific mode recommended).
+
+Reference: [Diagnostic queries for Gremlin](https://learn.microsoft.com/en-us/azure/cosmos-db/gremlin/diagnostic-queries?tabs=resource-specific)
+
+### Enable Diagnostics (Azure CLI)
+
+```bash
+az monitor diagnostic-settings create \
+  --name "gremlin-diagnostics" \
+  --resource "$COSMOS_ACCOUNT_RESOURCE_ID" \
+  --workspace "$LOG_ANALYTICS_WORKSPACE_ID" \
+  --logs '[{"category": "GremlinRequests", "enabled": true},{"category": "PartitionKeyRUConsumption", "enabled": true}]'
+```
+
+### KQL: Top 10 RU-Consuming Queries
+
+```kql
+CDBGremlinRequests
+| where TimeGenerated >= ago(1h)
+| project PIICommandText, ActivityId, DatabaseName, CollectionName, RequestCharge, TimeGenerated
+| order by RequestCharge desc
+| take 10
+```
+
+### KQL: Throttled Requests (429s)
+
+```kql
+CDBGremlinRequests
+| where StatusCode == 429
+| project PIICommandText, ActivityId, DatabaseName, CollectionName, OperationName, TimeGenerated
+| order by TimeGenerated desc
+```
+
+### KQL: Large Response Payloads
+
+```kql
+CDBGremlinRequests
+| summarize max(ResponseLength) by PIICommandText
+| order by max_ResponseLength desc
+```
+
+### KQL: RU Consumption by Physical Partition
+
+```kql
+CDBPartitionKeyRUConsumption
+| where TimeGenerated >= ago(1d)
+| summarize sum(todouble(RequestCharge)) by toint(PartitionKeyRangeId)
+| render columnchart
+```
+
+### KQL: RU Consumption by Logical Partition Key
+
+```kql
+CDBPartitionKeyRUConsumption
+| where TimeGenerated >= ago(1d)
+| summarize sum(todouble(RequestCharge)) by PartitionKey, PartitionKeyRangeId
+| render columnchart
+```
+
+### Common Python-Side Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `GremlinServerError: 429` | Rate limit exceeded | Retry with exponential backoff; increase RU/s |
+| `GremlinServerError: 408` | Request timeout | Simplify query; add `.limit()`; reduce traversal depth |
+| `WebSocketBadStatusException: 401` | Auth failure | Check primary key, endpoint, username path |
+| `GraphSON v3 unsupported` | Wrong serializer | Use `GraphSONSerializersV2d0()`, not `V3d0` |
+| `Missing partition key` | Vertex without `/partitionKey` | Always include `.property('partitionKey', value)` on `addV()` |
+| `Cross-partition query` (high RU) | Traversal spans partitions | Acceptable at demo scale; redesign partition key at production scale |
 
 ---
 

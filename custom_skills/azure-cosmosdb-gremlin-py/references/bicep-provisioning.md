@@ -252,6 +252,90 @@ env: [
 
 ---
 
+## ARM Template Reference
+
+Official Bicep resource definitions from
+[Microsoft.DocumentDB databaseAccounts/gremlinDatabases](https://learn.microsoft.com/en-us/azure/templates/microsoft.documentdb/databaseaccounts/gremlindatabases?pivots=deployment-language-bicep).
+
+### Latest API Version
+
+The latest stable API version is `2024-11-15`. Preview: `2025-11-01-preview`.
+Always pin to stable for production. The module above uses `2024-11-15`.
+
+### Full Resource Format (gremlinDatabases)
+
+```bicep
+resource symbolicname 'Microsoft.DocumentDB/databaseAccounts/gremlinDatabases@2024-11-15' = {
+  parent: resourceSymbolicName
+  name: 'string'
+  tags: { /* key: 'value' */ }
+  location: 'string'
+  identity: {
+    type: 'None' | 'SystemAssigned' | 'UserAssigned' | 'SystemAssigned,UserAssigned'
+    userAssignedIdentities: {
+      '/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{name}': {}
+    }
+  }
+  properties: {
+    resource: {
+      id: 'string'                    // Required — database name
+      createMode: 'Default'           // 'Default' or 'Restore'
+      restoreParameters: {
+        restoreSource: 'string'       // Restorable account ID
+        restoreTimestampInUtc: 'string'  // ISO-8601
+        restoreWithTtlDisabled: false
+      }
+    }
+    options: {
+      throughput: int                 // Fixed RU/s (mutually exclusive with autoscale)
+      autoscaleSettings: {
+        maxThroughput: int            // e.g. 1000
+      }
+    }
+  }
+}
+```
+
+### Key Property Reference
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `resource.id` | string (required) | Name of the Gremlin database |
+| `resource.createMode` | `'Default'` \| `'Restore'` | Default = new, Restore = from backup |
+| `resource.restoreParameters` | object | Only for `createMode: 'Restore'` |
+| `options.throughput` | int | Fixed RU/s (mutually exclusive with autoscale) |
+| `options.autoscaleSettings.maxThroughput` | int | Max RU/s for autoscale |
+| `identity.type` | string | Managed identity type for the resource |
+
+### Account-Level Properties Worth Knowing
+
+These go on the `databaseAccounts` resource (not the database):
+
+```bicep
+properties: {
+  // ... existing properties ...
+  enableFreeTier: false              // Only 1 free-tier account per subscription
+  enableAnalyticalStorage: false     // Analytical store (HTAP) — not used for Gremlin demo
+  disableLocalAuth: false            // Set true to force Entra-only (NoSQL only, N/A for Gremlin wire)
+  disableKeyBasedMetadataWriteAccess: false  // Prevent key-based control plane ops
+  defaultIdentity: 'FirstPartyIdentity'     // Identity for CMK encryption
+}
+```
+
+### Azure Quickstart Templates
+
+Pre-built Bicep/ARM templates from Microsoft:
+
+| Template | Description |
+|----------|-------------|
+| [Cosmos DB Gremlin — dedicated throughput](https://aka.ms/azqst) | Account + database + graph with fixed RU/s, 2 regions |
+| [Cosmos DB Gremlin — autoscale](https://aka.ms/azqst) | Account + database + graph with autoscale RU/s, 2 regions |
+
+> These are available via `az deployment group create` or the Azure Portal
+> "Deploy a custom template" → "Quickstart templates" search.
+
+---
+
 ## Cost Considerations
 
 | Configuration | Estimated Monthly Cost | Notes |
