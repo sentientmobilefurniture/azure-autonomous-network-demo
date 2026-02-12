@@ -383,6 +383,21 @@ else
   azd env set GRAPH_BACKEND "cosmosdb"
   azd env set GPT_CAPACITY_1K_TPM "${GPT_CAPACITY_1K_TPM:-300}"
 
+  # Auto-detect dev IP for Cosmos DB firewall whitelist
+  if [[ -z "${DEV_IP_ADDRESS:-}" ]]; then
+    info "Detecting dev machine IP for Cosmos DB firewall..."
+    DEV_IP_ADDRESS=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || true)
+    if [[ -n "$DEV_IP_ADDRESS" ]]; then
+      export DEV_IP_ADDRESS
+      ok "Dev IP: $DEV_IP_ADDRESS (will be added to Cosmos DB firewall)"
+    else
+      warn "Could not detect dev IP — Cosmos DB will only be accessible from VNet"
+    fi
+  else
+    export DEV_IP_ADDRESS
+    ok "Using DEV_IP_ADDRESS=$DEV_IP_ADDRESS for Cosmos DB firewall"
+  fi
+
   info "Running azd up (this may take 10-15 minutes)..."
   echo ""
 
@@ -420,6 +435,64 @@ else
   ok "All critical config values populated"
   info "Cosmos DB endpoint: $COSMOS_GREMLIN_ENDPOINT"
   info "Graph Query API:    $GRAPH_QUERY_API_URI"
+fi
+
+# ── Step 3b: Open Cosmos DB firewall for local dev IP ───────────────
+
+step "Step 3b: Configuring Cosmos DB firewall for local access"
+
+DEV_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 api.ipify.org 2>/dev/null || echo "")
+
+if [[ -z "$DEV_IP" ]]; then
+  warn "Could not detect public IP. Skipping Cosmos DB firewall update."
+  warn "If data loading fails with 403, manually add your IP to Cosmos DB firewall."
+else
+  info "Detected dev IP: $DEV_IP"
+
+  # Derive resource group and account names from config
+  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ENDPOINT%%.*}"
+  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT#*//}"  # strip https://
+  RG_NAME="${AZURE_RESOURCE_GROUP:-rg-${AZD_ENV_NAME:-$AZURE_ENV_NAME}}"
+  COSMOS_NOSQL_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT}-nosql"
+
+  # Quick check: if dev IP is already in both firewalls, skip entirely
+  CURRENT_GREMLIN_IPS=$(az cosmosdb show --name "$COSMOS_GREMLIN_ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+  CURRENT_NOSQL_IPS=$(az cosmosdb show --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+  GREMLIN_HAS_IP=false; NOSQL_HAS_IP=false
+  echo "$CURRENT_GREMLIN_IPS" | grep -q "$DEV_IP" && GREMLIN_HAS_IP=true
+  echo "$CURRENT_NOSQL_IPS" | grep -q "$DEV_IP" && NOSQL_HAS_IP=true
+
+  if $GREMLIN_HAS_IP && $NOSQL_HAS_IP; then
+    ok "Dev IP $DEV_IP already in both Cosmos DB firewalls — skipping Step 3b"
+  else
+    # Add dev IP to Gremlin account firewall
+    if $GREMLIN_HAS_IP; then
+      ok "Dev IP already in Gremlin account firewall"
+    else
+      info "Adding dev IP to Cosmos DB Gremlin account firewall..."
+      NEW_IPS="${CURRENT_GREMLIN_IPS:+$CURRENT_GREMLIN_IPS,}$DEV_IP"
+      if az cosmosdb update --name "$COSMOS_GREMLIN_ACCOUNT" --resource-group "$RG_NAME" --ip-range-filter "$NEW_IPS" -o none 2>&1; then
+        ok "Added $DEV_IP to Gremlin account firewall"
+      else
+        warn "Failed to update Gremlin firewall. You may need to add $DEV_IP manually."
+      fi
+    fi
+
+    # Add dev IP to NoSQL account firewall (if it exists)
+    if az cosmosdb show --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" -o none 2>/dev/null; then
+      if $NOSQL_HAS_IP; then
+        ok "Dev IP already in NoSQL account firewall"
+      else
+        info "Adding dev IP to Cosmos DB NoSQL account firewall..."
+        NEW_IPS="${CURRENT_NOSQL_IPS:+$CURRENT_NOSQL_IPS,}$DEV_IP"
+        if az cosmosdb update --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" --ip-range-filter "$NEW_IPS" -o none 2>&1; then
+          ok "Added $DEV_IP to NoSQL account firewall"
+        else
+          warn "Failed to update NoSQL firewall. You may need to add $DEV_IP manually."
+        fi
+      fi
+    fi
+  fi
 fi
 
 # ── Step 4: Create search indexes ───────────────────────────────────

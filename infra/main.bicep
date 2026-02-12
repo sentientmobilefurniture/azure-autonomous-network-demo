@@ -221,7 +221,7 @@ module frontend 'modules/container-app.bicep' = {
     cpu: '0.25'
     memory: '0.5Gi'
     env: [
-      { name: 'API_BACKEND_URL', value: 'https://${apiService.outputs.fqdn}' }
+      { name: 'API_BACKEND_URL', value: 'http://${apiService.outputs.fqdn}' }
     ]
   }
 }

@@ -24,6 +24,9 @@ RUN rm /etc/nginx/conf.d/default.conf
 # Copy our template (envsubst will resolve API_BACKEND_URL at runtime)
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
+# CRITICAL: Only substitute API_BACKEND_URL — leave nginx vars ($uri, $host, etc.) untouched
+ENV NGINX_ENVSUBST_FILTER=API_BACKEND_URL
+
 # Copy built React app
 COPY --from=build /app/dist /usr/share/nginx/html
 
