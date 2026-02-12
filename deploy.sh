@@ -8,9 +8,9 @@
 #   2. Data uploads (runbooks → blob, tickets → blob)
 #   3. Search indexes (runbooks-index, tickets-index)
 #   4. Cosmos DB graph data (vertices + edges from graph_schema.yaml)
-#   5. Container App deployment (graph-query-api)
+#   5. Unified Container App deployment (nginx + API + graph-query-api)
 #   6. AI Foundry agents (5 agents: orchestrator + 4 specialists)
-#   7. Local services (API :8000, Frontend :5173)
+#   7. Local services (optional — all services deployed to Azure)
 #
 # Usage:
 #   chmod +x deploy.sh && ./deploy.sh
@@ -342,9 +342,9 @@ COSMOS_NOSQL_DATABASE=${COSMOS_NOSQL_DATABASE:-telemetrydb}
 # --- App / CORS ---
 CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
 
-# --- graph-query-api (AUTO: populated after azd up) ---
+# --- Unified app (AUTO: populated after azd up) ---
+APP_URI=${APP_URI:-}
 GRAPH_QUERY_API_URI=${GRAPH_QUERY_API_URI:-}
-GRAPH_QUERY_API_PRINCIPAL_ID=${GRAPH_QUERY_API_PRINCIPAL_ID:-}
 ENVEOF
 
 ok "azure_config.env written with GRAPH_BACKEND=cosmosdb"
@@ -368,7 +368,7 @@ else
   echo "   • Storage Account (runbooks + tickets blob containers)"
   echo "   • Cosmos DB Gremlin (database: networkgraph, graph: topology)"
   echo "   • Container Apps Environment (ACR + Log Analytics)"
-  echo "   • graph-query-api Container App"
+  echo "   • Unified Container App (nginx + API + graph-query-api)"
   echo ""
 
   if ! $AUTO_YES; then
@@ -401,7 +401,7 @@ else
   info "Running azd up (this may take 10-15 minutes)..."
   echo ""
 
-  # azd up runs: preprovision → Bicep → deploy graph-query-api → postprovision
+  # azd up runs: preprovision → Bicep → deploy unified app → postprovision
   if ! azd up; then
     fail "azd up failed. Check the output above for errors."
     fail "Common issues:"
@@ -422,7 +422,7 @@ else
   [[ -z "${STORAGE_ACCOUNT_NAME:-}" ]]    && MISSING_AFTER_AZD+=("STORAGE_ACCOUNT_NAME")
   [[ -z "${AI_FOUNDRY_NAME:-}" ]]         && MISSING_AFTER_AZD+=("AI_FOUNDRY_NAME")
   [[ -z "${PROJECT_ENDPOINT:-}" ]]        && MISSING_AFTER_AZD+=("PROJECT_ENDPOINT")
-  [[ -z "${GRAPH_QUERY_API_URI:-}" ]]     && MISSING_AFTER_AZD+=("GRAPH_QUERY_API_URI")
+  [[ -z "${APP_URI:-}" ]]                  && MISSING_AFTER_AZD+=("APP_URI")
   [[ -z "${COSMOS_GREMLIN_ENDPOINT:-}" ]] && MISSING_AFTER_AZD+=("COSMOS_GREMLIN_ENDPOINT")
 
   if (( ${#MISSING_AFTER_AZD[@]} > 0 )); then
@@ -434,7 +434,7 @@ else
 
   ok "All critical config values populated"
   info "Cosmos DB endpoint: $COSMOS_GREMLIN_ENDPOINT"
-  info "Graph Query API:    $GRAPH_QUERY_API_URI"
+  info "App URI:            $APP_URI"
 fi
 
 # ── Step 3b: Open Cosmos DB firewall for local dev IP ───────────────
@@ -593,13 +593,13 @@ else
   fi
 fi
 
-# ── Step 6: Verify graph-query-api health ───────────────────────────
+# ── Step 6: Verify unified app health ───────────────────────────────
 
-step "Step 6: Verifying graph-query-api deployment"
+step "Step 6: Verifying unified app deployment"
 
-GQ_URI="${GRAPH_QUERY_API_URI:-}"
+GQ_URI="${APP_URI:-}"
 if [[ -z "$GQ_URI" ]]; then
-  fail "GRAPH_QUERY_API_URI not set — cannot verify deployment."
+  fail "APP_URI not set — cannot verify deployment."
   exit 1
 fi
 
@@ -620,14 +620,14 @@ done
 
 if $HEALTH_OK; then
   HEALTH_BODY=$(curl -s "$GQ_URI/health" 2>/dev/null)
-  ok "graph-query-api is healthy: $HEALTH_BODY"
+  ok "App is healthy: $HEALTH_BODY"
 else
-  fail "graph-query-api not responding after 5 attempts."
+  fail "App not responding after 5 attempts."
   fail "The Container App may still be starting or the image build may have failed."
   echo ""
   info "Debug commands:"
   echo "   az containerapp logs show --name <ca-name> --resource-group ${AZURE_RESOURCE_GROUP:-} --type console --tail 50"
-  echo "   azd deploy graph-query-api"
+  echo "   azd deploy app"
   warn "Continuing anyway — agent provisioning may fail if the API is down."
 fi
 
@@ -672,21 +672,21 @@ fi
 
 # ── Step 7b: Redeploy API with agent_ids.json ──────────────────────
 
-step "Step 7b: Redeploying API service with agent_ids.json"
+step "Step 7b: Redeploying app with agent_ids.json"
 
 if [[ -f "$AGENT_IDS_FILE" ]]; then
-  info "agent_ids.json exists — rebuilding API container to include it..."
+  info "agent_ids.json exists — rebuilding app container to include it..."
 
-  if azd deploy api 2>&1; then
-    ok "API service redeployed with agent_ids.json"
+  if azd deploy app 2>&1; then
+    ok "App redeployed with agent_ids.json"
   else
-    fail "API redeploy failed."
-    echo "   To retry: azd deploy api"
+    fail "App redeploy failed."
+    echo "   To retry: azd deploy app"
     warn "Continuing — the API container may not have agent IDs yet."
   fi
 else
-  warn "Skipping API redeploy — agent_ids.json not found."
-  warn "You can redeploy later: azd deploy api"
+  warn "Skipping app redeploy — agent_ids.json not found."
+  warn "You can redeploy later: azd deploy app"
 fi
 
 # ── Step 8: Start local services (optional — all services deployed to Azure) ──
@@ -696,13 +696,16 @@ if $SKIP_LOCAL; then
   echo ""
   ok "Deployment complete! All services are running in Azure."
   echo ""
-  echo "   Frontend:  ${FRONTEND_URI:-<check azure_config.env>}"
+  echo "   App URL:   ${APP_URI:-<check azure_config.env>}"
   echo ""
   echo "   To run locally instead:"
   echo "   # Terminal 1 — API"
   echo "   cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
   echo ""
-  echo "   # Terminal 2 — Frontend"
+  echo "   # Terminal 2 — Graph Query API"
+  echo "   cd graph-query-api && source ../azure_config.env && uv run uvicorn main:app --host 0.0.0.0 --port 8100 --reload"
+  echo ""
+  echo "   # Terminal 3 — Frontend"
   echo "   cd frontend && npm install && npm run dev"
   echo ""
   echo "   Open http://localhost:5173"
@@ -775,9 +778,7 @@ echo "    AI Foundry:       ${AI_FOUNDRY_NAME:-<pending>}"
 echo "    AI Search:        ${AI_SEARCH_NAME:-<pending>}"
 echo "    Storage:          ${STORAGE_ACCOUNT_NAME:-<pending>}"
 echo "    Cosmos DB:        ${COSMOS_GREMLIN_ENDPOINT:-<pending>}"
-echo "    graph-query-api:  ${GRAPH_QUERY_API_URI:-<pending>}"
-echo "    API backend:      ${API_URI:-<pending>}"
-echo "    Frontend:         ${FRONTEND_URI:-<pending>}"
+echo "    App URL:          ${APP_URI:-<pending>}"
 echo ""
 
 if [[ -f "$AGENT_IDS_FILE" ]]; then
@@ -811,9 +812,7 @@ fi
 
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
-echo "    azd deploy graph-query-api         # Redeploy graph-query-api after code changes"
-echo "    azd deploy api                     # Redeploy API backend after code changes"
-echo "    azd deploy frontend                # Redeploy frontend after UI changes"
+echo "    azd deploy app                     # Redeploy unified app after code changes"
 echo "    source azure_config.env && uv run python scripts/provision_agents.py --force  # Re-provision agents"
 echo "    azd down --force --purge           # Tear down all Azure resources"
 echo ""

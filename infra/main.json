@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "14774573023655099931"
+      "templateHash": "14355714368578442220"
     }
   },
   "parameters": {
@@ -1202,10 +1202,10 @@
         "vnet"
       ]
     },
-    "graphQueryApi": {
+    "app": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "[format('graphQueryApi-{0}', uniqueString('graphQueryApi', deployment().name))]",
+      "name": "[format('app-{0}', uniqueString('app', deployment().name))]",
       "resourceGroup": "[format('{0}{1}', variables('abbrs').resourceGroup, parameters('environmentName'))]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -1214,13 +1214,13 @@
         "mode": "Incremental",
         "parameters": {
           "name": {
-            "value": "[format('ca-graphquery-{0}', variables('resourceToken'))]"
+            "value": "[format('ca-app-{0}', variables('resourceToken'))]"
           },
           "location": {
             "value": "[parameters('location')]"
           },
           "tags": {
-            "value": "[union(parameters('tags'), createObject('azd-service-name', 'graph-query-api'))]"
+            "value": "[union(parameters('tags'), createObject('azd-service-name', 'app'))]"
           },
           "containerAppsEnvironmentId": {
             "value": "[reference('containerAppsEnv').outputs.id.value]"
@@ -1229,7 +1229,7 @@
             "value": "[reference('containerAppsEnv').outputs.registryName.value]"
           },
           "targetPort": {
-            "value": 8100
+            "value": 80
           },
           "externalIngress": {
             "value": true
@@ -1238,16 +1238,16 @@
             "value": 1
           },
           "maxReplicas": {
-            "value": 2
+            "value": 3
           },
           "cpu": {
-            "value": "0.25"
+            "value": "1.0"
           },
           "memory": {
-            "value": "0.5Gi"
+            "value": "2Gi"
           },
           "env": {
-            "value": "[union(createArray(createObject('name', 'GRAPH_BACKEND', 'value', parameters('graphBackend'))), if(variables('deployCosmosGremlin'), createArray(createObject('name', 'COSMOS_GREMLIN_ENDPOINT', 'value', reference('cosmosGremlin').outputs.gremlinEndpoint.value), createObject('name', 'COSMOS_GREMLIN_DATABASE', 'value', 'networkgraph'), createObject('name', 'COSMOS_GREMLIN_GRAPH', 'value', 'topology'), createObject('name', 'COSMOS_GREMLIN_PRIMARY_KEY', 'secretRef', 'cosmos-gremlin-key'), createObject('name', 'COSMOS_NOSQL_ENDPOINT', 'value', reference('cosmosGremlin').outputs.cosmosNoSqlEndpoint.value), createObject('name', 'COSMOS_NOSQL_DATABASE', 'value', reference('cosmosGremlin').outputs.telemetryDatabaseName.value)), createArray()))]"
+            "value": "[union(createArray(createObject('name', 'PROJECT_ENDPOINT', 'value', reference('aiFoundry').outputs.foundryEndpoint.value), createObject('name', 'AI_FOUNDRY_PROJECT_NAME', 'value', reference('aiFoundry').outputs.projectName.value), createObject('name', 'MODEL_DEPLOYMENT_NAME', 'value', 'gpt-4.1'), createObject('name', 'CORS_ORIGINS', 'value', '*'), createObject('name', 'AGENT_IDS_PATH', 'value', '/app/scripts/agent_ids.json'), createObject('name', 'GRAPH_BACKEND', 'value', parameters('graphBackend'))), if(variables('deployCosmosGremlin'), createArray(createObject('name', 'COSMOS_GREMLIN_ENDPOINT', 'value', reference('cosmosGremlin').outputs.gremlinEndpoint.value), createObject('name', 'COSMOS_GREMLIN_DATABASE', 'value', 'networkgraph'), createObject('name', 'COSMOS_GREMLIN_GRAPH', 'value', 'topology'), createObject('name', 'COSMOS_GREMLIN_PRIMARY_KEY', 'secretRef', 'cosmos-gremlin-key'), createObject('name', 'COSMOS_NOSQL_ENDPOINT', 'value', reference('cosmosGremlin').outputs.cosmosNoSqlEndpoint.value), createObject('name', 'COSMOS_NOSQL_DATABASE', 'value', reference('cosmosGremlin').outputs.telemetryDatabaseName.value)), createArray()))]"
           },
           "secrets": "[if(variables('deployCosmosGremlin'), createObject('value', createArray(createObject('name', 'cosmos-gremlin-key', 'value', reference('cosmosGremlin').outputs.primaryKey.value))), createObject('value', createArray()))]"
         },
@@ -1440,518 +1440,9 @@
         }
       },
       "dependsOn": [
-        "containerAppsEnv",
-        "cosmosGremlin",
-        "rg"
-      ]
-    },
-    "apiService": {
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "[format('apiService-{0}', uniqueString('apiService', deployment().name))]",
-      "resourceGroup": "[format('{0}{1}', variables('abbrs').resourceGroup, parameters('environmentName'))]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "name": {
-            "value": "[format('ca-api-{0}', variables('resourceToken'))]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "tags": {
-            "value": "[union(parameters('tags'), createObject('azd-service-name', 'api'))]"
-          },
-          "containerAppsEnvironmentId": {
-            "value": "[reference('containerAppsEnv').outputs.id.value]"
-          },
-          "containerRegistryName": {
-            "value": "[reference('containerAppsEnv').outputs.registryName.value]"
-          },
-          "targetPort": {
-            "value": 8000
-          },
-          "externalIngress": {
-            "value": false
-          },
-          "minReplicas": {
-            "value": 1
-          },
-          "maxReplicas": {
-            "value": 3
-          },
-          "cpu": {
-            "value": "0.5"
-          },
-          "memory": {
-            "value": "1Gi"
-          },
-          "env": {
-            "value": [
-              {
-                "name": "PROJECT_ENDPOINT",
-                "value": "[reference('aiFoundry').outputs.foundryEndpoint.value]"
-              },
-              {
-                "name": "AI_FOUNDRY_PROJECT_NAME",
-                "value": "[reference('aiFoundry').outputs.projectName.value]"
-              },
-              {
-                "name": "MODEL_DEPLOYMENT_NAME",
-                "value": "gpt-4.1"
-              },
-              {
-                "name": "CORS_ORIGINS",
-                "value": "*"
-              },
-              {
-                "name": "AGENT_IDS_PATH",
-                "value": "/app/scripts/agent_ids.json"
-              }
-            ]
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8668306839751249591"
-            }
-          },
-          "parameters": {
-            "name": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the Container App"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Resource tags"
-              }
-            },
-            "containerAppsEnvironmentId": {
-              "type": "string",
-              "metadata": {
-                "description": "Container Apps Environment ID"
-              }
-            },
-            "containerRegistryName": {
-              "type": "string",
-              "metadata": {
-                "description": "Container Registry name"
-              }
-            },
-            "containerImage": {
-              "type": "string",
-              "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
-              "metadata": {
-                "description": "Container image to deploy (initial placeholder)"
-              }
-            },
-            "targetPort": {
-              "type": "int",
-              "defaultValue": 8100,
-              "metadata": {
-                "description": "Target port for the container"
-              }
-            },
-            "env": {
-              "type": "array",
-              "defaultValue": [],
-              "metadata": {
-                "description": "Environment variables for the container"
-              }
-            },
-            "cpu": {
-              "type": "string",
-              "defaultValue": "0.25",
-              "metadata": {
-                "description": "CPU cores"
-              }
-            },
-            "memory": {
-              "type": "string",
-              "defaultValue": "0.5Gi",
-              "metadata": {
-                "description": "Memory"
-              }
-            },
-            "minReplicas": {
-              "type": "int",
-              "defaultValue": 1,
-              "metadata": {
-                "description": "Minimum replicas"
-              }
-            },
-            "maxReplicas": {
-              "type": "int",
-              "defaultValue": 3,
-              "metadata": {
-                "description": "Maximum replicas"
-              }
-            },
-            "externalIngress": {
-              "type": "bool",
-              "defaultValue": false,
-              "metadata": {
-                "description": "Whether ingress is external (public) or internal"
-              }
-            },
-            "secrets": {
-              "type": "array",
-              "defaultValue": [],
-              "metadata": {
-                "description": "Additional secrets (name/value pairs) to merge with the ACR secret"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.App/containerApps",
-              "apiVersion": "2024-03-01",
-              "name": "[parameters('name')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "identity": {
-                "type": "SystemAssigned"
-              },
-              "properties": {
-                "managedEnvironmentId": "[parameters('containerAppsEnvironmentId')]",
-                "configuration": {
-                  "ingress": {
-                    "external": "[parameters('externalIngress')]",
-                    "targetPort": "[parameters('targetPort')]",
-                    "transport": "auto",
-                    "allowInsecure": false
-                  },
-                  "registries": [
-                    {
-                      "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('containerRegistryName')), '2023-07-01').loginServer]",
-                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('containerRegistryName')), '2023-07-01').username]",
-                      "passwordSecretRef": "acr-password"
-                    }
-                  ],
-                  "secrets": "[union(createArray(createObject('name', 'acr-password', 'value', listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('containerRegistryName')), '2023-07-01').passwords[0].value)), parameters('secrets'))]"
-                },
-                "template": {
-                  "containers": [
-                    {
-                      "name": "main",
-                      "image": "[parameters('containerImage')]",
-                      "resources": {
-                        "cpu": "[json(parameters('cpu'))]",
-                        "memory": "[parameters('memory')]"
-                      },
-                      "env": "[parameters('env')]"
-                    }
-                  ],
-                  "scale": {
-                    "minReplicas": "[parameters('minReplicas')]",
-                    "maxReplicas": "[parameters('maxReplicas')]",
-                    "rules": [
-                      {
-                        "name": "http-scale-rule",
-                        "http": {
-                          "metadata": {
-                            "concurrentRequests": "100"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "outputs": {
-            "id": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.App/containerApps', parameters('name'))]"
-            },
-            "name": {
-              "type": "string",
-              "value": "[parameters('name')]"
-            },
-            "fqdn": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2024-03-01').configuration.ingress.fqdn]"
-            },
-            "uri": {
-              "type": "string",
-              "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2024-03-01').configuration.ingress.fqdn)]"
-            },
-            "principalId": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2024-03-01', 'full').identity.principalId]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
         "aiFoundry",
         "containerAppsEnv",
-        "rg"
-      ]
-    },
-    "frontend": {
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "[format('frontend-{0}', uniqueString('frontend', deployment().name))]",
-      "resourceGroup": "[format('{0}{1}', variables('abbrs').resourceGroup, parameters('environmentName'))]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "name": {
-            "value": "[format('ca-frontend-{0}', variables('resourceToken'))]"
-          },
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "tags": {
-            "value": "[union(parameters('tags'), createObject('azd-service-name', 'frontend'))]"
-          },
-          "containerAppsEnvironmentId": {
-            "value": "[reference('containerAppsEnv').outputs.id.value]"
-          },
-          "containerRegistryName": {
-            "value": "[reference('containerAppsEnv').outputs.registryName.value]"
-          },
-          "targetPort": {
-            "value": 80
-          },
-          "externalIngress": {
-            "value": true
-          },
-          "minReplicas": {
-            "value": 1
-          },
-          "maxReplicas": {
-            "value": 2
-          },
-          "cpu": {
-            "value": "0.25"
-          },
-          "memory": {
-            "value": "0.5Gi"
-          },
-          "env": {
-            "value": [
-              {
-                "name": "API_BACKEND_URL",
-                "value": "[format('https://{0}', reference('apiService').outputs.fqdn.value)]"
-              }
-            ]
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "8668306839751249591"
-            }
-          },
-          "parameters": {
-            "name": {
-              "type": "string",
-              "metadata": {
-                "description": "Name of the Container App"
-              }
-            },
-            "location": {
-              "type": "string",
-              "metadata": {
-                "description": "Azure region"
-              }
-            },
-            "tags": {
-              "type": "object",
-              "defaultValue": {},
-              "metadata": {
-                "description": "Resource tags"
-              }
-            },
-            "containerAppsEnvironmentId": {
-              "type": "string",
-              "metadata": {
-                "description": "Container Apps Environment ID"
-              }
-            },
-            "containerRegistryName": {
-              "type": "string",
-              "metadata": {
-                "description": "Container Registry name"
-              }
-            },
-            "containerImage": {
-              "type": "string",
-              "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
-              "metadata": {
-                "description": "Container image to deploy (initial placeholder)"
-              }
-            },
-            "targetPort": {
-              "type": "int",
-              "defaultValue": 8100,
-              "metadata": {
-                "description": "Target port for the container"
-              }
-            },
-            "env": {
-              "type": "array",
-              "defaultValue": [],
-              "metadata": {
-                "description": "Environment variables for the container"
-              }
-            },
-            "cpu": {
-              "type": "string",
-              "defaultValue": "0.25",
-              "metadata": {
-                "description": "CPU cores"
-              }
-            },
-            "memory": {
-              "type": "string",
-              "defaultValue": "0.5Gi",
-              "metadata": {
-                "description": "Memory"
-              }
-            },
-            "minReplicas": {
-              "type": "int",
-              "defaultValue": 1,
-              "metadata": {
-                "description": "Minimum replicas"
-              }
-            },
-            "maxReplicas": {
-              "type": "int",
-              "defaultValue": 3,
-              "metadata": {
-                "description": "Maximum replicas"
-              }
-            },
-            "externalIngress": {
-              "type": "bool",
-              "defaultValue": false,
-              "metadata": {
-                "description": "Whether ingress is external (public) or internal"
-              }
-            },
-            "secrets": {
-              "type": "array",
-              "defaultValue": [],
-              "metadata": {
-                "description": "Additional secrets (name/value pairs) to merge with the ACR secret"
-              }
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.App/containerApps",
-              "apiVersion": "2024-03-01",
-              "name": "[parameters('name')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "identity": {
-                "type": "SystemAssigned"
-              },
-              "properties": {
-                "managedEnvironmentId": "[parameters('containerAppsEnvironmentId')]",
-                "configuration": {
-                  "ingress": {
-                    "external": "[parameters('externalIngress')]",
-                    "targetPort": "[parameters('targetPort')]",
-                    "transport": "auto",
-                    "allowInsecure": false
-                  },
-                  "registries": [
-                    {
-                      "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('containerRegistryName')), '2023-07-01').loginServer]",
-                      "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('containerRegistryName')), '2023-07-01').username]",
-                      "passwordSecretRef": "acr-password"
-                    }
-                  ],
-                  "secrets": "[union(createArray(createObject('name', 'acr-password', 'value', listCredentials(resourceId('Microsoft.ContainerRegistry/registries', parameters('containerRegistryName')), '2023-07-01').passwords[0].value)), parameters('secrets'))]"
-                },
-                "template": {
-                  "containers": [
-                    {
-                      "name": "main",
-                      "image": "[parameters('containerImage')]",
-                      "resources": {
-                        "cpu": "[json(parameters('cpu'))]",
-                        "memory": "[parameters('memory')]"
-                      },
-                      "env": "[parameters('env')]"
-                    }
-                  ],
-                  "scale": {
-                    "minReplicas": "[parameters('minReplicas')]",
-                    "maxReplicas": "[parameters('maxReplicas')]",
-                    "rules": [
-                      {
-                        "name": "http-scale-rule",
-                        "http": {
-                          "metadata": {
-                            "concurrentRequests": "100"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "outputs": {
-            "id": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.App/containerApps', parameters('name'))]"
-            },
-            "name": {
-              "type": "string",
-              "value": "[parameters('name')]"
-            },
-            "fqdn": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2024-03-01').configuration.ingress.fqdn]"
-            },
-            "uri": {
-              "type": "string",
-              "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2024-03-01').configuration.ingress.fqdn)]"
-            },
-            "principalId": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('name')), '2024-03-01', 'full').identity.principalId]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "apiService",
-        "containerAppsEnv",
+        "cosmosGremlin",
         "rg"
       ]
     },
@@ -1986,10 +1477,10 @@
           },
           "cosmosNoSqlAccountName": "[if(variables('deployCosmosGremlin'), createObject('value', format('cosmos-gremlin-{0}-nosql', variables('resourceToken'))), createObject('value', ''))]",
           "containerAppPrincipalId": {
-            "value": "[reference('graphQueryApi').outputs.principalId.value]"
+            "value": "[reference('app').outputs.principalId.value]"
           },
           "apiContainerAppPrincipalId": {
-            "value": "[reference('apiService').outputs.principalId.value]"
+            "value": "[reference('app').outputs.principalId.value]"
           }
         },
         "template": {
@@ -2234,8 +1725,7 @@
       },
       "dependsOn": [
         "aiFoundry",
-        "apiService",
-        "graphQueryApi",
+        "app",
         "rg",
         "search",
         "storage"
@@ -2515,25 +2005,17 @@
       "type": "string",
       "value": "[reference('containerAppsEnv').outputs.registryEndpoint.value]"
     },
+    "APP_URI": {
+      "type": "string",
+      "value": "[reference('app').outputs.uri.value]"
+    },
+    "APP_PRINCIPAL_ID": {
+      "type": "string",
+      "value": "[reference('app').outputs.principalId.value]"
+    },
     "GRAPH_QUERY_API_URI": {
       "type": "string",
-      "value": "[reference('graphQueryApi').outputs.uri.value]"
-    },
-    "GRAPH_QUERY_API_PRINCIPAL_ID": {
-      "type": "string",
-      "value": "[reference('graphQueryApi').outputs.principalId.value]"
-    },
-    "API_URI": {
-      "type": "string",
-      "value": "[reference('apiService').outputs.uri.value]"
-    },
-    "API_PRINCIPAL_ID": {
-      "type": "string",
-      "value": "[reference('apiService').outputs.principalId.value]"
-    },
-    "FRONTEND_URI": {
-      "type": "string",
-      "value": "[reference('frontend').outputs.uri.value]"
+      "value": "[reference('app').outputs.uri.value]"
     },
     "COSMOS_GREMLIN_ENDPOINT": {
       "type": "string",

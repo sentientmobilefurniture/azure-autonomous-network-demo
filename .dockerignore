@@ -17,7 +17,7 @@ documentation
 fabric_implementation_references
 *.md
 
-# Frontend build artifacts (not needed for API)
+# Frontend build artifacts (built inside Docker)
 frontend/dist
 
 # Data files (uploaded separately)

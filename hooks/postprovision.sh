@@ -98,10 +98,8 @@ SUB_ID=$(az account show --query id -o tsv)
 # Save azd-provided Bicep outputs BEFORE sourcing — the source below would
 # overwrite them with the (empty) values from the existing config file.
 AZD_GRAPH_QUERY_API_URI="${GRAPH_QUERY_API_URI:-}"
-AZD_GRAPH_QUERY_API_PRINCIPAL_ID="${GRAPH_QUERY_API_PRINCIPAL_ID:-}"
-AZD_API_URI="${API_URI:-}"
-AZD_API_PRINCIPAL_ID="${API_PRINCIPAL_ID:-}"
-AZD_FRONTEND_URI="${FRONTEND_URI:-}"
+AZD_APP_URI="${APP_URI:-}"
+AZD_APP_PRINCIPAL_ID="${APP_PRINCIPAL_ID:-}"
 AZD_COSMOS_GREMLIN_ENDPOINT="${COSMOS_GREMLIN_ENDPOINT:-}"
 AZD_COSMOS_GREMLIN_ACCOUNT_NAME="${COSMOS_GREMLIN_ACCOUNT_NAME:-}"
 AZD_COSMOS_NOSQL_ENDPOINT="${COSMOS_NOSQL_ENDPOINT:-}"
@@ -176,16 +174,11 @@ CORS_ORIGINS=${PREV_CORS}
 # Options: "cosmosdb" (Gremlin → Azure Cosmos DB), "mock" (static responses)
 GRAPH_BACKEND=${PREV_GRAPH_BACKEND}
 
-# --- graph-query-api (AUTO: from deployment) ---
-GRAPH_QUERY_API_URI=${AZD_GRAPH_QUERY_API_URI:-${GRAPH_QUERY_API_URI:-}}
-GRAPH_QUERY_API_PRINCIPAL_ID=${AZD_GRAPH_QUERY_API_PRINCIPAL_ID:-${GRAPH_QUERY_API_PRINCIPAL_ID:-}}
-
-# --- API service (AUTO: from deployment) ---
-API_URI=${AZD_API_URI:-${API_URI:-}}
-API_PRINCIPAL_ID=${AZD_API_PRINCIPAL_ID:-${API_PRINCIPAL_ID:-}}
-
-# --- Frontend (AUTO: from deployment) ---
-FRONTEND_URI=${AZD_FRONTEND_URI:-${FRONTEND_URI:-}}
+# --- Unified app (AUTO: from deployment) ---
+APP_URI=${AZD_APP_URI:-${APP_URI:-}}
+APP_PRINCIPAL_ID=${AZD_APP_PRINCIPAL_ID:-${APP_PRINCIPAL_ID:-}}
+# GRAPH_QUERY_API_URI points to the same unified container
+GRAPH_QUERY_API_URI=${AZD_GRAPH_QUERY_API_URI:-${APP_URI:-}}
 
 # --- Cosmos DB Gremlin (required when GRAPH_BACKEND=cosmosdb) ---
 COSMOS_GREMLIN_ENDPOINT=${AZD_COSMOS_GREMLIN_ENDPOINT:-${COSMOS_GREMLIN_ENDPOINT:-}}
