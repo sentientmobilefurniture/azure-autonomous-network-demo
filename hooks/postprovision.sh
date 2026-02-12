@@ -244,11 +244,13 @@ EOF
 # --------------------------------------------------------------------------
 # 5. Auto-populate Cosmos DB Gremlin credentials (if deployed)
 # --------------------------------------------------------------------------
-COSMOS_ACCOUNT="${AZURE_COSMOS_GREMLIN_ACCOUNT_NAME:-}"
+# Bicep outputs: COSMOS_GREMLIN_ACCOUNT_NAME, COSMOS_GREMLIN_ENDPOINT
+# (no AZURE_ prefix — unlike other outputs)
+COSMOS_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT_NAME:-${AZURE_COSMOS_GREMLIN_ACCOUNT_NAME:-}}"
 if [ -n "$COSMOS_ACCOUNT" ]; then
   echo ""
   echo "Auto-populating Cosmos DB Gremlin credentials..."
-  COSMOS_EP="${AZURE_COSMOS_GREMLIN_ENDPOINT:-}"
+  COSMOS_EP="${COSMOS_GREMLIN_ENDPOINT:-${AZURE_COSMOS_GREMLIN_ENDPOINT:-}}"
   if [ -z "$COSMOS_EP" ]; then
     COSMOS_EP=$(az cosmosdb show --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query documentEndpoint -o tsv 2>/dev/null || true)
   fi

@@ -33,7 +33,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 
-from config import GRAPH_BACKEND, GraphBackendType, BACKEND_REQUIRED_VARS
+from config import GRAPH_BACKEND, GraphBackendType, BACKEND_REQUIRED_VARS, TELEMETRY_REQUIRED_VARS
 from models import GraphQueryRequest
 from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router, close_telemetry_backend
@@ -57,8 +57,15 @@ async def _lifespan(app: FastAPI):
     missing = [v for v in required if not os.getenv(v)]
     if missing:
         logger.warning(
-            "Missing env vars (will rely on request body values): %s",
-            ", ".join(missing),
+            "Missing env vars for %s backend (will rely on request body values): %s",
+            GRAPH_BACKEND.value, ", ".join(missing),
+        )
+    # Check optional telemetry vars separately
+    missing_telemetry = [v for v in TELEMETRY_REQUIRED_VARS if not os.getenv(v)]
+    if missing_telemetry:
+        logger.warning(
+            "Missing telemetry env vars — /query/telemetry will not work: %s",
+            ", ".join(missing_telemetry),
         )
     logger.info("Starting with GRAPH_BACKEND=%s", GRAPH_BACKEND.value)
     yield

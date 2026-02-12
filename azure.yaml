@@ -7,11 +7,11 @@ metadata:
   template: autonomous-network-noc@0.0.1
 hooks:
   preprovision:
-    shell: sh
+    shell: bash
     run: hooks/preprovision.sh
     description: Resolve signed-in user principal ID
   postprovision:
-    shell: sh
+    shell: bash
     run: hooks/postprovision.sh
     description: Upload runbooks and tickets to blob storage
 

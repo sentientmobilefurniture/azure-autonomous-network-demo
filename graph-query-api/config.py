@@ -70,9 +70,11 @@ BACKEND_REQUIRED_VARS: dict[GraphBackendType, tuple[str, ...]] = {
     GraphBackendType.COSMOSDB: (
         "COSMOS_GREMLIN_ENDPOINT",
         "COSMOS_GREMLIN_PRIMARY_KEY",
-        "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME",
     ),
-    GraphBackendType.MOCK: (
-        "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME",
-    ),
+    GraphBackendType.MOCK: (),
 }
+
+# Telemetry (KQL) vars — optional; /query/telemetry fails gracefully without them
+TELEMETRY_REQUIRED_VARS: tuple[str, ...] = (
+    "EVENTHOUSE_QUERY_URI", "FABRIC_KQL_DB_NAME",
+)
