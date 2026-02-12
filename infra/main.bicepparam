@@ -16,6 +16,7 @@ param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
 param principalId = readEnvironmentVariable('AZURE_PRINCIPAL_ID', '')
 param graphBackend = 'cosmosdb'
 param gptCapacity = int(readEnvironmentVariable('GPT_CAPACITY_1K_TPM', '300'))
+param devIpAddress = readEnvironmentVariable('DEV_IP_ADDRESS', '')
 param tags = {
   project: 'autonomous-network-noc'
   environment: readEnvironmentVariable('AZURE_ENV_NAME', 'noc-demo')

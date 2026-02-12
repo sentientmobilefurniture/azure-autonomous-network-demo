@@ -28,6 +28,9 @@ param telemetryMaxThroughput int = 1000
 @description('Tags to apply to all resources')
 param tags object = {}
 
+@description('Developer IP to allow through the Cosmos DB firewall (leave empty to skip)')
+param devIpAddress string = ''
+
 // ─── Cosmos DB Account with Gremlin capability ───────────────────────────────
 // NOTE: An account with EnableGremlin can also host NoSQL (SQL API) databases.
 
@@ -54,6 +57,9 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
     enableAutomaticFailover: false
     enableMultipleWriteLocations: false
     publicNetworkAccess: 'Enabled'
+    ipRules: empty(devIpAddress) ? [] : [
+      { ipAddressOrRange: devIpAddress }
+    ]
   }
 }
 
@@ -125,6 +131,9 @@ resource cosmosNoSqlAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' =
     enableAutomaticFailover: false
     enableMultipleWriteLocations: false
     publicNetworkAccess: 'Enabled'
+    ipRules: empty(devIpAddress) ? [] : [
+      { ipAddressOrRange: devIpAddress }
+    ]
   }
 }
 

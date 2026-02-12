@@ -30,6 +30,9 @@ param gptCapacity int = 300
 @allowed(['cosmosdb'])
 param graphBackend string = 'cosmosdb'
 
+@description('Developer IP for local Cosmos DB access (leave empty in CI/CD)')
+param devIpAddress string = ''
+
 // Derived flag for conditional deployment
 var deployCosmosGremlin = graphBackend == 'cosmosdb'
 
@@ -107,6 +110,7 @@ module cosmosGremlin 'modules/cosmos-gremlin.bicep' = if (deployCosmosGremlin) {
     partitionKeyPath: '/partitionKey'
     maxThroughput: 1000
     tags: union(tags, { component: 'graph-backend' })
+    devIpAddress: devIpAddress
   }
 }
 

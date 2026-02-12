@@ -30,6 +30,9 @@
 - [ ] Make the agent flow even more WOWZA - Agent analyzing/auditing/classifying? Parallel execution doing some other stuff? The possibility of finetuning - THIS SHOULD ALL BE IN A KNOWLEDGE GRAPH DRREEEEEEAM deck
 - [x] Verify that the cosmosDB stuff works
 - [ ] Real-time graph visualization in UI (D3-force / Neovis.js over Bolt websockets)
+- [ ] What realtime azure component is most appropriate for ingesting real-time telemetry and alerts? Is it azure eventhub? can we simulate a constant alert ingestion via OTel, and then have a button to trigger a flood of horrible telemetry to simulate a scenario, and then fire an alert that then triggers the agent workflow? This should actually be V5
+- [ ] Multi scenario with data generalization should be V6 - We could create customized hardcoded scenarios to start and let the user select which one via a button - All the data pregenerated, ingested into cosmos - The button chooses which data tables?
+- [ ] Realtime dashboarding in the UI ought to be V7
 - [ ] Click on a node, select a particular type of error or scenario, trigger it!
 - [ ] Cache common graph queries (Redis / embedding cache)
 - [ ] Link telemetry from all agents rather than just the orchestrator
