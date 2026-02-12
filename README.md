@@ -193,6 +193,7 @@ Open http://localhost:5173
 │   ├── cosmos/                 # Cosmos DB-specific scripts
 │   │   └── provision_cosmos_gremlin.py   # YAML-manifest-driven graph loader
 │   ├── fabric/                 # Fabric-specific scripts
+│   │   ├── _config.py                    # Shared config (FABRIC_API, paths, helpers)
 │   │   ├── populate_fabric_config.py
 │   │   ├── provision_lakehouse.py
 │   │   ├── provision_eventhouse.py
@@ -210,7 +211,12 @@ Open http://localhost:5173
     ├── SCENARIO.md             # Demo scenario narrative
     ├── SETUP_COSMOSDB.md       # Cosmos DB backend setup guide
     ├── SETUP_FABRIC.md         # Fabric backend setup guide
-    └── assets/                 # Screenshots & diagrams
+    ├── V4GRAPH.md              # V4 graph model design spec
+    ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
+    ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
+    ├── assets/                 # Screenshots & diagrams
+    ├── ui_states/              # UI state screenshots
+    └── previous_dev_phases/    # Archived design docs (V2, V3)
 ```
 
 ---

@@ -1,5 +1,10 @@
 # Autonomous Network NOC Demo — Copilot Instructions
 
+## Agent! First, read these materials to gain a thorough understanding of the project.
+ocumentation/ARCHITECTURE.md
+documentation/SCENARIO.md
+README.md
+
 ## Demo built with Claude Opus 4.6 using [skills](https://github.com/microsoft/skills)
 
 Skills used during development (read the relevant skill before modifying its area):

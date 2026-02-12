@@ -6,8 +6,9 @@
 * mcp-builder — `~/references/skills/.github/skills/mcp-builder`
 * azure-appconfiguration-py — `~/references/skills/.github/skills/azure-appconfiguration-py`
 * azure-containerregistry-py — `~/references/skills/.github/skills/azure-containerregistry-py`
-* fastapi-router-py (training data, no local reference)
-* frontend-ui-dark-ts (training data, no local reference)
+* ~/references/skills/.github/skills/fastapi-router-py 
+* ~/references/skills/.github/skills/frontend-ui-dark-ts 
+* azure-cosmosdb-gremlin-py — `custom_skills/azure-cosmosdb-gremlin-py`
 
 ---
 
@@ -107,17 +108,20 @@ Three deployable services:
 │   └── scripts/                # Synthetic data generators (run once)
 │
 ├── scripts/                    # Provisioning & operational scripts
-│   ├── _config.py              # Shared config module (FABRIC_API, paths, helpers)
-│   ├── provision_lakehouse.py  # Create Fabric workspace + lakehouse + load CSVs
-│   ├── provision_eventhouse.py # Create Eventhouse + KQL tables + ingest CSVs
-│   ├── provision_ontology.py   # Create Ontology item on Lakehouse data
 │   ├── create_runbook_indexer.py   # Build AI Search index from blob runbooks
 │   ├── create_tickets_indexer.py   # Build AI Search index from blob tickets
-│   ├── populate_fabric_config.py   # Discover Fabric IDs → write to azure_config.env
-│   ├── collect_fabric_agents.py    # Discover Fabric Data Agent IDs → azure_config.env
 │   ├── provision_agents.py     # Create all 5 Foundry agents (orchestrator + 4 sub-agents)
-│   ├── assign_fabric_role.py   # Grant Container App identity Fabric workspace access
 │   ├── agent_ids.json          # Output: provisioned agent IDs
+│   ├── cosmos/                 # Cosmos DB-specific scripts
+│   │   └── provision_cosmos_gremlin.py   # YAML-manifest-driven Gremlin graph loader
+│   ├── fabric/                 # Fabric-specific scripts
+│   │   ├── _config.py              # Shared config module (FABRIC_API, paths, helpers)
+│   │   ├── provision_lakehouse.py  # Create Fabric workspace + lakehouse + load CSVs
+│   │   ├── provision_eventhouse.py # Create Eventhouse + KQL tables + ingest CSVs
+│   │   ├── provision_ontology.py   # Create Ontology item on Lakehouse data
+│   │   ├── populate_fabric_config.py   # Discover Fabric IDs → write to azure_config.env
+│   │   ├── collect_fabric_agents.py    # Discover Fabric Data Agent IDs → azure_config.env
+│   │   └── assign_fabric_role.py   # Grant Container App identity Fabric workspace access
 │   └── testing_scripts/        # CLI test & debug utilities
 │       ├── test_orchestrator.py    # Stream orchestrator run with metadata
 │       ├── test_fabric_agent.py    # Query a single Fabric Data Agent
@@ -188,8 +192,13 @@ Three deployable services:
 ├── documentation/              # Architecture docs, design specs, scenario description
 │   ├── ARCHITECTURE.md         # This file
 │   ├── SCENARIO.md             # Demo scenario description
+│   ├── SETUP_COSMOSDB.md       # Cosmos DB backend setup guide
+│   ├── SETUP_FABRIC.md         # Fabric backend setup guide
 │   ├── V4GRAPH.md              # V4 graph model design spec
+│   ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
 │   ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
+│   ├── assets/                 # Screenshots & diagrams
+│   ├── ui_states/              # UI state screenshots
 │   └── previous_dev_phases/    # Archived design docs (V2, V3)
 │
 └── .github/
@@ -266,7 +275,7 @@ class GraphBackend(Protocol):
 | Backend | Implementation | Query Language | Status |
 |---------|---------------|----------------|--------|
 | `fabric` | `FabricGraphBackend` | GQL | Production — Fabric GraphModel REST API |
-| `cosmosdb` | `CosmosDBGremlinBackend` | Gremlin | Placeholder — raises `NotImplementedError` |
+| `cosmosdb` | `CosmosDBGremlinBackend` | Gremlin | Production — Cosmos DB Gremlin via gremlinpython |
 | `mock` | `MockGraphBackend` | Natural language | Working — static topology data |
 
 **`backends/fabric.py`** is the most complex:
@@ -275,6 +284,16 @@ class GraphBackend(Protocol):
   timestamp, minimum delay 10s × attempt number (exponential backoff)
 - Detects Fabric's "HTTP 200 but GQL logical error" pattern (raises `HTTPException`)
 - Bearer auth via `credential.get_token(FABRIC_SCOPE)`
+
+**`backends/cosmosdb.py`** — Cosmos DB Gremlin backend:
+- Singleton `gremlinpython` client with `GraphSONSerializersV2d0` over WSS
+- Key-based auth (`COSMOS_GREMLIN_PRIMARY_KEY`)
+- Thread-safe client creation with `threading.Lock()`
+- Retry with exponential backoff on `GremlinServerError` (429/408) and
+  `WSServerHandshakeError` (max 3 retries)
+- `_flatten_valuemap()` + `_normalise_results()` convert Gremlin valueMap
+  output to the standard `{columns, data}` response shape
+- Sync Gremlin execution wrapped in `asyncio.to_thread()`
 
 **`backends/mock.py`** — Pattern-matches query strings for entity types ("corerouter",
 "transportlink", etc.) and returns canned topology data. Useful for offline demos
@@ -405,7 +424,7 @@ at provisioning time based on `GRAPH_BACKEND`:
 ```
 data/prompts/graph_explorer/
 ├── core_instructions.md    ← Role, rules, scope (backend-agnostic)
-├── core_schema.md          ← 8 entity types, 7 relationship types, instances
+├── core_schema.md          ← 8 entity types, 7 relationship types, all instances
 ├── language_gql.md         ← GQL syntax, MATCH patterns, examples (Fabric)
 ├── language_gremlin.md     ← Gremlin traversals, g.V() patterns (Cosmos DB)
 ├── language_mock.md        ← Natural language instructions (offline)
@@ -541,12 +560,12 @@ layers. The `preprovision.sh` hook syncs selected values into `azd env` so Bicep
 can read them via `readEnvironmentVariable()`. The `postprovision.sh` hook writes
 deployment outputs back into the same file.
 
-### Shared `scripts/_config.py`
+### Shared `scripts/fabric/_config.py`
 
-All provisioning scripts import from a single module rather than each defining
-`FABRIC_API`, `FABRIC_SCOPE`, credential helpers, and path constants locally.
-Changes to API URLs, OAuth scopes, or default resource names propagate everywhere
-from one file.
+All Fabric provisioning scripts import from a single module rather than each
+defining `FABRIC_API`, `FABRIC_SCOPE`, credential helpers, and path constants
+locally. Changes to API URLs, OAuth scopes, or default resource names propagate
+everywhere from one file.
 
 ### Connected Agents over Direct Tool Calls
 
