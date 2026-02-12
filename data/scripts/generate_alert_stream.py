@@ -87,7 +87,7 @@ def generate_alert_stream() -> None:
     The alert type indicates which metric triggered the threshold, but the
     row captures a full telemetry snapshot of the node at that instant. This
     mirrors real monitoring systems (SNMP polls all OIDs) and is required by
-    the Fabric Anomaly Detector, which rejects rows with null values.
+    downstream anomaly detection, which rejects rows with null values.
 
     Baseline period provides "normal" low-severity background noise
     (~1 alert per minute) so the Anomaly Detector can distinguish

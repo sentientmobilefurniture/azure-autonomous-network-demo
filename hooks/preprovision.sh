@@ -18,8 +18,6 @@ if [ -f "$CONFIG_FILE" ]; then
   # Variables that Bicep needs (mapped to azd env var names)
   declare -A ENV_MAP=(
     ["AZURE_LOCATION"]="AZURE_LOCATION"
-    ["AZURE_FABRIC_ADMIN"]="AZURE_FABRIC_ADMIN"
-    ["FABRIC_SKU"]="AZURE_FABRIC_SKU"
     ["GPT_CAPACITY_1K_TPM"]="GPT_CAPACITY_1K_TPM"
     ["GRAPH_BACKEND"]="GRAPH_BACKEND"
   )

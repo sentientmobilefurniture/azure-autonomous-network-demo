@@ -2,12 +2,11 @@
 Graph Query API — Micro-service for graph and telemetry queries.
 
 Exposes two POST endpoints:
-  POST /query/graph      — Execute a graph query (GQL, Gremlin, or mock via GRAPH_BACKEND)
+  POST /query/graph      — Execute a graph query (Gremlin or mock via GRAPH_BACKEND)
   POST /query/telemetry  — Execute a SQL query against Cosmos DB NoSQL telemetry containers
 
 The graph backend is selected by the GRAPH_BACKEND env var:
-  fabric   → GQL queries against Fabric GraphModel REST API (default)
-  cosmosdb → Gremlin queries against Azure Cosmos DB
+  cosmosdb → Gremlin queries against Azure Cosmos DB (default)
   mock     → static topology data for offline demos
 
 Auth:
@@ -203,16 +202,4 @@ async def health():
     }
 
 
-if os.getenv("DEBUG_ENDPOINTS") == "1" and GRAPH_BACKEND == GraphBackendType.FABRIC:
-    from backends.fabric import _execute_gql
-    from config import WORKSPACE_ID, GRAPH_MODEL_ID
 
-    @app.post("/debug/raw-gql", summary="Debug: raw GQL response")
-    async def debug_raw_gql(req: GraphQueryRequest):
-        """Return the raw Fabric API response for debugging."""
-        ws = req.workspace_id or WORKSPACE_ID
-        gm = req.graph_model_id or GRAPH_MODEL_ID
-        if not ws or not gm:
-            raise HTTPException(status_code=400, detail="workspace_id and graph_model_id required")
-        result = await _execute_gql(req.query, workspace_id=ws, graph_model_id=gm)
-        return result

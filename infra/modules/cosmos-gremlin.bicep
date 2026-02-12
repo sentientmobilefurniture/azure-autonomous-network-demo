@@ -101,11 +101,38 @@ resource graph 'Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs@20
   }
 }
 
+// ─── Separate Cosmos DB Account for NoSQL / SQL API (telemetry) ──────────────
+// A Gremlin-enabled account does NOT support SQL API requests, so we need
+// a dedicated NoSQL account for telemetry data.
+
+resource cosmosNoSqlAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
+  name: '${accountName}-nosql'
+  location: location
+  tags: tags
+  kind: 'GlobalDocumentDB'
+  properties: {
+    databaseAccountOfferType: 'Standard'
+    locations: [
+      {
+        locationName: location
+        failoverPriority: 0
+        isZoneRedundant: false
+      }
+    ]
+    consistencyPolicy: {
+      defaultConsistencyLevel: 'Session'
+    }
+    enableAutomaticFailover: false
+    enableMultipleWriteLocations: false
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
 // ─── NoSQL Database (telemetry) ──────────────────────────────────────────────
 
 resource telemetryDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = {
   name: telemetryDatabaseName
-  parent: cosmosAccount
+  parent: cosmosNoSqlAccount
   properties: {
     resource: {
       id: telemetryDatabaseName
@@ -198,7 +225,7 @@ output cosmosAccountId string = cosmosAccount.id
 output primaryKey string = cosmosAccount.listKeys().primaryMasterKey
 
 @description('The Cosmos DB NoSQL endpoint (https://<account>.documents.azure.com:443/)')
-output cosmosNoSqlEndpoint string = cosmosAccount.properties.documentEndpoint
+output cosmosNoSqlEndpoint string = cosmosNoSqlAccount.properties.documentEndpoint
 
 @description('The NoSQL telemetry database name')
 output telemetryDatabaseName string = telemetryDatabase.name

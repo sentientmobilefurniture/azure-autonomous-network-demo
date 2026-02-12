@@ -20,7 +20,6 @@ class GraphBackend(Protocol):
         """Execute a graph query and return {columns: [...], data: [...]}.
 
         The query language depends on the backend:
-        - fabric:   GQL (Graph Query Language)
         - cosmosdb:  Gremlin (string-based, no bytecode)
         - mock:      natural language or predefined keys
 
@@ -36,10 +35,7 @@ class GraphBackend(Protocol):
 
 def get_backend() -> GraphBackend:
     """Factory: return the correct backend based on GRAPH_BACKEND env var."""
-    if GRAPH_BACKEND == GraphBackendType.FABRIC:
-        from .fabric import FabricGraphBackend
-        return FabricGraphBackend()
-    elif GRAPH_BACKEND == GraphBackendType.COSMOSDB:
+    if GRAPH_BACKEND == GraphBackendType.COSMOSDB:
         from .cosmosdb import CosmosDBGremlinBackend
         return CosmosDBGremlinBackend()
     elif GRAPH_BACKEND == GraphBackendType.MOCK:
@@ -48,5 +44,5 @@ def get_backend() -> GraphBackend:
     else:
         raise ValueError(
             f"Unknown GRAPH_BACKEND: {GRAPH_BACKEND!r}. "
-            f"Valid options: fabric, cosmosdb, mock"
+            f"Valid options: cosmosdb, mock"
         )

@@ -1,7 +1,7 @@
 """
 Test the deployed graph-query-api Container App.
 
-Sends test GQL and KQL queries to verify both endpoints are working
+Sends test Gremlin and SQL queries to verify both endpoints are working
 after deployment (azd deploy --service graph-query-api).
 
 Usage:
@@ -106,14 +106,14 @@ def test_telemetry(base: str) -> bool:
 def main():
     base = get_base_url()
     print("=" * 60)
-    print(f"  Fabric Query API — Deployment Verification")
+    print(f"  Graph Query API — Deployment Verification")
     print(f"  Target: {base}")
     print("=" * 60)
 
     results = {
         "health": test_health(base),
-        "graph (GQL)": test_graph(base),
-        "telemetry (KQL)": test_telemetry(base),
+        "graph (Gremlin)": test_graph(base),
+        "telemetry (SQL)": test_telemetry(base),
     }
 
     print(f"\n{'═' * 60}")

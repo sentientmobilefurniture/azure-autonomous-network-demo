@@ -9,8 +9,6 @@ from pydantic import BaseModel, Field
 
 class GraphQueryRequest(BaseModel):
     query: str
-    workspace_id: str = ""
-    graph_model_id: str = ""
 
 
 class GraphQueryResponse(BaseModel):

@@ -34,26 +34,22 @@ Frontend :5173  ──POST /api/alert──▶  API :8000  ──SDK──▶  O
                                                   │         │
                                                   ▼         ▼
                                             graph-query-api :8100
-                                            (Fabric GQL / Cosmos Gremlin / Mock)
+                                            (Cosmos Gremlin / Mock)
 ```
 
 ---
 
 ## Graph Backend Modes
 
-The `graph-query-api` microservice supports three backends, controlled by the
+The `graph-query-api` microservice supports two backends, controlled by the
 `GRAPH_BACKEND` environment variable:
 
 | Value | Graph Engine | Deployment | Use Case |
 |-------|-------------|-----------|----------|
 | `cosmosdb` | Azure Cosmos DB (Gremlin API) | `azd up` provisions automatically | **Default.** Fully automated setup. |
-| `fabric` | Microsoft Fabric GraphModel (GQL) | `azd up` + manual Fabric workspace setup | Production-scale graph with Lakehouse integration. |
 | `mock` | Static JSON responses | No external dependencies | Local development & testing. |
 
-Each backend has its own setup instructions:
-
-- **[Cosmos DB Setup](documentation/SETUP_COSMOSDB.md)** — recommended for first-time deployment
-- **[Fabric Setup](documentation/SETUP_FABRIC.md)** — for Fabric-based graph with ontology
+Setup guide: **[Cosmos DB Setup](documentation/SETUP_COSMOSDB.md)**
 
 ---
 
@@ -80,7 +76,7 @@ azd auth login
 
 ```bash
 cp azure_config.env.template azure_config.env
-# Edit azure_config.env — set GRAPH_BACKEND, AZURE_FABRIC_ADMIN (if fabric), etc.
+# Edit azure_config.env — set GRAPH_BACKEND, etc.
 ```
 
 ### 2. Deploy infrastructure
@@ -99,15 +95,13 @@ Resources deployed:
 - Storage Account + blob containers (runbooks, tickets)
 - Container Apps Environment (ACR + Log Analytics)
 - `graph-query-api` Container App (system-assigned managed identity)
-- **Cosmos DB path:** Cosmos DB Gremlin account + database + graph
-- **Fabric path:** Fabric capacity (F-SKU)
+- Cosmos DB Gremlin account + database + graph
 
 ### 3. Set up your graph backend
 
 Follow the backend-specific guide:
 
 - **Cosmos DB** → [documentation/SETUP_COSMOSDB.md](documentation/SETUP_COSMOSDB.md)
-- **Fabric** → [documentation/SETUP_FABRIC.md](documentation/SETUP_FABRIC.md)
 
 ### 4. Create search indices
 
@@ -161,7 +155,6 @@ Open http://localhost:5173
 │   ├── router_graph.py         # POST /query/graph
 │   ├── router_telemetry.py     # POST /query/telemetry (SQL)
 │   ├── backends/
-│   │   ├── fabric.py           # Fabric REST API (GQL)
 │   │   ├── cosmosdb.py         # Cosmos DB Gremlin (gremlinpython)
 │   │   └── mock.py             # Static JSON responses
 │   ├── openapi/                # Backend-specific OpenAPI specs
@@ -176,7 +169,7 @@ Open http://localhost:5173
 ├── infra/                      # Bicep IaC (azd up)
 │   ├── main.bicep              # Orchestrator (subscription-scoped)
 │   ├── main.bicepparam         # Parameter file (reads env vars)
-│   └── modules/                # AI Foundry, Search, Storage, Fabric, Cosmos, Container Apps
+│   └── modules/                # AI Foundry, Search, Storage, Cosmos, Container Apps
 │
 ├── data/
 │   ├── graph_schema.yaml       # Declarative graph schema manifest
@@ -192,14 +185,6 @@ Open http://localhost:5173
 │   ├── create_tickets_indexer.py
 │   ├── cosmos/                 # Cosmos DB-specific scripts
 │   │   └── provision_cosmos_gremlin.py   # YAML-manifest-driven graph loader
-│   ├── fabric/                 # Fabric-specific scripts
-│   │   ├── _config.py                    # Shared config (FABRIC_API, paths, helpers)
-│   │   ├── populate_fabric_config.py
-│   │   ├── provision_lakehouse.py
-│   │   ├── provision_eventhouse.py
-│   │   ├── provision_ontology.py
-│   │   ├── assign_fabric_role.py
-│   │   └── collect_fabric_agents.py
 │   └── testing_scripts/        # Smoke tests & CLI orchestrator
 │
 ├── hooks/
@@ -210,13 +195,11 @@ Open http://localhost:5173
     ├── ARCHITECTURE.md         # Full architecture reference
     ├── SCENARIO.md             # Demo scenario narrative
     ├── SETUP_COSMOSDB.md       # Cosmos DB backend setup guide
-    ├── SETUP_FABRIC.md         # Fabric backend setup guide
-    ├── V4GRAPH.md              # V4 graph model design spec
     ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
     ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
     ├── assets/                 # Screenshots & diagrams
     ├── ui_states/              # UI state screenshots
-    └── previous_dev_phases/    # Archived design docs (V2, V3)
+    └── previous_dev_phases/    # Archived design docs
 ```
 
 ---
@@ -289,19 +272,12 @@ az containerapp show --name $CA_NAME --resource-group $RG \
 bash infra/nuclear_teardown.sh
 ```
 
-Deletes Fabric workspace + all Azure resources + purges soft-deleted accounts.
+Deletes all Azure resources + purges soft-deleted accounts.
 
-### Azure only (keep Fabric)
+### Azure resources only
 
 ```bash
 azd down --force --purge
-```
-
-### Pause Fabric capacity (save costs)
-
-```bash
-az fabric capacity suspend --capacity-name <name> --resource-group $AZURE_RESOURCE_GROUP
-az fabric capacity resume  --capacity-name <name> --resource-group $AZURE_RESOURCE_GROUP
 ```
 
 ---
@@ -313,12 +289,6 @@ az fabric capacity resume  --capacity-name <name> --resource-group $AZURE_RESOUR
 ```bash
 az containerapp logs show --name $CA_NAME --resource-group $RG --type console --tail 50
 ```
-
-### Common GQL errors (Fabric backend)
-
-- **Property not found** — GQL property name doesn't match ontology definition
-- **Relationship direction wrong** — edge traversal `->` vs `<-` mismatch
-- **Entity type not found** — typo in node label (e.g. `SlaPolicy` vs `SLAPolicy`)
 
 ### Agent health
 
@@ -339,9 +309,8 @@ All configuration lives in `azure_config.env` (single source of truth). Key sect
 | AI Foundry | `AI_FOUNDRY_ENDPOINT`, `PROJECT_ENDPOINT` | `postprovision.sh` |
 | Model | `MODEL_DEPLOYMENT_NAME`, `EMBEDDING_MODEL` | User |
 | AI Search | `AI_SEARCH_NAME`, `RUNBOOKS_INDEX_NAME` | Mixed |
-| Graph Backend | `GRAPH_BACKEND` (`fabric`/`cosmosdb`/`mock`) | User (before `azd up`) |
+| Graph Backend | `GRAPH_BACKEND` (`cosmosdb`/`mock`) | User (before `azd up`) |
 | Cosmos DB | `COSMOS_GREMLIN_ENDPOINT`, `COSMOS_GREMLIN_PRIMARY_KEY` | `postprovision.sh` |
-| Fabric | `FABRIC_WORKSPACE_ID`, `FABRIC_GRAPH_MODEL_ID` | `populate_fabric_config.py` |
 | Telemetry | `COSMOS_NOSQL_ENDPOINT`, `COSMOS_NOSQL_DATABASE` | `postprovision.sh` |
 
 See `azure_config.env.template` for the complete list with inline documentation.

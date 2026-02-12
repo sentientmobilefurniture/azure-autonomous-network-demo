@@ -136,7 +136,7 @@ Each sub-agent's run steps contain:
 
 | Step Type | Content |
 |-----------|---------|
-| `tool_calls` | The actual tool calls the sub-agent made (e.g., `OpenApiTool` call to `/query/graph` with a specific GQL query) |
+| `tool_calls` | The actual tool calls the sub-agent made (e.g., `OpenApiTool` call to `/query/graph` with a graph query) |
 | `message_creation` | The sub-agent's reasoning and response composition |
 
 For a GraphExplorerAgent call, you'd see:
@@ -384,7 +384,7 @@ case 'step_enriched':
 1. Add `ToolCallDetail` component (collapsible panel with query + response)
 2. Update existing step display to support `toolCalls` in step data
 3. Handle `step_enriched` SSE events in the consumer
-4. Add query syntax highlighting (Cypher/GQL/KQL keywords)
+4. Add query syntax highlighting (Gremlin/Cypher keywords)
 5. Add Framer Motion expand/collapse animation
 
 **Estimated effort**: ~100-150 lines of new React code, 1 day
@@ -523,13 +523,13 @@ case 'step_enriched':
 
 2. **Query syntax highlighting**: Which library? `prism-react-renderer` is
    lightweight, `react-syntax-highlighter` is heavier but supports more
-   languages. Need Cypher/GQL and KQL highlighting.
+   languages. Need Gremlin/Cypher highlighting.
 
 3. **Enrichment caching**: If the user re-expands a step card, should we re-fetch
    from the API or cache the enrichment data? Caching is simpler and the data
    doesn't change after completion.
 
-4. **Sub-agent retries**: If a sub-agent retried a query (e.g., GQL syntax error
+4. **Sub-agent retries**: If a sub-agent retried a query (e.g., graph query syntax error
    → fixed → retried), the run_steps will show multiple tool calls. Should the
    UI display all attempts or only the final successful one? Showing all
    attempts is more educational for the NOC operator.

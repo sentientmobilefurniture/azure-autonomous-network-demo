@@ -2,7 +2,7 @@
 MCP Server — Stub tools for NOC operations.
 
 Exposes tools via FastMCP for consumption by Foundry agents or Copilot clients.
-Currently hello-world stubs. Real implementations will query Eventhouse, AI Search, etc.
+Currently hello-world stubs. Real implementations will query Cosmos DB, AI Search, etc.
 
 Usage (standalone test):
   cd api && uv run mcp dev app/mcp/server.py
@@ -13,10 +13,10 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("network_noc_mcp")
 
 
-@mcp.tool(name="query_eventhouse")
-async def query_eventhouse(kql_query: str) -> str:
-    """Run a KQL query against the NetworkDB Eventhouse. Returns query results as text."""
-    return f"[STUB] Would execute KQL: {kql_query}"
+@mcp.tool(name="query_telemetry")
+async def query_telemetry(sql_query: str) -> str:
+    """Run a SQL query against the Cosmos DB telemetry database. Returns query results as text."""
+    return f"[STUB] Would execute SQL: {sql_query}"
 
 
 @mcp.tool(name="search_tickets")

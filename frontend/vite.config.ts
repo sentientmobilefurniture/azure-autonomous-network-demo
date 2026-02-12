@@ -28,16 +28,6 @@ export default defineConfig({
           });
         },
       },
-      '/api/fabric-logs': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-        configure: (proxy) => {
-          proxy.on('proxyRes', (proxyRes) => {
-            proxyRes.headers['cache-control'] = 'no-cache';
-            proxyRes.headers['x-accel-buffering'] = 'no';
-          });
-        },
-      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,

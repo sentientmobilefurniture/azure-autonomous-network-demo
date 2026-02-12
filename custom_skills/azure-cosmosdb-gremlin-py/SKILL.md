@@ -4,8 +4,7 @@ name: azure-cosmosdb-gremlin-py
 description: |
   Build graph database solutions with Azure Cosmos DB for Apache Gremlin and Python.
   Covers Bicep IaC provisioning, gremlinpython SDK (sync), Gremlin traversal queries,
-  partition key strategies, data loading, FastAPI integration, and the Fabric Graph
-  migration path. Triggers: "Cosmos DB Gremlin", "graph database Azure", "Gremlin API",
+  partition key strategies, data loading, and FastAPI integration. Triggers: "Cosmos DB Gremlin", "graph database Azure", "Gremlin API",
   "Apache TinkerPop", "gremlinpython", "property graph", "graph traversal",
   "Cosmos Gremlin Python", "network topology graph".
 package: gremlinpython
@@ -119,8 +118,7 @@ gremlin_client = client.Client(
 >
 > 1. **Microsoft-native PaaS** — no containers to manage, auto-scale, SLA-backed
 > 2. **Sales motion alignment** — "Azure all the way down", no OSS container to explain
-> 3. **Fabric transition path** — Cosmos DB Gremlin → Graph in Microsoft Fabric is a
->    documented migration path. When Fabric Graph matures, the data model ports directly.
+> 3. **Microsoft-native PaaS** — no containers to manage, auto-scale, SLA-backed
 > 4. **Security & compliance** — RBAC, encryption at rest/transit, private endpoints
 > 5. **Elastic scalability** — billions of vertices/edges, automatic partitioning
 
@@ -427,26 +425,6 @@ vertices co-located.
 - **Edges for relationships** — routes_via, aggregates, depends_on, monitors
 - **Properties on edges** — bandwidth, latency_ms, weight, dependency_strength
 - **Keep vertices lightweight** — store bulk telemetry in Cosmos DB NoSQL containers, not on graph properties
-
----
-
-## Fabric Transition Path
-
-Azure Cosmos DB for Apache Gremlin provides a documented migration path to
-**Graph in Microsoft Fabric** (currently in preview):
-
-1. **Today**: Use Cosmos DB Gremlin for OLTP graph operations (read/write, interactive demo)
-2. **Migration**: Export graph data via Cosmos DB change feed → Fabric Lakehouse
-3. **Tomorrow**: Query the same graph model via Fabric Graph (GQL/ISO syntax)
-4. **Benefit**: No data model redesign — vertices and edges map directly to Fabric Graph tables
-
-> "Start with Cosmos DB Gremlin for the live demo. When Fabric Graph is GA,
-> migrate the graph data via change feed mirroring — same schema, same queries
-> (GQL ≈ Gremlin), fully Microsoft-native."
-
-This is explicitly mentioned in the [Cosmos DB Gremlin docs](https://learn.microsoft.com/en-us/azure/cosmos-db/gremlin/overview):
-> *"Are you looking to implement an OLAP graph or migrate an existing Apache
-> Gremlin application? Consider Graph in Microsoft Fabric."*
 
 ---
 

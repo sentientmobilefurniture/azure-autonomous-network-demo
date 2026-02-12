@@ -53,10 +53,9 @@ Three deployable services:
                        ▼ via GRAPH_BACKEND    ▼
               ┌──────────────────┐   ┌───────────────┐
               │  Backend layer   │   │ Cosmos DB     │
-              │  ┌─ fabric.py   │   │ NoSQL         │
-              │  ├─ cosmosdb.py │   │ (SQL API)     │
-              │  └─ mock.py     │   └───────────────┘
-              └──────────────────┘
+              │  ┌─ cosmosdb.py │   │ NoSQL         │
+              │  └─ mock.py     │   │ (SQL API)     │
+              └──────────────────┘   └───────────────┘
 ```
 
 ---
@@ -77,7 +76,6 @@ Three deployable services:
 │       ├── ai-foundry.bicep    # AI Foundry account + project + GPT deployment
 │       ├── search.bicep        # Azure AI Search
 │       ├── storage.bicep       # Storage account + blob containers
-│       ├── fabric.bicep        # Fabric capacity (F-SKU)
 │       ├── container-apps-environment.bicep  # Log Analytics + ACR + Managed Environment
 │       ├── container-app.bicep              # Generic Container App (managed identity)
 │       └── roles.bicep         # RBAC assignments
@@ -100,11 +98,9 @@ Three deployable services:
 │   │   ├── graph_explorer/     # Decomposed GraphExplorer prompt (backend-agnostic)
 │   │   │   ├── core_instructions.md   # Role, rules, scope boundaries
 │   │   │   ├── core_schema.md         # Entity/relationship schema (all backends)
-│   │   │   ├── language_gql.md        # GQL syntax, examples (Fabric)
 │   │   │   ├── language_gremlin.md    # Gremlin syntax, examples (Cosmos DB)
 │   │   │   ├── language_mock.md       # Natural language (offline demos)
 │   │   │   └── description.md         # Agent description one-liner
-│   │   └── deprecated/         # Previous monolithic prompts
 │   └── scripts/                # Synthetic data generators (run once)
 │
 ├── scripts/                    # Provisioning & operational scripts
@@ -114,22 +110,10 @@ Three deployable services:
 │   ├── agent_ids.json          # Output: provisioned agent IDs
 │   ├── cosmos/                 # Cosmos DB-specific scripts
 │   │   └── provision_cosmos_gremlin.py   # YAML-manifest-driven Gremlin graph loader
-│   ├── fabric/                 # Fabric-specific scripts
-│   │   ├── _config.py              # Shared config module (FABRIC_API, paths, helpers)
-│   │   ├── provision_lakehouse.py  # Create Fabric workspace + lakehouse + load CSVs
-│   │   ├── provision_eventhouse.py # Create Eventhouse + KQL tables + ingest CSVs
-│   │   ├── provision_ontology.py   # Create Ontology item on Lakehouse data
-│   │   ├── populate_fabric_config.py   # Discover Fabric IDs → write to azure_config.env
-│   │   ├── collect_fabric_agents.py    # Discover Fabric Data Agent IDs → azure_config.env
-│   │   └── assign_fabric_role.py   # Grant Container App identity Fabric workspace access
 │   └── testing_scripts/        # CLI test & debug utilities
 │       ├── test_orchestrator.py    # Stream orchestrator run with metadata
-│       ├── test_fabric_agent.py    # Query a single Fabric Data Agent
-│       ├── test_gql_query.py       # GQL queries against Fabric GraphModel API
-│       ├── test_kql_query.py       # KQL queries against Fabric Eventhouse
 │       ├── test_graph_query_api.py # Deployment smoke test for graph-query-api
-│       ├── test_function_tool.py   # PoC — Foundry agent with FunctionTool (archived)
-│       └── check_status.py         # Inspect Fabric workspace items and job status
+│       └── test_function_tool.py   # PoC — Foundry agent with FunctionTool (archived)
 │
 ├── api/                        # FastAPI backend (NOC API)
 │   ├── pyproject.toml          # Python deps (fastapi, sse-starlette, mcp, azure SDKs)
@@ -139,7 +123,7 @@ Three deployable services:
 │       ├── routers/
 │       │   ├── alert.py        # POST /api/alert → SSE stream of orchestrator steps
 │       │   ├── agents.py       # GET /api/agents → list of agent metadata
-│       │   └── logs.py         # GET /api/logs + /api/fabric-logs → SSE log streams
+│       │   └── logs.py         # GET /api/logs → SSE log stream
 │       └── mcp/
 │           └── server.py       # FastMCP tool stubs (query_telemetry, search_tickets, …)
 │
@@ -151,12 +135,10 @@ Three deployable services:
 │   ├── router_telemetry.py     # POST /query/telemetry — SQL via Cosmos SDK
 │   ├── backends/               # Backend abstraction layer (V4)
 │   │   ├── __init__.py         # GraphBackend Protocol + get_backend() factory
-│   │   ├── fabric.py           # Fabric GraphModel GQL via REST API (production)
-│   │   ├── cosmosdb.py         # Cosmos DB Gremlin placeholder (raises NotImplementedError)
+│   │   ├── cosmosdb.py         # Cosmos DB Gremlin via gremlinpython
 │   │   └── mock.py             # Static topology responses (offline demos)
 │   ├── openapi/                # Per-backend OpenAPI specs for Foundry OpenApiTool
-│   │   ├── fabric.yaml         # GQL description, workspace_id/graph_model_id params
-│   │   ├── cosmosdb.yaml       # Gremlin description, no Fabric-specific params
+│   │   ├── cosmosdb.yaml       # Gremlin description
 │   │   └── mock.yaml           # Generic description
 │   ├── pyproject.toml          # Python deps (fastapi, uvicorn, azure-identity, azure-cosmos)
 │   └── Dockerfile              # python:3.11-slim, uv for deps, port 8100
@@ -174,7 +156,7 @@ Three deployable services:
 │       │   └── useInvestigation.ts   # SSE connection + all investigation state
 │       ├── components/
 │       │   ├── Header.tsx            # Branding + HealthDot + "5 Agents" indicator
-│       │   ├── MetricsBar.tsx        # PanelGroup with 7 resizable panels
+│       │   ├── MetricsBar.tsx        # PanelGroup with 6 resizable panels
 │       │   ├── MetricCard.tsx        # KPI display (hardcoded for demo)
 │       │   ├── AlertChart.tsx        # Static anomaly detection chart image
 │       │   ├── LogStream.tsx         # Generic SSE log viewer (url + title props)
@@ -193,7 +175,6 @@ Three deployable services:
 │   ├── ARCHITECTURE.md         # This file
 │   ├── SCENARIO.md             # Demo scenario description
 │   ├── SETUP_COSMOSDB.md       # Cosmos DB backend setup guide
-│   ├── SETUP_FABRIC.md         # Fabric backend setup guide
 │   ├── V4GRAPH.md              # V4 graph model design spec
 │   ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
 │   ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
@@ -218,20 +199,19 @@ system-assigned managed identity.
 
 Agents don't know or care which graph database backs `/query/graph`. They send a
 query string and get back `{columns, data}`. The **query language** changes per
-backend (GQL, Gremlin, natural language), but the **API contract** is identical.
+backend (Gremlin, natural language), but the **API contract** is identical.
 A single environment variable controls the backend:
 
 ```bash
-GRAPH_BACKEND=fabric          # Options: "fabric" | "cosmosdb" | "mock"
+GRAPH_BACKEND=cosmosdb          # Options: "cosmosdb" | "mock"
 ```
 
 ### Module Breakdown
 
 #### `config.py` — Centralised Configuration
 
-- `GraphBackendType` enum: `FABRIC`, `COSMOSDB`, `MOCK`
-- Reads all env vars once: Fabric API URLs, workspace/model IDs, Eventhouse URIs,
-  Cosmos DB connection strings
+- `GraphBackendType` enum: `COSMOSDB`, `MOCK`
+- Reads all env vars once: Cosmos DB connection strings
 - Exports shared `credential = DefaultAzureCredential()`
 - `BACKEND_REQUIRED_VARS` dict validates that each backend has its required env vars
 
@@ -239,9 +219,9 @@ GRAPH_BACKEND=fabric          # Options: "fabric" | "cosmosdb" | "mock"
 
 | Model | Fields | Notes |
 |-------|--------|-------|
-| `GraphQueryRequest` | `query`, optional `workspace_id`, `graph_model_id` | Fabric params optional — defaults from env |
+| `GraphQueryRequest` | `query` | Query string (Gremlin or natural language) |
 | `GraphQueryResponse` | `columns=[]`, `data=[]`, `error: str \| None` | Error field enables LLM self-repair |
-| `TelemetryQueryRequest` | `query`, optional `eventhouse_query_uri`, `kql_db_name` | |
+| `TelemetryQueryRequest` | `query` | SQL query string |
 | `TelemetryQueryResponse` | `columns=[]`, `rows=[]`, `error: str \| None` | Same error pattern |
 
 The `error` field is key to error resilience — see [Error Resilience](#error-resilience).
@@ -274,16 +254,8 @@ class GraphBackend(Protocol):
 
 | Backend | Implementation | Query Language | Status |
 |---------|---------------|----------------|--------|
-| `fabric` | `FabricGraphBackend` | GQL | Production — Fabric GraphModel REST API |
 | `cosmosdb` | `CosmosDBGremlinBackend` | Gremlin | Production — Cosmos DB Gremlin via gremlinpython |
 | `mock` | `MockGraphBackend` | Natural language | Working — static topology data |
-
-**`backends/fabric.py`** is the most complex:
-- `_execute_gql()` — async `httpx` POST to `/workspaces/{ws}/GraphModels/{gm}/executeQuery`
-- **429 retry** — up to 3 attempts, parses `Retry-After` header or Fabric's JSON body
-  timestamp, minimum delay 10s × attempt number (exponential backoff)
-- Detects Fabric's "HTTP 200 but GQL logical error" pattern (raises `HTTPException`)
-- Bearer auth via `credential.get_token(FABRIC_SCOPE)`
 
 **`backends/cosmosdb.py`** — Cosmos DB Gremlin backend:
 - Singleton `gremlinpython` client with `GraphSONSerializersV2d0` over WSS
@@ -296,8 +268,7 @@ class GraphBackend(Protocol):
 - Sync Gremlin execution wrapped in `asyncio.to_thread()`
 
 **`backends/mock.py`** — Pattern-matches query strings for entity types ("corerouter",
-"transportlink", etc.) and returns canned topology data. Useful for offline demos
-without Fabric connectivity.
+"transportlink", etc.) and returns canned topology data. Useful for offline demos.
 
 #### `main.py` — Slim App Factory
 
@@ -312,12 +283,11 @@ without Fabric connectivity.
 
 #### Per-Backend OpenAPI Specs
 
-Three standalone OpenAPI 3.0.3 specs in `openapi/`, each consumed by Foundry's
+Two standalone OpenAPI 3.0.3 specs in `openapi/`, each consumed by Foundry's
 `OpenApiTool` when provisioning agents:
 
-| Spec | `/query/graph` description | Fabric-specific params |
-|------|---------------------------|----------------------|
-| `fabric.yaml` | GQL query language, GQL examples | `workspace_id`, `graph_model_id` |
+| Spec | `/query/graph` description | Extra params |
+|------|---------------------------|--------------|
 | `cosmosdb.yaml` | Gremlin query language, Gremlin examples | None (server-side config) |
 | `mock.yaml` | Generic "send any query string" | None |
 
@@ -333,7 +303,7 @@ instructing the LLM to read the error and retry with corrected syntax.
 ## API Service — Orchestrator Bridge
 
 The API (`api/`) bridges the synchronous Azure AI Agents SDK to the async SSE-based
-frontend. It does **not** query Fabric or any data source directly — all data access
+frontend. It does **not** query any data source directly — all data access
 flows through the Foundry agents.
 
 ### `orchestrator.py` — Foundry → SSE Bridge
@@ -373,15 +343,10 @@ Key design patterns:
 2. **Run retry with recovery** (`MAX_RUN_ATTEMPTS = 2`): If a run fails (e.g.,
    sub-agent tool error), the handler sets `run_failed = True` instead of
    immediately emitting an SSE error. The retry loop posts a recovery message to
-   the thread ("The previous investigation attempt failed with: {detail}. Please
-   retry...") and creates a new run on the same thread. Only emits an SSE error
+   the thread and creates a new run on the same thread. Only emits an SSE error
    on the final failed attempt.
 
-3. **Fabric log emission**: Synthesises graph-query-api log events for Graph and
-   Telemetry agent tool calls. The frontend displays these in the "Fabric Logs"
-   LogStream panel even though graph-query-api runs remotely.
-
-4. **Configuration check**: `is_configured()` validates that `agent_ids.json`
+3. **Configuration check**: `is_configured()` validates that `agent_ids.json`
    exists and required env vars (`PROJECT_ENDPOINT`, `AI_FOUNDRY_PROJECT_NAME`)
    are set. If not configured, the alert endpoint falls back to a stub generator
    with synthetic 4-agent walkthrough events.
@@ -393,7 +358,6 @@ Key design patterns:
 | `/api/alert` | POST | Accept alert text, return SSE stream of investigation |
 | `/api/agents` | GET | Return list of provisioned agents from `agent_ids.json` |
 | `/api/logs` | GET | SSE stream of API process logs (app.*, azure.*, uvicorn) |
-| `/api/fabric-logs` | GET | SSE stream of synthetic graph-query-api logs |
 | `/health` | GET | Health check |
 
 ---
@@ -407,7 +371,7 @@ Five Foundry agents, each scoped to one responsibility:
 | Agent | Role | Data Source | Tool Type |
 |-------|------|-------------|-----------|
 | **Orchestrator** | Supervisor — coordinates investigation, synthesises diagnosis | — | `ConnectedAgentTool` → 4 sub-agents |
-| **GraphExplorerAgent** | Topology & dependency analysis (forward/reverse trace) | Fabric GraphModel (GQL) | `OpenApiTool` → `/query/graph` |
+| **GraphExplorerAgent** | Topology & dependency analysis (forward/reverse trace) | Cosmos DB Gremlin | `OpenApiTool` → `/query/graph` |
 | **TelemetryAgent** | Raw telemetry & alert retrieval | Cosmos DB NoSQL (SQL) | `OpenApiTool` → `/query/telemetry` |
 | **RunbookKBAgent** | Procedure lookup (SOPs, diagnostics, escalation) | AI Search `runbooks-index` | `AzureAISearchTool` |
 | **HistoricalTicketAgent** | Precedent search (past incidents, resolution patterns) | AI Search `tickets-index` | `AzureAISearchTool` |
@@ -425,7 +389,6 @@ at provisioning time based on `GRAPH_BACKEND`:
 data/prompts/graph_explorer/
 ├── core_instructions.md    ← Role, rules, scope (backend-agnostic)
 ├── core_schema.md          ← 8 entity types, 7 relationship types, all instances
-├── language_gql.md         ← GQL syntax, MATCH patterns, examples (Fabric)
 ├── language_gremlin.md     ← Gremlin traversals, g.V() patterns (Cosmos DB)
 ├── language_mock.md        ← Natural language instructions (offline)
 └── description.md          ← Agent description one-liner
@@ -435,7 +398,6 @@ data/prompts/graph_explorer/
 
 ```python
 LANGUAGE_FILE_MAP = {
-    "fabric": "language_gql.md",
     "cosmosdb": "language_gremlin.md",
     "mock": "language_mock.md",
 }
@@ -455,8 +417,8 @@ backend-agnostic.
 1. **OpenAPI spec** — selects `openapi/{backend}.yaml`
 2. **GraphExplorer prompt** — assembles from `graph_explorer/` parts with the
    correct language file
-3. **Tool description** — backend-specific one-liner ("Execute a GQL query..." /
-   "Execute a Gremlin query..." / "Query the topology graph...")
+3. **Tool description** — backend-specific one-liner ("Execute a Gremlin query..." /
+   "Query the topology graph...")
 
 ### Investigation Flows
 
@@ -500,7 +462,7 @@ return HTTP 200 with the error message in the response body:
 {
   "columns": [],
   "data": [],
-  "error": "KQL query error: Column 'nonexistent' not found. Please check column names and retry."
+  "error": "Query error: Column 'nonexistent' not found. Please check column names and retry."
 }
 ```
 
@@ -560,13 +522,6 @@ layers. The `preprovision.sh` hook syncs selected values into `azd env` so Bicep
 can read them via `readEnvironmentVariable()`. The `postprovision.sh` hook writes
 deployment outputs back into the same file.
 
-### Shared `scripts/fabric/_config.py`
-
-All Fabric provisioning scripts import from a single module rather than each
-defining `FABRIC_API`, `FABRIC_SCOPE`, credential helpers, and path constants
-locally. Changes to API URLs, OAuth scopes, or default resource names propagate
-everywhere from one file.
-
 ### Connected Agents over Direct Tool Calls
 
 The orchestrator doesn't call external APIs directly. It delegates to four
@@ -574,19 +529,14 @@ sub-agents via Foundry's `ConnectedAgentTool`. Each sub-agent is scoped to one
 data source and has its own system prompt. This keeps each agent focused and
 testable independently.
 
-### OpenApiTool + graph-query-api over FabricTool
+### OpenApiTool + graph-query-api
 
-GraphExplorerAgent and TelemetryAgent access Microsoft Fabric through a dedicated
-Container App micro-service (`graph-query-api`) rather than the Fabric Data Agent
-(`FabricTool`). This change was driven by a key constraint: `ConnectedAgentTool`
+GraphExplorerAgent and TelemetryAgent access data through a dedicated
+Container App micro-service (`graph-query-api`). `ConnectedAgentTool`
 sub-agents run server-side on Foundry and cannot execute client-side `FunctionTool`
-callbacks. `OpenApiTool` makes server-side REST calls, so it works natively.
-
-**Why not FabricTool?** FabricTool requires a Fabric Data Agent connected as a
-"Connected Resource" in AI Foundry — a manual portal step that cannot be automated.
-It also only supports delegated user identities, not managed identities. The
-OpenApiTool approach eliminates both limitations and provides full control over
-query construction (GQL/KQL) and error handling (429 retry, errors-as-200, etc.).
+callbacks. `OpenApiTool` enables server-side REST calls, so it works natively
+and provides full control over query construction and error handling
+(retry logic, errors-as-200, etc.).
 
 ### Backend-Agnostic Graph Abstraction (V4)
 
@@ -594,21 +544,6 @@ The graph endpoint (`/query/graph`) is decoupled from any specific graph databas
 via a `GraphBackend` Protocol. Switching backends requires only changing
 `GRAPH_BACKEND` env var and re-provisioning agents. No code changes to the agent
 layer, API, or frontend. See `documentation/V4GRAPH.md` for the full design spec.
-
-### Fabric Identity and Role Assignment
-
-The `graph-query-api` Container App authenticates to the Fabric REST API using
-its system-assigned managed identity (via `DefaultAzureCredential`). For this to
-work, the identity must be a member of the Fabric workspace.
-
-`scripts/assign_fabric_role.py` automates this:
-1. Reads `FABRIC_WORKSPACE_ID` and `GRAPH_QUERY_API_PRINCIPAL_ID` from `azure_config.env`
-2. Calls `GET /v1/workspaces/{id}/roleAssignments` to check if the principal already has a role
-3. If not, calls `POST /v1/workspaces/{id}/roleAssignments` to add it as **Contributor**
-
-The script is idempotent — re-running it skips if the assignment already exists.
-It must run after both `azd up` (which creates the Container App identity) and
-`provision_lakehouse.py` (which creates the Fabric workspace).
 
 ---
 
@@ -650,7 +585,7 @@ resizable panels. Built with React 18, Vite, Tailwind CSS, and Framer Motion.
 │  Header          (h-12, fixed)                              Zone 1  │
 ├──────────────────────────────────────────────────────────────────────┤
 │  MetricsBar      (resizable height, default 30%)            Zone 2  │
-│  [KPI] [KPI] [KPI] [KPI] [AlertChart] [API Logs] [Fabric Logs]     │
+│  [KPI] [KPI] [KPI] [KPI] [AlertChart] [API Logs]                    │
 │  ←──── resizable panels (react-resizable-panels) ────→              │
 ├═══════════════════════════ vertical drag handle ═════════════════════┤
 │                  (resizable height, default 70%)            Zone 3  │
@@ -679,13 +614,11 @@ props down. Both panels read from the same hook instance. The hook uses
 
 ### Live Log Streaming
 
-Two `LogStream` components in the metrics bar display real-time backend logs via SSE:
+A `LogStream` component in the metrics bar displays real-time backend logs via SSE:
 - **API logs** (`/api/logs`) — captures `app.*`, `azure.*`, and `uvicorn` log
   output from the FastAPI process
-- **Fabric logs** (`/api/fabric-logs`) — synthetic logs emitted by the orchestrator
-  showing queries and responses that flow through graph-query-api
 
-Each LogStream supports auto-scroll, manual scroll-pause, and connection status.
+The LogStream supports auto-scroll, manual scroll-pause, and connection status.
 
 ### Hardcoded vs Live Data
 
@@ -709,7 +642,6 @@ location, so names are globally unique and reproducible.
 | `ai-foundry.bicep` | AI Foundry account + project + GPT-4.1 deployment |
 | `search.bicep` | Azure AI Search service |
 | `storage.bicep` | Storage account + blob containers (runbooks, tickets) |
-| `fabric.bicep` | Fabric capacity (F-SKU, configurable F2–F2048) |
 | `container-apps-environment.bicep` | Log Analytics workspace + ACR + Managed Environment |
 | `container-app.bicep` | Generic Container App template (managed identity) |
 | `roles.bicep` | RBAC assignments (user + service principals) |
@@ -762,26 +694,10 @@ it's user-set or auto-populated.
 | `TICKETS_CONTAINER_NAME` | user | scripts, must match Bicep container name |
 | **Graph Backend** | | |
 | `GRAPH_BACKEND` | user | graph-query-api (config.py), provision_agents.py |
-| **Fabric API** | | |
-| `FABRIC_API_URL` | user (default ok) | scripts/_config.py → all scripts |
-| `FABRIC_SCOPE` | user (default ok) | scripts/_config.py → all scripts |
-| **Fabric Resource Names** | | |
-| `FABRIC_WORKSPACE_NAME` | user | scripts (provision_lakehouse, populate_fabric_config) |
-| `FABRIC_LAKEHOUSE_NAME` | user | scripts/_config.py → provision_lakehouse |
-| `FABRIC_EVENTHOUSE_NAME` | user | scripts/_config.py → provision_eventhouse |
-| `FABRIC_KQL_DB_DEFAULT` | user | scripts (provision_eventhouse) |
-| `FABRIC_ONTOLOGY_NAME` | user | scripts/_config.py → provision_ontology |
-| **Fabric IDs** (auto-populated) | | |
-| `FABRIC_CAPACITY_ID` | populate_fabric_config | scripts |
-| `FABRIC_WORKSPACE_ID` | populate_fabric_config | scripts, graph-query-api |
-| `FABRIC_LAKEHOUSE_ID` | populate_fabric_config | scripts (provision_ontology) |
-| `FABRIC_GRAPH_MODEL_ID` | provision_ontology | graph-query-api |
-| `EVENTHOUSE_QUERY_URI` | populate_fabric_config | graph-query-api, scripts |
-| `FABRIC_KQL_DB_NAME` | populate_fabric_config | graph-query-api |
 | **graph-query-api** | | |
 | `GRAPH_QUERY_API_URI` | postprovision (azd output) | scripts (provision_agents) |
-| `GRAPH_QUERY_API_PRINCIPAL_ID` | postprovision (azd output) | scripts (assign_fabric_role) |
-| **Cosmos DB** (optional, when `GRAPH_BACKEND=cosmosdb`) | | |
+| `GRAPH_QUERY_API_PRINCIPAL_ID` | postprovision (azd output) | scripts |
+| **Cosmos DB** | | |
 | `COSMOS_GREMLIN_ENDPOINT` | user | graph-query-api |
 | `COSMOS_GREMLIN_PRIMARY_KEY` | user | graph-query-api |
 | `COSMOS_GREMLIN_DATABASE` | user | graph-query-api |
@@ -818,16 +734,11 @@ azure_config.env → preprovision.sh → azd up (Bicep) → postprovision.sh →
                                        ├─ Container Apps Environment (ACR + Log Analytics)
                                        └─ graph-query-api Container App (deployed by azd deploy)
 
-# Cosmos DB flow (default):
+# Cosmos DB flow:
 provision_cosmos_gremlin.py ── CSV topology data ──────▶ Cosmos DB Gremlin (graph)
 provision_cosmos_telemetry.py ─ CSV telemetry data ────▶ Cosmos DB NoSQL (telemetry)
 
-# Fabric flow (alternative):
-provision_lakehouse.py ─── CSV topology data ──────────▶ Fabric Lakehouse
-provision_eventhouse.py ── CSV telemetry data ─────────▶ Fabric Eventhouse (KQL)
-provision_ontology.py ──── ontology definition ────────▶ Fabric Ontology (graph index)
-populate_fabric_config.py ── discovers IDs ────────────▶ azure_config.env
-assign_fabric_role.py ──── grants managed identity ────▶ Fabric workspace Contributor
+
 provision_agents.py ──── creates 5 Foundry agents ─────▶ agent_ids.json
   ├─ GraphExplorerAgent   (OpenApiTool → graph-query-api /query/graph)
   │   └─ prompt assembled from graph_explorer/{core_instructions + core_schema + language_X}.md
@@ -847,7 +758,7 @@ User types alert in frontend
   → Background thread streams AgentEvents via SSEEventHandler callbacks
   → Orchestrator delegates to sub-agents via ConnectedAgentTool:
       ├─ GraphExplorerAgent → OpenApiTool → graph-query-api /query/graph
-      │   → dispatches to backends/{GRAPH_BACKEND}.py → Fabric/Cosmos/Mock
+      │   → dispatches to backends/{GRAPH_BACKEND}.py → Cosmos/Mock
       ├─ TelemetryAgent → OpenApiTool → graph-query-api /query/telemetry
       │   → CosmosClient → Cosmos DB NoSQL
       ├─ RunbookKBAgent → AzureAISearchTool → runbooks-index

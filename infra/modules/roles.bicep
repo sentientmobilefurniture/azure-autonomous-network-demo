@@ -20,6 +20,9 @@ param searchPrincipalId string
 @description('Principal ID of the AI Foundry resource (system-assigned identity)')
 param foundryPrincipalId string
 
+@description('Name of the Cosmos DB NoSQL account (optional, for data-plane RBAC)')
+param cosmosNoSqlAccountName string = ''
+
 // ---------------------------------------------------------------------------
 // Built-in Role Definition GUIDs
 // ---------------------------------------------------------------------------
@@ -31,6 +34,8 @@ var roles = {
   cognitiveServicesContributor: '25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68'
   searchIndexDataContributor: '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
   searchServiceContributor: '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
+  // Cosmos DB Built-in Data Contributor (data-plane RBAC for NoSQL API)
+  cosmosDbDataContributor: '00000000-0000-0000-0000-000000000002'
 }
 
 // ---------------------------------------------------------------------------
@@ -164,5 +169,25 @@ resource foundrySearchServiceContributor 'Microsoft.Authorization/roleAssignment
     principalId: foundryPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchServiceContributor)
     principalType: 'ServicePrincipal'
+  }
+}
+
+// ============================================================================
+// COSMOS DB DATA-PLANE ROLE ASSIGNMENTS
+// ============================================================================
+
+// User → Cosmos DB Built-in Data Contributor on NoSQL account
+// Required for DefaultAzureCredential access from provisioning scripts
+resource cosmosNoSqlAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = if (!empty(cosmosNoSqlAccountName)) {
+  name: cosmosNoSqlAccountName
+}
+
+resource userCosmosDbDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (!empty(cosmosNoSqlAccountName)) {
+  parent: cosmosNoSqlAccount
+  name: guid(cosmosNoSqlAccount.id, principalId, roles.cosmosDbDataContributor)
+  properties: {
+    principalId: principalId
+    roleDefinitionId: '${cosmosNoSqlAccount.id}/sqlRoleDefinitions/${roles.cosmosDbDataContributor}'
+    scope: cosmosNoSqlAccount.id
   }
 }

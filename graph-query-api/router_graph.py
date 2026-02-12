@@ -57,7 +57,7 @@ async def close_graph_backend() -> None:
     summary="Execute a graph query",
     description=(
         "Dispatches to the configured graph backend "
-        "(Fabric GQL, Cosmos DB Gremlin, or mock) and returns columns + data. "
+        "(Cosmos DB Gremlin or mock) and returns columns + data. "
         "If the query has a syntax error, the response will contain an "
         "'error' field with the details — read it, fix your query, and retry."
     ),
@@ -69,11 +69,7 @@ async def query_graph(req: GraphQueryRequest):
         GRAPH_BACKEND.value, req.query,
     )
     try:
-        result = await backend.execute_query(
-            req.query,
-            workspace_id=req.workspace_id,
-            graph_model_id=req.graph_model_id,
-        )
+        result = await backend.execute_query(req.query)
     except NotImplementedError as e:
         logger.warning("Graph backend not implemented (returning 200 with error body): %s", e)
         return GraphQueryResponse(

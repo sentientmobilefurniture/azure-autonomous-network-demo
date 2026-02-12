@@ -23,22 +23,14 @@ param principalId string
 @description('Tags to apply to all resources')
 param tags object = {}
 
-@description('Admin email for Fabric capacity (only used on Fabric path)')
-param fabricAdminEmail string = ''
-
-@description('SKU for Fabric capacity (F2-F2048). PAUSE when not in use to control cost.')
-@allowed(['F2', 'F4', 'F8', 'F16', 'F32', 'F64', 'F128', 'F256', 'F512', 'F1024', 'F2048'])
-param fabricSkuName string = 'F8'
-
 @description('GPT model capacity in 1K TPM units (e.g. 10 = 10K tokens/min, 100 = 100K TPM)')
 param gptCapacity int = 300
 
-@description('Graph backend: "fabric" deploys Fabric capacity, "cosmosdb" deploys Cosmos DB Gremlin. Controls which infra path is provisioned.')
-@allowed(['fabric', 'cosmosdb'])
-param graphBackend string = 'fabric'
+@description('Graph backend: "cosmosdb" deploys Cosmos DB Gremlin.')
+@allowed(['cosmosdb'])
+param graphBackend string = 'cosmosdb'
 
-// Derived flags for conditional deployment
-var deployFabric = graphBackend == 'fabric' && !empty(fabricAdminEmail)
+// Derived flag for conditional deployment
 var deployCosmosGremlin = graphBackend == 'cosmosdb'
 
 
@@ -52,7 +44,6 @@ var abbrs = {
   aiFoundryProject: 'proj-'
   search: 'srch-'
   storage: 'st'
-  fabric: 'fab-'
 }
 
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
@@ -86,17 +77,6 @@ module storage 'modules/storage.bicep' = {
     name: '${abbrs.storage}${resourceToken}'
     location: location
     tags: tags
-  }
-}
-
-module fabric 'modules/fabric.bicep' = if (deployFabric) {
-  scope: rg
-  params: {
-    name: 'fab${resourceToken}'
-    location: location
-    tags: tags
-    adminEmail: fabricAdminEmail
-    skuName: fabricSkuName
   }
 }
 
@@ -162,10 +142,7 @@ module graphQueryApi 'modules/container-app.bicep' = {
     memory: '0.5Gi'
     env: union([
       { name: 'GRAPH_BACKEND', value: graphBackend }
-    ], deployFabric ? [
-      { name: 'FABRIC_WORKSPACE_ID', value: '' }
-      { name: 'FABRIC_GRAPH_MODEL_ID', value: '' }
-    ] : [], deployCosmosGremlin ? [
+    ], deployCosmosGremlin ? [
       { name: 'COSMOS_GREMLIN_ENDPOINT', value: cosmosGremlin!.outputs.gremlinEndpoint }
       { name: 'COSMOS_GREMLIN_DATABASE', value: 'networkgraph' }
       { name: 'COSMOS_GREMLIN_GRAPH', value: 'topology' }
@@ -188,6 +165,7 @@ module roles 'modules/roles.bicep' = {
     storageAccountName: storage.outputs.name
     searchPrincipalId: search.outputs.principalId
     foundryPrincipalId: aiFoundry.outputs.foundryPrincipalId
+    cosmosNoSqlAccountName: deployCosmosGremlin ? 'cosmos-gremlin-${resourceToken}-nosql' : ''
   }
 }
 
@@ -202,7 +180,6 @@ output AZURE_AI_FOUNDRY_PROJECT_NAME string = aiFoundry.outputs.projectName
 output AZURE_SEARCH_NAME string = search.outputs.name
 output AZURE_SEARCH_ENDPOINT string = search.outputs.endpoint
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
-output AZURE_FABRIC_CAPACITY_NAME string = deployFabric ? fabric!.outputs.name : ''
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerAppsEnv.outputs.registryEndpoint
 output GRAPH_QUERY_API_URI string = graphQueryApi.outputs.uri
 output GRAPH_QUERY_API_PRINCIPAL_ID string = graphQueryApi.outputs.principalId

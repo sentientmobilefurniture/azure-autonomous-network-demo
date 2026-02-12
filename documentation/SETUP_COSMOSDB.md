@@ -136,7 +136,7 @@ The Cosmos DB backend (`graph-query-api/backends/cosmosdb.py`) uses:
 
 Incoming Gremlin queries from the GraphExplorer agent are executed directly
 against the Cosmos DB Gremlin endpoint. Results are normalized to a
-`{columns, data}` format matching the Fabric backend's response shape.
+standard `{columns, data}` response format.
 
 ---
 
@@ -144,7 +144,7 @@ against the Cosmos DB Gremlin endpoint. Results are normalized to a
 
 - **Cosmos DB Gremlin:** Autoscale to 1000 RU/s max (~$0.012/hr at minimum)
 - **Container App:** 0.25 vCPU, 0.5 GiB (~$0.012/hr)
-- **No Fabric capacity needed** for graph or telemetry (both use Cosmos DB)
+- **Cosmos DB NoSQL:** Used for telemetry (AlertStream, LinkTelemetry)
 
 ---
 

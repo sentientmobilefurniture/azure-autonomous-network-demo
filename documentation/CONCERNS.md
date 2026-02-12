@@ -10,14 +10,12 @@ The system has strong architectural foundations (error-as-200 pattern, backend a
 
 | Risk | Impact | Location |
 |------|--------|----------|
-| **Fabric capacity always-on** | F2 SKU ~$260/month runs 24/7 even when not demoing | `infra/modules/fabric.bicep` |
 | **GPT-4.1 at 300K TPM** | Over-provisioned for a demo; still costs even at zero traffic | `infra/main.bicepparam` |
 | **No budget alerts** | Nothing detects runaway spend from rogue agent loops or repeated provisioning | Entire infra layer |
 | **Container App min-replicas=1** | Never scales to zero; ~$30/month idle | `infra/modules/container-app.bicep` |
 | **Log Analytics 30-day retention** | Default retention ingests container logs continuously | `infra/modules/container-apps-environment.bicep` |
-| **No auto-pause for Fabric** | `az fabric capacity suspend` exists but nothing triggers it automatically | Documentation only |
 | **Orphaned agents on re-provision** | Running `provision_agents.py` without `--force` creates duplicate agents that consume quota | `scripts/provision_agents.py` |
-| **Estimated baseline**: ~$1,500+/month with zero traffic | | |
+| **Estimated baseline**: ~$1,200+/month with zero traffic | | |
 
 ---
 
@@ -59,7 +57,7 @@ If `provision_agents.py` fails mid-way (after creating GraphExplorerAgent but be
 
 ### 3d. Schema defined in 5 places
 
-Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.py`, Cosmos Gremlin loader, agent prompts (`core_schema.md`), and OpenAPI specs. The ontology already drifts — `depends_on` edges for `Service→AggSwitch` and `Service→BaseStation` are in the schema YAML but **missing from the Fabric ontology**. This means Fabric graph queries return incomplete dependency chains, causing the agent to miss blast radius paths.
+Graph structure is replicated across: `graph_schema.yaml`, Cosmos Gremlin loader, agent prompts (`core_schema.md`), and OpenAPI specs. Any change requires coordinated updates with no automated validation.
 
 ### 3e. DefaultAzureCredential crash at import
 
@@ -92,7 +90,6 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | **Agents created with empty tool URLs** | `scripts/provision_agents.py` | `GRAPH_QUERY_API_URI=""` → agents have `tools=[]`, appear healthy but can't query anything |
 | **Missing env vars produce warnings, not errors** | `graph-query-api/main.py` | App starts, fails at request time with confusing backend errors |
 | **Search indexer counts "transient failures" as success** | `scripts/create_runbook_indexer.py` | Exit code 0 even with failed items |
-| **Eventhouse ingestion fire-and-forget** | `scripts/fabric/provision_eventhouse.py` | 15s wait is arbitrary; verification may show 0 rows even for successful ingestion |
 | **CORS blocks production graph-query-api** | `graph-query-api/main.py` | Hardcoded localhost origins; production frontend will fail CORS preflight |
 | **Errors returned as HTTP 200** | `graph-query-api/router_graph.py` | Monitoring/alerting that watches 4xx/5xx will never fire on graph query failures |
 | **`hook shell: sh` but scripts use bash features** | `azure.yaml` | Will break on systems where `sh` → `dash` (Ubuntu/Debian default) |
@@ -148,7 +145,6 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | 4 | Global handler side effects | `logging.getLogger().addHandler(_handler)` runs at import time. Multiple imports = duplicate handlers = duplicate broadcasts. |
 | 5 | Filter too broad | Filter `r.name.startswith(("app", "azure", "uvicorn"))` matches any logger starting with "app" (e.g., `application_insights`). |
 | 6 | Silent subscriber eviction | Queue overflow causes subscriber to be silently dropped. No backpressure signal — client doesn't know it was kicked. |
-| 7 | Fabric channel duplicates all issues | `_fabric_subscribers` / `broadcast_fabric_log` / `_fabric_log_generator` has identical problems. |
 
 ### 6.5 API Service — `api/app/mcp/server.py`
 
@@ -192,16 +188,7 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | 2 | IndexError on empty results | `primary_results[0]` can raise `IndexError` — guard only checks for `None`, not empty list. |
 | 3 | All rows loaded into memory | No pagination. SQL queries returning millions of rows could OOM the container. |
 
-### 6.10 graph-query-api — `backends/fabric.py`
-
-| # | Category | Issue |
-|---|----------|-------|
-| 1 | Token acquired per request | `get_token()` goes through thread pool on every request. High frequency = thread pool exhaustion (40 threads default). |
-| 2 | 429 retry-after parsing fragile | Splits on `"until:"`, strips `"(UTC"`, parses datetime format. If Fabric changes message format, parsing silently falls through to 30s fallback. |
-| 3 | No retry on 500/503 | Only 429 triggers retry. Fabric 500/503 (common during disruptions) immediately raises. |
-| 4 | 30s sleep blocks request | If `retry_after` is 30+ seconds, the caller (Foundry agent) may timeout first, wasting resources. |
-
-### 6.11 graph-query-api — `backends/cosmosdb.py`
+### 6.10 graph-query-api — `backends/cosmosdb.py`
 
 | # | Category | Issue |
 |---|----------|-------|
@@ -211,7 +198,7 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | 4 | Only retries 429/408 | Cosmos DB 503 (partition moves) not retried. |
 | 5 | `time.sleep()` blocks thread pool | Failing queries with exponential backoff block threads for 6+ seconds. Can exhaust pool. |
 
-### 6.12 graph-query-api — `Dockerfile`
+### 6.11 graph-query-api — `Dockerfile`
 
 | # | Category | Issue |
 |---|----------|-------|
@@ -221,13 +208,12 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | 4 | Explicit file copies | New `.py` files require manual Dockerfile update. Should `COPY . .` with `.dockerignore`. |
 | 5 | No HEALTHCHECK | Container orchestrators can't detect unhealthy app without external probe config. |
 
-### 6.13 OpenAPI Specs — `graph-query-api/openapi/`
+### 6.12 OpenAPI Specs — `graph-query-api/openapi/`
 
 | # | File | Issue |
 |---|------|-------|
-| 1 | `fabric.yaml` | `workspace_id` / `graph_model_id` marked `required` in OpenAPI but default to `""` (optional) in Pydantic model. Spec diverges from implementation. |
-| 2 | `mock.yaml` | Telemetry endpoint requires cloud credentials even in mock spec. Offline demos impossible for telemetry. |
-| 3 | All | Template placeholders (`{base_url}`) make raw YAML un-parseable by OpenAPI validators until substituted. |
+| 1 | `mock.yaml` | Telemetry endpoint requires cloud credentials even in mock spec. Offline demos impossible for telemetry. |
+| 2 | All | Template placeholders (`{base_url}`) make raw YAML un-parseable by OpenAPI validators until substituted. |
 
 ---
 
@@ -261,46 +247,6 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | 2 | No upsert | `g.addV()` always creates new vertex. With `--no-clear`, duplicates created. |
 | 3 | Insufficient retry | Max ~8s wait for 429. Cosmos Gremlin can require 30-60s. `Retry-After` header not parsed. |
 | 4 | Sequential writes | Each vertex/edge loaded one-at-a-time. ~200 entities = minutes. No batching. |
-
-### 7.4 `scripts/fabric/_config.py`
-
-| # | Category | Issue |
-|---|----------|-------|
-| 1 | Load-time side effect | `load_dotenv(ENV_FILE)` runs at import. Missing file = silent empty config. |
-| 2 | No token caching | `get_fabric_headers()` acquires new token on every call. Token's 1-hour lifetime not leveraged. |
-| 3 | Stale module state | Variables bound at import time. Later env file changes not reflected in already-imported modules. |
-
-### 7.5 `scripts/fabric/provision_lakehouse.py`
-
-| # | Category | Issue |
-|---|----------|-------|
-| 1 | LRO timeout | 300s default; lakehouse creation can exceed this on congested capacity. `sys.exit(1)` with no cleanup. |
-| 2 | No retry on transient failures | `requests.post/get` with no retry. Single 5xx kills entire run. |
-| 3 | Workspace pagination | Fallback lists all workspaces; pagination not handled. Workspace may be missed. |
-| 4 | Env file corruption | Regex-based env file updates can corrupt if values contain special characters. No file locking. |
-
-### 7.6 `scripts/fabric/provision_eventhouse.py`
-
-| # | Category | Issue |
-|---|----------|-------|
-| 1 | Interactive prompt | `input("Have you enabled the Python 3.11.7 plugin?")` blocks CI/CD. No `--non-interactive` flag. |
-| 2 | Fire-and-forget ingestion | Queued ingestion with 15s arbitrary wait. Verification may show 0 rows on success. |
-| 3 | Duplicate rows on re-run | No `--no-clear` or dedup. Re-running = duplicate data. |
-
-### 7.7 `scripts/fabric/provision_ontology.py`
-
-| # | Category | Issue |
-|---|----------|-------|
-| 1 | Schema drift | `depends_on` only binds `Service → MPLSPath`. Missing `Service → AggSwitch` and `Service → BaseStation` edges. Fabric graph returns incomplete dependency chains. |
-| 2 | Commented-out time-series | LinkTelemetry → TransportLink binding commented out. Ontology lacks telemetry bindings. |
-| 3 | Deterministic UUID fragility | `uuid5(NAMESPACE_DNS, seed)` with simple seed strings. Changing seed = new IDs = Fabric treats as new bindings. |
-
-### 7.8 `scripts/fabric/populate_fabric_config.py`
-
-| # | Category | Issue |
-|---|----------|-------|
-| 1 | First-match assumption | Takes `lakehouses[0]`, `eventhouses[0]`. Multiple items → wrong one selected. |
-| 2 | Empty value filtering | `{k: v for k, v in updates.items() if v}` — can't clear previously-set vars. |
 
 ---
 
@@ -358,9 +304,8 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | # | Category | Issue |
 |---|----------|-------|
 | 1 | Cosmos DB key exposed | Primary key exposed as Bicep output → visible in ARM deployment JSON and `azd` terminal output. Should use Key Vault. |
-| 2 | Silent Fabric skip | `GRAPH_BACKEND=fabric` without `AZURE_FABRIC_ADMIN` provisions no graph backend at all. No warning, no error. |
-| 3 | ACR admin user enabled | Shared credential for image pull, never rotated. Should use managed identity-based ACR pull. |
-| 4 | Hook shell mismatch | `azure.yaml` specifies `shell: sh` but hooks use bash features (`[[ ]]`, process substitution). Breaks on Ubuntu/Debian where `sh` → `dash`. |
+| 2 | ACR admin user enabled | Shared credential for image pull, never rotated. Should use managed identity-based ACR pull. |
+| 3 | Hook shell mismatch | `azure.yaml` specifies `shell: sh` but hooks use bash features (`[[ ]]`, process substitution). Breaks on Ubuntu/Debian where `sh` → `dash`. |
 
 ---
 
@@ -372,7 +317,7 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 | 2 | No graceful shutdown | No lifespan handler to drain threads, send sentinels to SSE subscribers, or close SDK clients. `uvicorn --reload` sends SIGTERM = killed daemon threads = unfinished Azure runs. |
 | 3 | Blocking I/O in async | `is_configured()` and `load_agents_from_file()` do sync file reads from async route handlers. Blocks event loop. |
 | 4 | No structured error responses | Errors are SSE events with free-text messages. No error codes, no categories, no retry-after headers. |
-| 5 | Data schema in 5+ places | `graph_schema.yaml`, `provision_ontology.py`, Cosmos Gremlin loader, agent prompts, OpenAPI specs. Any change requires coordinated updates with no automated validation. |
+| 5 | Data schema in 4+ places | `graph_schema.yaml`, Cosmos Gremlin loader, agent prompts, OpenAPI specs. Any change requires coordinated updates with no automated validation. |
 | 6 | Pre-release SDK | `azure-ai-agents==1.2.0b6` is a beta pin. API surface may change at GA. No security patches picked up. |
 | 7 | No tests anywhere | Zero test files across API, graph-query-api, frontend, scripts. All `dev-dependencies = []`. |
 
@@ -383,10 +328,9 @@ Graph structure is replicated across: `graph_schema.yaml`, `provision_ontology.p
 1. **Add auth + rate limiting** on `/api/alert` (prevents abuse and runaway spend)
 2. **Add concurrency semaphore** (max parallel investigations = 3)
 3. **Lazy-init `DefaultAzureCredential`** in graph-query-api config (unblocks mock mode)
-4. **Add Fabric capacity auto-pause** (saves ~$260/month when not demoing)
-5. **Fix thread-safety** on log subscriber sets (prevents `RuntimeError` crashes)
-6. **Add input validation** (max alert length, required fields)
-7. **Make provisioning idempotent with prerequisite checks** (each script validates its inputs exist)
-8. **Fix daemon thread leak** (add cancellation token that stops SDK thread on SSE disconnect)
-9. **Move Cosmos key to Key Vault** (or at minimum, don't expose via Bicep outputs)
-10. **Add `CORS_ORIGINS` env var to graph-query-api** (production will fail without this)
+4. **Fix thread-safety** on log subscriber sets (prevents `RuntimeError` crashes)
+5. **Add input validation** (max alert length, required fields)
+6. **Make provisioning idempotent with prerequisite checks** (each script validates its inputs exist)
+7. **Fix daemon thread leak** (add cancellation token that stops SDK thread on SSE disconnect)
+8. **Move Cosmos key to Key Vault** (or at minimum, don't expose via Bicep outputs)
+9. **Add `CORS_ORIGINS` env var to graph-query-api** (production will fail without this)

@@ -51,21 +51,18 @@ OPENAPI_DIR = PROJECT_ROOT / "graph-query-api" / "openapi"
 GRAPH_BACKEND = os.environ.get("GRAPH_BACKEND", "cosmosdb").lower()
 
 OPENAPI_SPEC_MAP = {
-    "fabric": OPENAPI_DIR / "fabric.yaml",
     "cosmosdb": OPENAPI_DIR / "cosmosdb.yaml",
     "mock": OPENAPI_DIR / "mock.yaml",
 }
 
-OPENAPI_SPEC_FILE = OPENAPI_SPEC_MAP.get(GRAPH_BACKEND, OPENAPI_DIR / "fabric.yaml")
+OPENAPI_SPEC_FILE = OPENAPI_SPEC_MAP.get(GRAPH_BACKEND, OPENAPI_DIR / "cosmosdb.yaml")
 
 LANGUAGE_FILE_MAP = {
-    "fabric": "language_gql.md",
     "cosmosdb": "language_gremlin.md",
     "mock": "language_mock.md",
 }
 
 GRAPH_TOOL_DESCRIPTIONS = {
-    "fabric": "Execute a GQL query against the Fabric GraphModel to explore network topology and relationships.",
     "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore network topology and relationships.",
     "mock": "Query the network topology graph (offline mock mode).",
 }
@@ -145,7 +142,7 @@ def load_graph_explorer_prompt() -> tuple[str, str]:
     Also reads description.md for the agent description.
     """
     base = PROMPTS_DIR / "graph_explorer"
-    language_file = LANGUAGE_FILE_MAP.get(GRAPH_BACKEND, "language_gql.md")
+    language_file = LANGUAGE_FILE_MAP.get(GRAPH_BACKEND, "language_gremlin.md")
 
     instructions = "\n\n---\n\n".join([
         (base / "core_instructions.md").read_text(encoding="utf-8").strip(),
@@ -173,8 +170,6 @@ def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
 
     Placeholders replaced:
       {base_url}              — graph-query-api Container App URI
-      {workspace_id}          — Fabric workspace GUID
-      {graph_model_id}        — GraphModel item GUID
 
     If *keep_path* is given (e.g. "/query/graph"), all other paths are
     removed from the spec so the agent only sees its own endpoint.
@@ -182,8 +177,6 @@ def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
     raw = OPENAPI_SPEC_FILE.read_text(encoding="utf-8")
     replacements = {
         "{base_url}": config["graph_query_api_uri"].rstrip("/"),
-        "{workspace_id}": os.environ.get("FABRIC_WORKSPACE_ID", ""),
-        "{graph_model_id}": os.environ.get("FABRIC_GRAPH_MODEL_ID", ""),
     }
     for placeholder, value in replacements.items():
         raw = raw.replace(placeholder, value)
@@ -202,7 +195,7 @@ def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
     return OpenApiTool(
         name="query_graph",
         spec=spec,
-        description=GRAPH_TOOL_DESCRIPTIONS.get(GRAPH_BACKEND, GRAPH_TOOL_DESCRIPTIONS["fabric"]),
+        description=GRAPH_TOOL_DESCRIPTIONS.get(GRAPH_BACKEND, GRAPH_TOOL_DESCRIPTIONS["cosmosdb"]),
         auth=OpenApiAnonymousAuthDetails(),
     )
 
