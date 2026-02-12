@@ -43,15 +43,15 @@ Full architecture documentation: `documentation/ARCHITECTURE.md`
 
 | Agent | Tool | Data Source |
 |-------|------|-------------|
-| GraphExplorerAgent | `OpenApiTool` | fabric-query-api → Fabric GraphModel (GQL) |
-| TelemetryAgent | `OpenApiTool` | fabric-query-api → Fabric Eventhouse (KQL) |
+| GraphExplorerAgent | `OpenApiTool` | graph-query-api → Fabric GraphModel (GQL) |
+| TelemetryAgent | `OpenApiTool` | graph-query-api → Fabric Eventhouse (KQL) |
 | RunbookKBAgent | `AzureAISearchTool` | runbooks-index (hybrid search) |
 | HistoricalTicketAgent | `AzureAISearchTool` | tickets-index (hybrid search) |
 | Orchestrator | `ConnectedAgentTool` | Wired to all 4 above |
 
 **Why OpenApiTool instead of FabricTool for Graph/Telemetry:** `ConnectedAgentTool`
 sub-agents run server-side on Foundry and cannot execute client-side `FunctionTool`
-callbacks. `OpenApiTool` makes server-side REST calls natively. The `fabric-query-api`
+callbacks. `OpenApiTool` makes server-side REST calls natively. The `graph-query-api`
 Container App proxies queries to Fabric (GQL and KQL). See `documentation/ARCHITECTURE.md`
 for the full rationale.
 
@@ -97,7 +97,7 @@ Each has its own `pyproject.toml` and `uv.lock`. Run `uv` commands from each dir
 |-----------|---------|-------------|
 | `./` (root) | Provisioning scripts (`scripts/`) | `cd scripts && uv run python provision_agents.py` |
 | `api/` | FastAPI backend (REST + SSE + MCP) | `cd api && uv run uvicorn app.main:app --reload --port 8000` |
-| `fabric-query-api/` | Fabric proxy micro-service | `cd fabric-query-api && source ../azure_config.env && uv run uvicorn main:app --port 8100` |
+| `graph-query-api/` | Fabric proxy micro-service | `cd graph-query-api && source ../azure_config.env && uv run uvicorn main:app --port 8100` |
 | `frontend/` | React SPA (npm, not uv) | `cd frontend && npm run dev` |
 
 ---
@@ -134,7 +134,7 @@ Scripts use `from _config import …` (shared module) or `load_config()` for con
 | POST | `/api/alert` | Submit alert → SSE stream of orchestrator steps |
 | GET | `/api/agents` | List provisioned agents (from `agent_ids.json` or stubs) |
 | GET | `/api/logs` | SSE stream of backend log output |
-| GET | `/api/fabric-logs` | SSE stream of synthetic fabric-query-api logs |
+| GET | `/api/fabric-logs` | SSE stream of synthetic graph-query-api logs |
 | GET | `/health` | Health check |
 
 ---
@@ -174,18 +174,18 @@ Zone 2 and Zone 3 use a vertical `PanelGroup` (react-resizable-panels). MetricsB
 | Component | Local | Production |
 |-----------|-------|------------|
 | API | `uvicorn :8000` | Azure Container Apps |
-| fabric-query-api | `uvicorn :8100` | Azure Container Apps (`azd deploy fabric-query-api`) |
+| graph-query-api | `uvicorn :8100` | Azure Container Apps (`azd deploy graph-query-api`) |
 | Frontend | Vite `:5173` | Azure Static Web Apps |
 | Infrastructure | — | `azd up` (Bicep) |
 
-`fabric-query-api` uses `remoteBuild: true` in `azure.yaml` — Docker images built in ACR.
+`graph-query-api` uses `remoteBuild: true` in `azure.yaml` — Docker images built in ACR.
 
 ---
 
 ## Provisioning Order (one-time setup)
 
 ```
-1. azd up                         → Azure resources + fabric-query-api deployed
+1. azd up                         → Azure resources + graph-query-api deployed
 2. provision_lakehouse.py          → Fabric workspace + lakehouse + CSV data
 3. provision_eventhouse.py         → Eventhouse + KQL tables + CSV data
 4. provision_ontology.py           → Ontology (graph index) on lakehouse data

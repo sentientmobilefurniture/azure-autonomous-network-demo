@@ -134,7 +134,7 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Container Apps (fabric-query-api micro-service)
+// Container Apps (graph-query-api micro-service)
 // ---------------------------------------------------------------------------
 
 module containerAppsEnv 'modules/container-apps-environment.bicep' = {
@@ -146,12 +146,12 @@ module containerAppsEnv 'modules/container-apps-environment.bicep' = {
   }
 }
 
-module fabricQueryApi 'modules/container-app.bicep' = {
+module graphQueryApi 'modules/container-app.bicep' = {
   scope: rg
   params: {
-    name: 'ca-fabricquery-${resourceToken}'
+    name: 'ca-graphquery-${resourceToken}'
     location: location
-    tags: union(tags, { 'azd-service-name': 'fabric-query-api' })
+    tags: union(tags, { 'azd-service-name': 'graph-query-api' })
     containerAppsEnvironmentId: containerAppsEnv.outputs.id
     containerRegistryName: containerAppsEnv.outputs.registryName
     targetPort: 8100
@@ -173,6 +173,9 @@ module fabricQueryApi 'modules/container-app.bicep' = {
       { name: 'COSMOS_GREMLIN_GRAPH', value: 'topology' }
       { name: 'COSMOS_GREMLIN_PRIMARY_KEY', secretRef: 'cosmos-gremlin-key' }
     ] : [])
+    secrets: deployCosmosGremlin ? [
+      { name: 'cosmos-gremlin-key', value: cosmosGremlin!.outputs.primaryKey }
+    ] : []
   }
 }
 
@@ -201,7 +204,7 @@ output AZURE_SEARCH_ENDPOINT string = search.outputs.endpoint
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_FABRIC_CAPACITY_NAME string = deployFabric ? fabric!.outputs.name : ''
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerAppsEnv.outputs.registryEndpoint
-output FABRIC_QUERY_API_URI string = fabricQueryApi.outputs.uri
-output FABRIC_QUERY_API_PRINCIPAL_ID string = fabricQueryApi.outputs.principalId
+output GRAPH_QUERY_API_URI string = graphQueryApi.outputs.uri
+output GRAPH_QUERY_API_PRINCIPAL_ID string = graphQueryApi.outputs.principalId
 output COSMOS_GREMLIN_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.gremlinEndpoint : ''
 output COSMOS_GREMLIN_ACCOUNT_NAME string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosAccountName : ''

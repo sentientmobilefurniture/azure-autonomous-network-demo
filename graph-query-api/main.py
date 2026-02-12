@@ -1,5 +1,5 @@
 """
-Fabric Query API — Micro-service for graph and telemetry queries.
+Graph Query API — Micro-service for graph and telemetry queries.
 
 Exposes two POST endpoints:
   POST /query/graph      — Execute a graph query (GQL, Gremlin, or mock via GRAPH_BACKEND)
@@ -7,7 +7,7 @@ Exposes two POST endpoints:
 
 The graph backend is selected by the GRAPH_BACKEND env var:
   fabric   → GQL queries against Fabric GraphModel REST API (default)
-  cosmosdb → Gremlin queries against Azure Cosmos DB (placeholder)
+  cosmosdb → Gremlin queries against Azure Cosmos DB
   mock     → static topology data for offline demos
 
 Auth:
@@ -16,7 +16,7 @@ Auth:
   and is called by Foundry's OpenApiTool on behalf of agents.
 
 Run locally:
-  cd fabric-query-api && uv run uvicorn main:app --reload --port 8100
+  cd graph-query-api && uv run uvicorn main:app --reload --port 8100
 """
 
 from __future__ import annotations
@@ -36,13 +36,13 @@ from starlette.responses import StreamingResponse
 from config import GRAPH_BACKEND, GraphBackendType, BACKEND_REQUIRED_VARS
 from models import GraphQueryRequest
 from router_graph import router as graph_router, close_graph_backend
-from router_telemetry import router as telemetry_router
+from router_telemetry import router as telemetry_router, close_telemetry_backend
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
-logger = logging.getLogger("fabric-query-api")
+logger = logging.getLogger("graph-query-api")
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # ---------------------------------------------------------------------------
@@ -62,11 +62,12 @@ async def _lifespan(app: FastAPI):
         )
     logger.info("Starting with GRAPH_BACKEND=%s", GRAPH_BACKEND.value)
     yield
-    close_graph_backend()
+    await close_graph_backend()
+    close_telemetry_backend()
 
 
 app = FastAPI(
-    title="Fabric Query API",
+    title="Graph Query API",
     version="0.5.0",
     description=f"Graph ({GRAPH_BACKEND.value}) and KQL queries for Foundry agents.",
     lifespan=_lifespan,
@@ -154,7 +155,7 @@ class _SSELogHandler(logging.Handler):
 _sse_handler = _SSELogHandler()
 _sse_handler.setLevel(logging.DEBUG)
 _sse_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_sse_handler.addFilter(lambda r: r.name.startswith(("fabric-query-api",)))
+_sse_handler.addFilter(lambda r: r.name.startswith(("graph-query-api",)))
 logging.getLogger().addHandler(_sse_handler)
 
 
@@ -189,7 +190,7 @@ async def stream_logs():
 async def health():
     return {
         "status": "ok",
-        "service": "fabric-query-api",
+        "service": "graph-query-api",
         "version": app.version,
         "graph_backend": GRAPH_BACKEND.value,
     }

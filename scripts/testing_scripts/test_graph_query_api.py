@@ -1,15 +1,15 @@
 """
-Test the deployed fabric-query-api Container App.
+Test the deployed graph-query-api Container App.
 
 Sends test GQL and KQL queries to verify both endpoints are working
-after deployment (azd deploy --service fabric-query-api).
+after deployment (azd deploy --service graph-query-api).
 
 Usage:
   # Auto-discover URL from azure_config.env
-  uv run scripts/test_fabric_query_api.py
+  uv run scripts/test_graph_query_api.py
 
   # Or pass explicitly
-  uv run scripts/test_fabric_query_api.py https://ca-fabricquery-xxx.region.azurecontainerapps.io
+  uv run scripts/test_graph_query_api.py https://ca-graphquery-xxx.region.azurecontainerapps.io
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(str(PROJECT_ROOT / "azure_config.env"))
 
 
@@ -30,7 +30,7 @@ def get_base_url() -> str:
     """Get the base URL, from CLI arg, env var, or default to localhost."""
     if len(sys.argv) > 1:
         return sys.argv[1].rstrip("/")
-    url = os.getenv("FABRIC_QUERY_API_URI", "")
+    url = os.getenv("GRAPH_QUERY_API_URI", "")
     if url:
         return url.rstrip("/")
     return "http://localhost:8100"

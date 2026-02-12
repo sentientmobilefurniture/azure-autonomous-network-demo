@@ -32,7 +32,7 @@ interactive viz).
 
 ```
 Foundry Agent (GraphExplorerAgent)
-  └─ OpenApiTool → POST fabric-query-api/query/graph
+  └─ OpenApiTool → POST graph-query-api/query/graph
                       └─ GQL → Fabric GraphModel REST API
                                  └─ Read-only query over Lakehouse CSVs
 ```
@@ -61,8 +61,8 @@ Key constraints of V2:
      │
      ▼
 ┌────────────────────┐
-│  graph-query-api   │  ← renamed from fabric-query-api
-│  Container App     │     (or: fabric-query-api with graph backend swap)
+│  graph-query-api   │  ← renamed from graph-query-api
+│  Container App     │     (or: graph-query-api with graph backend swap)
 │  POST /query/graph │
 │  POST /query/telem │  ← still hits Fabric Eventhouse (no change)
 │  POST /graph/mutate│  ← NEW: write operations
@@ -84,7 +84,7 @@ Key constraints of V2:
 | **HistoricalTicketAgent** | AzureAISearchTool | Same | **No change** |
 | **GraphExplorerAgent** | OpenApiTool → /query/graph → Fabric GQL | OpenApiTool → /query/graph → Neo4j Cypher | **Backend swap only** |
 | **Orchestrator** | ConnectedAgentTool to 4 sub-agents | Same | **No change** |
-| **fabric-query-api** | FastAPI + Fabric REST API | FastAPI + neo4j Python driver | **Backend swap** |
+| **graph-query-api** | FastAPI + Fabric REST API | FastAPI + neo4j Python driver | **Backend swap** |
 | **OpenAPI spec** | GQL semantics in description | Cypher semantics in description | **Spec update** |
 | **Data loading** | CSVs → Fabric Lakehouse → Ontology | CSVs → Cypher CREATE/MERGE | **New script** |
 | **Frontend** | No graph viz | React Flow live topology | **New feature** |
@@ -279,7 +279,7 @@ NEO4J_PASSWORD=<from-key-vault-or-env>
 GRAPH_BACKEND=neo4j                              # or "fabric" — feature flag
 ```
 
-The `GRAPH_BACKEND` flag allows dual-mode: fabric-query-api checks this at
+The `GRAPH_BACKEND` flag allows dual-mode: graph-query-api checks this at
 startup and configures either the Fabric GQL path or the Neo4j Cypher path.
 This is the cleanest way to avoid a hard fork while transitioning.
 
@@ -568,11 +568,11 @@ async def query_graph(request: Request, body: QueryRequest):
 
 ### Code Separation Architecture
 
-The current `fabric-query-api/` is a single `main.py` monolith. Dual-mode
+The current `graph-query-api/` is a single `main.py` monolith. Dual-mode
 requires clean separation:
 
 ```
-fabric-query-api/                   (consider renaming to graph-query-api/)
+graph-query-api/                   (consider renaming to graph-query-api/)
 ├── main.py                         # FastAPI app, routes, lifespan — GENERIC
 ├── config.py                       # Env var loading, backend selection logic
 ├── models.py                       # Pydantic: QueryRequest, QueryResponse, TopologyResponse

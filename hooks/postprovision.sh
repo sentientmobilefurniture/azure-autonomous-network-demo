@@ -147,6 +147,9 @@ PREV_FABRIC_API_URL="${FABRIC_API_URL:-https://api.fabric.microsoft.com/v1}"
 PREV_FABRIC_SCOPE_VAL="${FABRIC_SCOPE:-https://api.fabric.microsoft.com/.default}"
 PREV_ONTOLOGY_NAME="${FABRIC_ONTOLOGY_NAME:-NetworkTopologyOntology}"
 PREV_GPT_CAPACITY="${GPT_CAPACITY_1K_TPM:-10}"
+PREV_GRAPH_BACKEND="${GRAPH_BACKEND:-cosmosdb}"
+PREV_COSMOS_GREMLIN_DB="${COSMOS_GREMLIN_DATABASE:-networkgraph}"
+PREV_COSMOS_GREMLIN_GRAPH="${COSMOS_GREMLIN_GRAPH:-topology}"
 
 cat > "$CONFIG_FILE" <<EOF
 # ============================================================================
@@ -196,6 +199,11 @@ FABRIC_SCOPE=${PREV_FABRIC_SCOPE_VAL}
 # --- App / CORS (USER: change for production deployment) ---
 CORS_ORIGINS=${PREV_CORS}
 
+# --- Graph Backend (USER: set before provisioning) ---
+# Controls which graph database backend is used by graph-query-api
+# Options: "fabric" (GQL → Fabric GraphModel), "cosmosdb" (Gremlin → Azure Cosmos DB), "mock" (static responses)
+GRAPH_BACKEND=${PREV_GRAPH_BACKEND}
+
 # --- Fabric resource names (USER: edit before running provision_lakehouse.py) ---
 FABRIC_WORKSPACE_NAME=$FABRIC_WS
 FABRIC_LAKEHOUSE_NAME=$LAKEHOUSE
@@ -223,10 +231,37 @@ TELEMETRY_DATA_AGENT_ID=${PREV_TELEMETRY_AGENT_ID}
 GRAPH_FABRIC_CONNECTION_NAME=${PREV_GRAPH_CONN}
 TELEMETRY_FABRIC_CONNECTION_NAME=${PREV_TELEMETRY_CONN}
 
-# --- fabric-query-api (AUTO: from deployment) ---
-FABRIC_QUERY_API_URI=${FABRIC_QUERY_API_URI:-}
-FABRIC_QUERY_API_PRINCIPAL_ID=${FABRIC_QUERY_API_PRINCIPAL_ID:-}
+# --- graph-query-api (AUTO: from deployment) ---
+GRAPH_QUERY_API_URI=${GRAPH_QUERY_API_URI:-}
+GRAPH_QUERY_API_PRINCIPAL_ID=${GRAPH_QUERY_API_PRINCIPAL_ID:-}
+
+# --- Cosmos DB Gremlin (required when GRAPH_BACKEND=cosmosdb) ---
+COSMOS_GREMLIN_ENDPOINT=${COSMOS_GREMLIN_ENDPOINT:-}
+COSMOS_GREMLIN_PRIMARY_KEY=${COSMOS_GREMLIN_PRIMARY_KEY:-}
+COSMOS_GREMLIN_DATABASE=${PREV_COSMOS_GREMLIN_DB}
+COSMOS_GREMLIN_GRAPH=${PREV_COSMOS_GREMLIN_GRAPH}
 EOF
+# --------------------------------------------------------------------------
+# 5. Auto-populate Cosmos DB Gremlin credentials (if deployed)
+# --------------------------------------------------------------------------
+COSMOS_ACCOUNT="${AZURE_COSMOS_GREMLIN_ACCOUNT_NAME:-}"
+if [ -n "$COSMOS_ACCOUNT" ]; then
+  echo ""
+  echo "Auto-populating Cosmos DB Gremlin credentials..."
+  COSMOS_EP="${AZURE_COSMOS_GREMLIN_ENDPOINT:-}"
+  if [ -z "$COSMOS_EP" ]; then
+    COSMOS_EP=$(az cosmosdb show --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query documentEndpoint -o tsv 2>/dev/null || true)
+  fi
+  COSMOS_KEY=$(az cosmosdb keys list --name "$COSMOS_ACCOUNT" --resource-group "$RG" --query primaryMasterKey -o tsv 2>/dev/null || true)
+  if [ -n "$COSMOS_KEY" ]; then
+    # Patch the values in-place in azure_config.env
+    sed -i "s|^COSMOS_GREMLIN_ENDPOINT=.*|COSMOS_GREMLIN_ENDPOINT=$COSMOS_EP|" "$CONFIG_FILE"
+    sed -i "s|^COSMOS_GREMLIN_PRIMARY_KEY=.*|COSMOS_GREMLIN_PRIMARY_KEY=$COSMOS_KEY|" "$CONFIG_FILE"
+    echo "  ✓ Cosmos DB credentials populated"
+  else
+    echo "  ⚠ Could not fetch Cosmos DB key — set COSMOS_GREMLIN_PRIMARY_KEY manually in azure_config.env"
+  fi
+fi
 
 echo "  ✓ azure_config.env written"
 

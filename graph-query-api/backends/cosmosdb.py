@@ -26,35 +26,39 @@ from config import (
     COSMOS_GREMLIN_GRAPH,
 )
 
-logger = logging.getLogger("fabric-query-api")
+logger = logging.getLogger("graph-query-api")
 
 # ---------------------------------------------------------------------------
-# Singleton Gremlin client
+# Singleton Gremlin client (thread-safe lazy init)
 # ---------------------------------------------------------------------------
 
+import threading
+
+_gremlin_lock = threading.Lock()
 _gremlin_client: client.Client | None = None
 
 
 def _get_client() -> client.Client:
-    """Get or create the singleton Gremlin client for Cosmos DB."""
+    """Get or create the singleton Gremlin client for Cosmos DB (thread-safe)."""
     global _gremlin_client
-    if _gremlin_client is None:
-        if not COSMOS_GREMLIN_ENDPOINT or not COSMOS_GREMLIN_PRIMARY_KEY:
-            raise RuntimeError(
-                "COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY must be set "
-                "when GRAPH_BACKEND=cosmosdb"
+    with _gremlin_lock:
+        if _gremlin_client is None:
+            if not COSMOS_GREMLIN_ENDPOINT or not COSMOS_GREMLIN_PRIMARY_KEY:
+                raise RuntimeError(
+                    "COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY must be set "
+                    "when GRAPH_BACKEND=cosmosdb"
+                )
+            url = f"wss://{COSMOS_GREMLIN_ENDPOINT}:443/"
+            username = f"/dbs/{COSMOS_GREMLIN_DATABASE}/colls/{COSMOS_GREMLIN_GRAPH}"
+            logger.info("Connecting to Cosmos DB Gremlin: %s (db=%s, graph=%s)",
+                         COSMOS_GREMLIN_ENDPOINT, COSMOS_GREMLIN_DATABASE, COSMOS_GREMLIN_GRAPH)
+            _gremlin_client = client.Client(
+                url=url,
+                traversal_source="g",
+                username=username,
+                password=COSMOS_GREMLIN_PRIMARY_KEY,
+                message_serializer=serializer.GraphSONSerializersV2d0(),
             )
-        url = f"wss://{COSMOS_GREMLIN_ENDPOINT}:443/"
-        username = f"/dbs/{COSMOS_GREMLIN_DATABASE}/colls/{COSMOS_GREMLIN_GRAPH}"
-        logger.info("Connecting to Cosmos DB Gremlin: %s (db=%s, graph=%s)",
-                     COSMOS_GREMLIN_ENDPOINT, COSMOS_GREMLIN_DATABASE, COSMOS_GREMLIN_GRAPH)
-        _gremlin_client = client.Client(
-            url=url,
-            traversal_source="g",
-            username=username,
-            password=COSMOS_GREMLIN_PRIMARY_KEY,
-            message_serializer=serializer.GraphSONSerializersV2d0(),
-        )
     return _gremlin_client
 
 

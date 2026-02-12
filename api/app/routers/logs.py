@@ -107,19 +107,19 @@ async def stream_logs():
 
 
 # ---------------------------------------------------------------------------
-# Fabric-perspective log channel
+# Graph-query-api perspective log channel
 # ---------------------------------------------------------------------------
-# Emits synthetic logs that mirror what the fabric-query-api would produce,
+# Emits synthetic logs that mirror what the graph-query-api would produce,
 # built from the orchestrator's view of agent tool calls (queries & responses).
 # This is needed because the agents' OpenApiTool hits the Container App in
-# Azure directly — not the local fabric-query-api.
+# Azure directly — not the local graph-query-api.
 
 _fabric_subscribers: set[asyncio.Queue] = set()
 _fabric_log_buffer: deque[dict] = deque(maxlen=100)
 
 
 def broadcast_fabric_log(record: dict) -> None:
-    """Push a fabric-perspective log record to all /api/fabric-logs subscribers."""
+    """Push a graph-query-api perspective log record to all /api/fabric-logs subscribers."""
     _fabric_log_buffer.append(record)
     dead: list[asyncio.Queue] = []
     for q in _fabric_subscribers:
@@ -148,7 +148,7 @@ async def _fabric_log_generator() -> AsyncGenerator:
 
 @router.get("/fabric-logs")
 async def stream_fabric_logs():
-    """SSE endpoint that streams fabric-query-api perspective logs."""
+    """SSE endpoint that streams graph-query-api perspective logs."""
     return EventSourceResponse(
         _fabric_log_generator(),
         headers={

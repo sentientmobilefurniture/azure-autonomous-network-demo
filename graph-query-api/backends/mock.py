@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-logger = logging.getLogger("fabric-query-api")
+logger = logging.getLogger("graph-query-api")
 
 # ---------------------------------------------------------------------------
 # Canned topology data (subset of the full ontology)

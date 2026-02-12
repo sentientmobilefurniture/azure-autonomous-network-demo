@@ -24,7 +24,7 @@ class GraphBackendType(str, Enum):
     MOCK = "mock"
 
 
-GRAPH_BACKEND = GraphBackendType(os.getenv("GRAPH_BACKEND", "fabric").lower())
+GRAPH_BACKEND = GraphBackendType(os.getenv("GRAPH_BACKEND", "cosmosdb").lower())
 
 
 # ---------------------------------------------------------------------------

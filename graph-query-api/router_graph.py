@@ -12,7 +12,7 @@ from backends import get_backend, GraphBackend
 from config import GRAPH_BACKEND
 from models import GraphQueryRequest, GraphQueryResponse
 
-logger = logging.getLogger("fabric-query-api")
+logger = logging.getLogger("graph-query-api")
 
 router = APIRouter()
 
@@ -32,11 +32,17 @@ def get_graph_backend() -> GraphBackend:
     return _backend
 
 
-def close_graph_backend() -> None:
+import asyncio
+import inspect
+
+
+async def close_graph_backend() -> None:
     """Shut down the cached backend (called during app lifespan shutdown)."""
     global _backend
     if _backend is not None:
-        _backend.close()
+        result = _backend.close()
+        if inspect.isawaitable(result):
+            await result
         _backend = None
 
 

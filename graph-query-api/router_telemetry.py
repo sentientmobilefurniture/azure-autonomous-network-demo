@@ -17,7 +17,7 @@ from fastapi import APIRouter
 from config import EVENTHOUSE_QUERY_URI, KQL_DB_NAME, credential
 from models import TelemetryQueryRequest, TelemetryQueryResponse
 
-logger = logging.getLogger("fabric-query-api")
+logger = logging.getLogger("graph-query-api")
 
 router = APIRouter()
 
@@ -39,6 +39,18 @@ def _get_kusto_client(uri: str) -> KustoClient:
             _kusto_client = KustoClient(kcsb)
             _kusto_client_uri = uri
         return _kusto_client
+
+
+def close_telemetry_backend() -> None:
+    """Close the cached KustoClient (called during app lifespan shutdown)."""
+    global _kusto_client
+    with _kusto_lock:
+        if _kusto_client is not None:
+            try:
+                _kusto_client.close()
+            except Exception:
+                pass
+            _kusto_client = None
 
 
 def _execute_kql(

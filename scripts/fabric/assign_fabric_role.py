@@ -1,12 +1,12 @@
 """
-Assign Fabric workspace Contributor role to the fabric-query-api managed identity.
+Assign Fabric workspace Contributor role to the graph-query-api managed identity.
 
-The fabric-query-api Container App uses a system-assigned managed identity to
+The graph-query-api Container App uses a system-assigned managed identity to
 authenticate to Fabric (GQL and KQL).  That identity must be a workspace member
 before it can execute queries.
 
 This script:
-  1. Reads FABRIC_WORKSPACE_ID and FABRIC_QUERY_API_PRINCIPAL_ID from azure_config.env.
+  1. Reads FABRIC_WORKSPACE_ID and GRAPH_QUERY_API_PRINCIPAL_ID from azure_config.env.
   2. Checks existing role assignments — skips if the principal already has access.
   3. Adds the principal as Contributor via the Fabric REST API.
 
@@ -77,7 +77,7 @@ def assign_contributor_role(workspace_id: str, principal_id: str) -> None:
 
 def main() -> None:
     workspace_id = _get_required_env("FABRIC_WORKSPACE_ID", WORKSPACE_ID)
-    principal_id = _get_required_env("FABRIC_QUERY_API_PRINCIPAL_ID")
+    principal_id = _get_required_env("GRAPH_QUERY_API_PRINCIPAL_ID")
 
     print("Fabric workspace role assignment")
     print(f"  Workspace : {workspace_id}")

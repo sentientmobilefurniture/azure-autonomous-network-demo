@@ -205,8 +205,9 @@ def main():
     # 5. Wait for completion
     search_client = SearchClient(SEARCH_ENDPOINT, INDEX_NAME, credential)
     print("\nWaiting for indexer to complete...")
+    MAX_POLL_ITERATIONS = 120  # 120 × 5s = 10 min timeout
 
-    while True:
+    for poll_iter in range(1, MAX_POLL_ITERATIONS + 1):
         time.sleep(5)
         status = indexer_client.get_indexer_status(indexer.name)
         last = status.last_result
@@ -230,6 +231,8 @@ def main():
                 break
         else:
             print("  Status: starting...")
+    else:
+        print(f"\n⚠ Timed out after {MAX_POLL_ITERATIONS * 5}s waiting for indexer. Check status manually.")
 
     print(f"\n✅ Indexing complete! {search_client.get_document_count()} chunks in index.")
 

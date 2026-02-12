@@ -1,31 +1,37 @@
 #!/usr/bin/env python3
 """
-Provision Cosmos DB Gremlin graph — load network topology from CSV files.
+Provision Cosmos DB Gremlin graph — generic, manifest-driven data loader.
 
-Reads the dimension & fact CSVs under data/lakehouse/ and creates vertices and
-edges in the Azure Cosmos DB for Apache Gremlin graph.
+Reads a YAML graph schema manifest (vertices + edges) and loads CSV data
+into an Azure Cosmos DB for Apache Gremlin graph.
 
 Usage:
-    # From project root (ensure azure_config.env is sourced)
+    # Default manifest (data/graph_schema.yaml)
     source azure_config.env
-    cd scripts && uv run python provision_cosmos_gremlin.py
+    uv run python scripts/cosmos/provision_cosmos_gremlin.py
 
-    # Or with explicit env vars:
-    COSMOS_GREMLIN_ENDPOINT=xxx.gremlin.cosmos.azure.com \
-    COSMOS_GREMLIN_PRIMARY_KEY=xxx \
-    uv run python provision_cosmos_gremlin.py
+    # Custom manifest
+    uv run python scripts/cosmos/provision_cosmos_gremlin.py --schema path/to/schema.yaml
 
-Requires: gremlinpython>=3.7.0
+    # Skip verification
+    uv run python scripts/cosmos/provision_cosmos_gremlin.py --no-verify
+
+    # Keep existing data (don't drop graph first)
+    uv run python scripts/cosmos/provision_cosmos_gremlin.py --no-clear
+
+Requires: gremlinpython>=3.7.0, pyyaml
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import sys
 import time
 from pathlib import Path
 
+import yaml
 from gremlin_python.driver import client, serializer
 from gremlin_python.driver.protocol import GremlinServerError
 
@@ -33,7 +39,8 @@ from gremlin_python.driver.protocol import GremlinServerError
 # Configuration
 # ---------------------------------------------------------------------------
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "lakehouse"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_SCHEMA = PROJECT_ROOT / "data" / "graph_schema.yaml"
 
 ENDPOINT = os.environ.get("COSMOS_GREMLIN_ENDPOINT", "")
 PRIMARY_KEY = os.environ.get("COSMOS_GREMLIN_PRIMARY_KEY", "")
@@ -41,7 +48,13 @@ DATABASE = os.environ.get("COSMOS_GREMLIN_DATABASE", "networkgraph")
 GRAPH = os.environ.get("COSMOS_GREMLIN_GRAPH", "topology")
 
 
+# ---------------------------------------------------------------------------
+# Gremlin client helpers
+# ---------------------------------------------------------------------------
+
+
 def get_client() -> client.Client:
+    """Create a Gremlin client with key-based auth over WSS."""
     if not ENDPOINT or not PRIMARY_KEY:
         print("ERROR: Set COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY")
         sys.exit(1)
@@ -54,392 +67,169 @@ def get_client() -> client.Client:
     )
 
 
-def submit(c: client.Client, query: str, bindings: dict | None = None, retries: int = 3):
-    """Submit a Gremlin query with retry on 429."""
+def submit(
+    c: client.Client,
+    query: str,
+    bindings: dict | None = None,
+    retries: int = 3,
+):
+    """Submit a Gremlin query with exponential-backoff retry on 429/408."""
     for attempt in range(1, retries + 1):
         try:
             return c.submit(message=query, bindings=bindings or {}).all().result()
         except GremlinServerError as e:
             status = getattr(e, "status_code", 0)
             if status in (429, 408) and attempt < retries:
-                wait = 2 ** attempt
-                print(f"    ⏳ {status} — retrying in {wait}s (attempt {attempt}/{retries})")
+                wait = 2**attempt
+                print(f"    \u23f3 {status} — retrying in {wait}s (attempt {attempt}/{retries})")
                 time.sleep(wait)
                 continue
             raise
 
 
-def read_csv(filename: str) -> list[dict]:
-    path = DATA_DIR / filename
+def read_csv_file(path: Path) -> list[dict]:
+    """Read a CSV file and return a list of dicts (one per row)."""
     with open(path, newline="") as f:
         return list(csv.DictReader(f))
 
 
 # ---------------------------------------------------------------------------
-# Vertex loaders
+# Schema loading
 # ---------------------------------------------------------------------------
 
 
-def load_core_routers(c: client.Client):
-    print("Loading CoreRouters...")
-    for row in read_csv("DimCoreRouter.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('RouterId', router_id)"
-            ".property('City', city)"
-            ".property('Region', region)"
-            ".property('Vendor', vendor)"
-            ".property('Model', model)",
-            {
-                "label_val": "CoreRouter",
-                "id_val": row["RouterId"],
-                "pk_val": "router",
-                "router_id": row["RouterId"],
-                "city": row["City"],
-                "region": row["Region"],
-                "vendor": row["Vendor"],
-                "model": row["Model"],
-            },
-        )
-        print(f"  ✓ CoreRouter {row['RouterId']}")
+def load_schema(schema_path: Path) -> dict:
+    """Load and validate a YAML graph schema manifest."""
+    if not schema_path.exists():
+        print(f"ERROR: Schema file not found: {schema_path}")
+        sys.exit(1)
 
+    with open(schema_path) as f:
+        schema = yaml.safe_load(f)
 
-def load_agg_switches(c: client.Client):
-    print("Loading AggSwitches...")
-    for row in read_csv("DimAggSwitch.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('SwitchId', switch_id)"
-            ".property('City', city)"
-            ".property('UplinkRouterId', uplink)",
-            {
-                "label_val": "AggSwitch",
-                "id_val": row["SwitchId"],
-                "pk_val": "switch",
-                "switch_id": row["SwitchId"],
-                "city": row["City"],
-                "uplink": row["UplinkRouterId"],
-            },
-        )
-        print(f"  ✓ AggSwitch {row['SwitchId']}")
+    # Basic validation
+    if not isinstance(schema.get("vertices"), list) or not schema["vertices"]:
+        print("ERROR: Schema must have a non-empty 'vertices' list")
+        sys.exit(1)
 
+    if "data_dir" not in schema:
+        print("ERROR: Schema must specify 'data_dir'")
+        sys.exit(1)
 
-def load_base_stations(c: client.Client):
-    print("Loading BaseStations...")
-    for row in read_csv("DimBaseStation.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('StationId', station_id)"
-            ".property('StationType', station_type)"
-            ".property('AggSwitchId', agg_switch)"
-            ".property('City', city)",
-            {
-                "label_val": "BaseStation",
-                "id_val": row["StationId"],
-                "pk_val": "basestation",
-                "station_id": row["StationId"],
-                "station_type": row["StationType"],
-                "agg_switch": row["AggSwitchId"],
-                "city": row["City"],
-            },
-        )
-        print(f"  ✓ BaseStation {row['StationId']}")
-
-
-def load_transport_links(c: client.Client):
-    print("Loading TransportLinks...")
-    for row in read_csv("DimTransportLink.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('LinkId', link_id)"
-            ".property('LinkType', link_type)"
-            ".property('CapacityGbps', capacity)"
-            ".property('SourceRouterId', source_router)"
-            ".property('TargetRouterId', target_router)",
-            {
-                "label_val": "TransportLink",
-                "id_val": row["LinkId"],
-                "pk_val": "link",
-                "link_id": row["LinkId"],
-                "link_type": row["LinkType"],
-                "capacity": row["CapacityGbps"],
-                "source_router": row["SourceRouterId"],
-                "target_router": row["TargetRouterId"],
-            },
-        )
-        print(f"  ✓ TransportLink {row['LinkId']}")
-
-
-def load_mpls_paths(c: client.Client):
-    print("Loading MPLSPaths...")
-    for row in read_csv("DimMPLSPath.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('PathId', path_id)"
-            ".property('PathType', path_type)",
-            {
-                "label_val": "MPLSPath",
-                "id_val": row["PathId"],
-                "pk_val": "path",
-                "path_id": row["PathId"],
-                "path_type": row["PathType"],
-            },
-        )
-        print(f"  ✓ MPLSPath {row['PathId']}")
-
-
-def load_services(c: client.Client):
-    print("Loading Services...")
-    for row in read_csv("DimService.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('ServiceId', service_id)"
-            ".property('ServiceType', service_type)"
-            ".property('CustomerName', customer_name)"
-            ".property('CustomerCount', customer_count)"
-            ".property('ActiveUsers', active_users)",
-            {
-                "label_val": "Service",
-                "id_val": row["ServiceId"],
-                "pk_val": "service",
-                "service_id": row["ServiceId"],
-                "service_type": row["ServiceType"],
-                "customer_name": row["CustomerName"],
-                "customer_count": row["CustomerCount"],
-                "active_users": row["ActiveUsers"],
-            },
-        )
-        print(f"  ✓ Service {row['ServiceId']}")
-
-
-def load_sla_policies(c: client.Client):
-    print("Loading SLAPolicies...")
-    for row in read_csv("DimSLAPolicy.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('SLAPolicyId', policy_id)"
-            ".property('ServiceId', service_id)"
-            ".property('AvailabilityPct', availability)"
-            ".property('MaxLatencyMs', max_latency)"
-            ".property('PenaltyPerHourUSD', penalty)"
-            ".property('Tier', tier)",
-            {
-                "label_val": "SLAPolicy",
-                "id_val": row["SLAPolicyId"],
-                "pk_val": "policy",
-                "policy_id": row["SLAPolicyId"],
-                "service_id": row["ServiceId"],
-                "availability": row["AvailabilityPct"],
-                "max_latency": row["MaxLatencyMs"],
-                "penalty": row["PenaltyPerHourUSD"],
-                "tier": row["Tier"],
-            },
-        )
-        print(f"  ✓ SLAPolicy {row['SLAPolicyId']}")
-
-
-def load_bgp_sessions(c: client.Client):
-    print("Loading BGPSessions...")
-    for row in read_csv("DimBGPSession.csv"):
-        submit(c,
-            "g.addV(label_val)"
-            ".property('id', id_val)"
-            ".property('partitionKey', pk_val)"
-            ".property('SessionId', session_id)"
-            ".property('PeerARouterId', peer_a)"
-            ".property('PeerBRouterId', peer_b)"
-            ".property('ASNumberA', asn_a)"
-            ".property('ASNumberB', asn_b)",
-            {
-                "label_val": "BGPSession",
-                "id_val": row["SessionId"],
-                "pk_val": "session",
-                "session_id": row["SessionId"],
-                "peer_a": row["PeerARouterId"],
-                "peer_b": row["PeerBRouterId"],
-                "asn_a": row["ASNumberA"],
-                "asn_b": row["ASNumberB"],
-            },
-        )
-        print(f"  ✓ BGPSession {row['SessionId']}")
+    return schema
 
 
 # ---------------------------------------------------------------------------
-# Edge loaders  (derived from FK columns and fact tables)
+# Generic vertex loader
 # ---------------------------------------------------------------------------
 
 
-def load_connects_to_edges(c: client.Client):
-    """TransportLink connects_to CoreRouter (source & target)."""
-    print("Loading connects_to edges (TransportLink → CoreRouter)...")
-    for row in read_csv("DimTransportLink.csv"):
-        # Source edge
-        submit(c,
-            "g.V().has('TransportLink', 'LinkId', link_id)"
-            ".addE('connects_to')"
-            ".to(g.V().has('CoreRouter', 'RouterId', router_id))"
-            ".property('direction', dir_val)",
-            {
-                "link_id": row["LinkId"],
-                "router_id": row["SourceRouterId"],
-                "dir_val": "source",
-            },
+def load_vertices(c: client.Client, vertex_def: dict, data_dir: Path) -> int:
+    """Load vertices from a CSV file according to the vertex definition.
+
+    Returns the number of vertices loaded.
+    """
+    label = vertex_def["label"]
+    csv_file = data_dir / vertex_def["csv_file"]
+    id_column = vertex_def["id_column"]
+    pk_value = vertex_def["partition_key"]
+    properties = vertex_def.get("properties", [])
+
+    if not csv_file.exists():
+        print(f"  \u26a0 CSV not found: {csv_file} — skipping {label}")
+        return 0
+
+    rows = read_csv_file(csv_file)
+    print(f"Loading {label} ({len(rows)} rows from {vertex_def['csv_file']})...")
+
+    for row in rows:
+        vertex_id = row[id_column]
+
+        # Build property chain dynamically
+        prop_parts = [
+            ".property('id', id_val)",
+            ".property('partitionKey', pk_val)",
+        ]
+        bindings: dict = {"label_val": label, "id_val": vertex_id, "pk_val": pk_value}
+
+        for i, prop_name in enumerate(properties):
+            if prop_name in row:
+                param = f"p{i}"
+                prop_parts.append(f".property('{prop_name}', {param})")
+                bindings[param] = row[prop_name]
+
+        query = "g.addV(label_val)" + "".join(prop_parts)
+        submit(c, query, bindings)
+        print(f"  \u2713 {label} {vertex_id}")
+
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Generic edge loader
+# ---------------------------------------------------------------------------
+
+
+def load_edges(c: client.Client, edge_def: dict, data_dir: Path) -> int:
+    """Load edges from a CSV file according to the edge definition.
+
+    Returns the number of edges loaded.
+    """
+    label = edge_def["label"]
+    csv_file = data_dir / edge_def["csv_file"]
+    source = edge_def["source"]
+    target = edge_def["target"]
+    edge_props = edge_def.get("properties", [])
+    row_filter = edge_def.get("filter")
+
+    if not csv_file.exists():
+        print(f"  \u26a0 CSV not found: {csv_file} — skipping {label}")
+        return 0
+
+    rows = read_csv_file(csv_file)
+
+    # Apply row filter if specified
+    if row_filter:
+        filter_col = row_filter["column"]
+        filter_val = row_filter["value"]
+        rows = [r for r in rows if r.get(filter_col) == filter_val]
+        print(f"Loading {label} edges ({len(rows)} filtered rows from {edge_def['csv_file']})...")
+    else:
+        print(f"Loading {label} edges ({len(rows)} rows from {edge_def['csv_file']})...")
+
+    count = 0
+    for row in rows:
+        src_val = row[source["column"]]
+        tgt_val = row[target["column"]]
+
+        # Build parameterised edge query
+        bindings: dict = {
+            "src_val": src_val,
+            "tgt_val": tgt_val,
+        }
+
+        query = (
+            f"g.V().has('{source['label']}', '{source['property']}', src_val)"
+            f".addE('{label}')"
+            f".to(g.V().has('{target['label']}', '{target['property']}', tgt_val))"
         )
-        # Target edge
-        submit(c,
-            "g.V().has('TransportLink', 'LinkId', link_id)"
-            ".addE('connects_to')"
-            ".to(g.V().has('CoreRouter', 'RouterId', router_id))"
-            ".property('direction', dir_val)",
-            {
-                "link_id": row["LinkId"],
-                "router_id": row["TargetRouterId"],
-                "dir_val": "target",
-            },
-        )
-        print(f"  ✓ {row['LinkId']} connects_to {row['SourceRouterId']} + {row['TargetRouterId']}")
 
+        # Add edge properties
+        for i, prop in enumerate(edge_props):
+            param = f"ep{i}"
+            if "column" in prop:
+                bindings[param] = row[prop["column"]]
+            elif "value" in prop:
+                bindings[param] = prop["value"]
+            else:
+                continue
+            query += f".property('{prop['name']}', {param})"
 
-def load_aggregates_to_edges(c: client.Client):
-    """AggSwitch aggregates_to CoreRouter (from UplinkRouterId FK)."""
-    print("Loading aggregates_to edges (AggSwitch → CoreRouter)...")
-    for row in read_csv("DimAggSwitch.csv"):
-        submit(c,
-            "g.V().has('AggSwitch', 'SwitchId', switch_id)"
-            ".addE('aggregates_to')"
-            ".to(g.V().has('CoreRouter', 'RouterId', router_id))",
-            {
-                "switch_id": row["SwitchId"],
-                "router_id": row["UplinkRouterId"],
-            },
-        )
-        print(f"  ✓ {row['SwitchId']} aggregates_to {row['UplinkRouterId']}")
+        submit(c, query, bindings)
+        print(f"  \u2713 {src_val} —[{label}]\u2192 {tgt_val}")
+        count += 1
 
-
-def load_backhauls_via_edges(c: client.Client):
-    """BaseStation backhauls_via AggSwitch (from AggSwitchId FK)."""
-    print("Loading backhauls_via edges (BaseStation → AggSwitch)...")
-    for row in read_csv("DimBaseStation.csv"):
-        submit(c,
-            "g.V().has('BaseStation', 'StationId', station_id)"
-            ".addE('backhauls_via')"
-            ".to(g.V().has('AggSwitch', 'SwitchId', switch_id))",
-            {
-                "station_id": row["StationId"],
-                "switch_id": row["AggSwitchId"],
-            },
-        )
-        print(f"  ✓ {row['StationId']} backhauls_via {row['AggSwitchId']}")
-
-
-def load_routes_via_edges(c: client.Client):
-    """MPLSPath routes_via TransportLink (from FactMPLSPathHops where NodeType=TransportLink)."""
-    print("Loading routes_via edges (MPLSPath → TransportLink)...")
-    for row in read_csv("FactMPLSPathHops.csv"):
-        if row["NodeType"] != "TransportLink":
-            continue  # Only create edges for transport link hops
-        submit(c,
-            "g.V().has('MPLSPath', 'PathId', path_id)"
-            ".addE('routes_via')"
-            ".to(g.V().has('TransportLink', 'LinkId', link_id))"
-            ".property('HopOrder', hop_order)",
-            {
-                "path_id": row["PathId"],
-                "link_id": row["NodeId"],
-                "hop_order": row["HopOrder"],
-            },
-        )
-        print(f"  ✓ {row['PathId']} routes_via {row['NodeId']} (hop {row['HopOrder']})")
-
-
-def load_depends_on_edges(c: client.Client):
-    """Service depends_on MPLSPath|AggSwitch|BaseStation (from FactServiceDependency)."""
-    print("Loading depends_on edges (Service → dependency)...")
-    # Map DependsOnType to vertex label and ID field
-    type_map = {
-        "MPLSPath": ("MPLSPath", "PathId"),
-        "AggSwitch": ("AggSwitch", "SwitchId"),
-        "BaseStation": ("BaseStation", "StationId"),
-    }
-    for row in read_csv("FactServiceDependency.csv"):
-        dep_type = row["DependsOnType"]
-        if dep_type not in type_map:
-            print(f"  ⚠ Unknown DependsOnType: {dep_type} — skipping")
-            continue
-        label, id_field = type_map[dep_type]
-        submit(c,
-            f"g.V().has('Service', 'ServiceId', svc_id)"
-            f".addE('depends_on')"
-            f".to(g.V().has('{label}', '{id_field}', dep_id))"
-            f".property('DependencyStrength', strength)",
-            {
-                "svc_id": row["ServiceId"],
-                "dep_id": row["DependsOnId"],
-                "strength": row["DependencyStrength"],
-            },
-        )
-        print(f"  ✓ {row['ServiceId']} depends_on {row['DependsOnId']} ({row['DependencyStrength']})")
-
-
-def load_governed_by_edges(c: client.Client):
-    """SLAPolicy governed_by Service (from DimSLAPolicy.ServiceId FK)."""
-    print("Loading governed_by edges (SLAPolicy → Service)...")
-    for row in read_csv("DimSLAPolicy.csv"):
-        submit(c,
-            "g.V().has('SLAPolicy', 'SLAPolicyId', policy_id)"
-            ".addE('governed_by')"
-            ".to(g.V().has('Service', 'ServiceId', service_id))",
-            {
-                "policy_id": row["SLAPolicyId"],
-                "service_id": row["ServiceId"],
-            },
-        )
-        print(f"  ✓ {row['SLAPolicyId']} governed_by {row['ServiceId']}")
-
-
-def load_peers_over_edges(c: client.Client):
-    """BGPSession peers_over CoreRouter (both PeerA and PeerB)."""
-    print("Loading peers_over edges (BGPSession → CoreRouter)...")
-    for row in read_csv("DimBGPSession.csv"):
-        # Peer A
-        submit(c,
-            "g.V().has('BGPSession', 'SessionId', session_id)"
-            ".addE('peers_over')"
-            ".to(g.V().has('CoreRouter', 'RouterId', router_id))"
-            ".property('ASNumber', asn)",
-            {
-                "session_id": row["SessionId"],
-                "router_id": row["PeerARouterId"],
-                "asn": row["ASNumberA"],
-            },
-        )
-        # Peer B
-        submit(c,
-            "g.V().has('BGPSession', 'SessionId', session_id)"
-            ".addE('peers_over')"
-            ".to(g.V().has('CoreRouter', 'RouterId', router_id))"
-            ".property('ASNumber', asn)",
-            {
-                "session_id": row["SessionId"],
-                "router_id": row["PeerBRouterId"],
-                "asn": row["ASNumberB"],
-            },
-        )
-        print(f"  ✓ {row['SessionId']} peers_over {row['PeerARouterId']} + {row['PeerBRouterId']}")
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +237,8 @@ def load_peers_over_edges(c: client.Client):
 # ---------------------------------------------------------------------------
 
 
-def verify(c: client.Client):
+def verify(c: client.Client) -> None:
+    """Print vertex/edge counts and a sample traversal."""
     print("\n" + "=" * 60)
     print("VERIFICATION")
     print("=" * 60)
@@ -462,25 +253,12 @@ def verify(c: client.Client):
     total_e = submit(c, "g.E().count()")
     print(f"  Total: {total_v[0]} vertices, {total_e[0]} edges")
 
-    # Sample traversal: routers → switches
-    result = submit(c,
-        "g.V().hasLabel('CoreRouter')"
-        ".project('router','switches')"
-        ".by('RouterId')"
-        ".by(__.in('aggregates_to').values('SwitchId').fold())"
-    )
-    print(f"\n  Router→Switch mapping:")
-    for r in result:
-        print(f"    {r['router']}: {r['switches']}")
-
-    # Check for orphan switches (no uplink)
-    orphans = submit(c,
-        "g.V().hasLabel('AggSwitch').not(__.out('aggregates_to')).values('SwitchId')"
-    )
+    # Orphan check: vertices with no edges at all
+    orphans = submit(c, "g.V().not(__.bothE()).project('label','id').by(label).by(id)")
     if orphans:
-        print(f"  ⚠ Orphan switches (no uplink): {orphans}")
+        print(f"  \u26a0 Orphan vertices (no edges): {orphans}")
     else:
-        print("  ✓ All switches have uplink edges")
+        print("  \u2713 All vertices have at least one edge")
 
     print("=" * 60)
 
@@ -491,48 +269,70 @@ def verify(c: client.Client):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Load CSV data into Cosmos DB Gremlin graph from a YAML schema manifest.",
+    )
+    parser.add_argument(
+        "--schema",
+        type=Path,
+        default=DEFAULT_SCHEMA,
+        help=f"Path to graph schema YAML (default: {DEFAULT_SCHEMA.relative_to(PROJECT_ROOT)})",
+    )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip post-load verification queries",
+    )
+    parser.add_argument(
+        "--no-clear",
+        action="store_true",
+        help="Don't drop existing graph data before loading",
+    )
+    args = parser.parse_args()
+
+    # Load schema
+    schema_path = args.schema if args.schema.is_absolute() else PROJECT_ROOT / args.schema
+    schema = load_schema(schema_path)
+    data_dir = PROJECT_ROOT / schema["data_dir"]
+
     print(f"Cosmos DB Gremlin: {ENDPOINT} / {DATABASE} / {GRAPH}")
-    print(f"Data dir: {DATA_DIR}")
+    print(f"Schema: {schema_path.relative_to(PROJECT_ROOT)}")
+    print(f"Data dir: {data_dir}")
+    print(f"Vertices: {len(schema['vertices'])} types")
+    print(f"Edges: {len(schema.get('edges', []))} definitions")
     print()
 
     c = get_client()
 
     try:
-        # 1. Clear existing data (idempotent reload)
-        print("Clearing existing graph data...")
-        submit(c, "g.V().drop()")
-        print("  ✓ Graph cleared\n")
+        # 1. Clear existing data (unless --no-clear)
+        if not args.no_clear:
+            print("Clearing existing graph data...")
+            submit(c, "g.V().drop()")
+            print("  \u2713 Graph cleared\n")
 
-        # 2. Load all vertices (must be before edges)
+        # 2. Load all vertices
         t0 = time.time()
-        load_core_routers(c)
-        load_agg_switches(c)
-        load_base_stations(c)
-        load_transport_links(c)
-        load_mpls_paths(c)
-        load_services(c)
-        load_sla_policies(c)
-        load_bgp_sessions(c)
+        total_vertices = 0
+        for vertex_def in schema["vertices"]:
+            total_vertices += load_vertices(c, vertex_def, data_dir)
         vertex_time = time.time() - t0
-        print(f"\n  Vertices loaded in {vertex_time:.1f}s\n")
+        print(f"\n  {total_vertices} vertices loaded in {vertex_time:.1f}s\n")
 
         # 3. Load all edges
         t1 = time.time()
-        load_connects_to_edges(c)
-        load_aggregates_to_edges(c)
-        load_backhauls_via_edges(c)
-        load_routes_via_edges(c)
-        load_depends_on_edges(c)
-        load_governed_by_edges(c)
-        load_peers_over_edges(c)
+        total_edges = 0
+        for edge_def in schema.get("edges", []):
+            total_edges += load_edges(c, edge_def, data_dir)
         edge_time = time.time() - t1
-        print(f"\n  Edges loaded in {edge_time:.1f}s\n")
+        print(f"\n  {total_edges} edges loaded in {edge_time:.1f}s\n")
 
         # 4. Verify
-        verify(c)
+        if not args.no_verify:
+            verify(c)
 
         total = time.time() - t0
-        print(f"\nDone in {total:.1f}s")
+        print(f"\nDone — {total_vertices} vertices, {total_edges} edges in {total:.1f}s")
 
     finally:
         c.close()

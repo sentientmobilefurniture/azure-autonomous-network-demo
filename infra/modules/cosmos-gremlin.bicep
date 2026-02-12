@@ -110,3 +110,6 @@ output gremlinGraphName string = graph.name
 
 @description('The Cosmos DB account resource ID')
 output cosmosAccountId string = cosmosAccount.id
+
+@description('The primary key for key-based Gremlin auth')
+output primaryKey string = cosmosAccount.listKeys().primaryMasterKey

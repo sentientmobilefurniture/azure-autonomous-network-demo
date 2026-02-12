@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 
 # Fabric-perspective log emitter (imported lazily to avoid circular imports)
 def _emit_fabric_log(level: str, msg: str) -> None:
-    """Emit a synthetic fabric-query-api log to the fabric SSE channel."""
+    """Emit a synthetic graph-query-api log to the graph SSE channel."""
     from app.routers.logs import broadcast_fabric_log
     from datetime import datetime, timezone as _tz
     broadcast_fabric_log({
         "ts": datetime.now(_tz.utc).strftime("%H:%M:%S.%f")[:-3],
         "level": level,
-        "name": "fabric-query-api",
+        "name": "graph-query-api",
         "msg": msg,
     })
 

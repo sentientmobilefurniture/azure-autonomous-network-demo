@@ -1,10 +1,11 @@
 openapi: "3.0.3"
 info:
-  title: Fabric Query API
-  version: "0.4.0"
+  title: Graph Query API
+  version: "0.5.0"
   description: |
     Micro-API for executing GQL and KQL queries against Microsoft Fabric.
     Used by Foundry agents via OpenApiTool.
+    Backend: Fabric GraphModel (GQL)
 # NOTE: Template placeholders ({base_url}, {workspace_id}, etc.) are substituted
 # at runtime by scripts/provision_agents.py. This raw file is NOT a valid OpenAPI
 # spec until those values are replaced. See provision_agents.py::_load_openapi_spec().
@@ -51,7 +52,7 @@ paths:
                   description: GraphModel item GUID. Always use the value shown.
       responses:
         "200":
-          description: Query results
+          description: Query results (check 'error' field for query failures)
           content:
             application/json:
               schema:
@@ -70,10 +71,12 @@ paths:
                     type: array
                     items:
                       type: object
-        "400":
-          description: Bad request
-        "429":
-          description: Rate-limited
+                  error:
+                    type: string
+                    nullable: true
+                    description: |
+                      If present, the query failed. Contains the error message.
+                      Read the message, fix your query, and retry.
 
   /query/telemetry:
     post:
@@ -109,7 +112,7 @@ paths:
                   description: KQL database name. Always use the value shown.
       responses:
         "200":
-          description: Query results
+          description: Query results (check 'error' field for query failures)
           content:
             application/json:
               schema:
@@ -128,5 +131,9 @@ paths:
                     type: array
                     items:
                       type: object
-        "400":
-          description: Bad request
+                  error:
+                    type: string
+                    nullable: true
+                    description: |
+                      If present, the query failed. Contains the error message.
+                      Read the message, fix your query, and retry.

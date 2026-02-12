@@ -43,6 +43,9 @@ param maxReplicas int = 3
 @description('Whether ingress is external (public) or internal')
 param externalIngress bool = false
 
+@description('Additional secrets (name/value pairs) to merge with the ACR secret')
+param secrets array = []
+
 // ---------------------------------------------------------------------------
 // Reference existing ACR
 // ---------------------------------------------------------------------------
@@ -78,12 +81,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           passwordSecretRef: 'acr-password'
         }
       ]
-      secrets: [
+      secrets: union([
         {
           name: 'acr-password'
           value: containerRegistry.listCredentials().passwords[0].value
         }
-      ]
+      ], secrets)
     }
     template: {
       containers: [

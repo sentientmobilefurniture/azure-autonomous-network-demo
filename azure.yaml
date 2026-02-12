@@ -17,8 +17,8 @@ hooks:
 
 # Services
 services:
-  fabric-query-api:
-    project: ./fabric-query-api
+  graph-query-api:
+    project: ./graph-query-api
     language: python
     host: containerapp
     docker:

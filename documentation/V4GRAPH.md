@@ -2,7 +2,7 @@
 
 ## Context & Motivation
 
-The demo currently works end-to-end with **Fabric GraphModel** (GQL via `fabric-query-api`).
+The demo currently works end-to-end with **Fabric GraphModel** (GQL via `graph-query-api`).
 The previous V3 plan proposed swapping Fabric for Neo4j, but the strategic direction has
 shifted — we now want a **backend-agnostic architecture** that can swap graph backends
 via a single environment variable, with no code changes to the agent layer.
@@ -22,7 +22,7 @@ via a single environment variable, with no code changes to the agent layer.
 
 What *does* change per backend:
 - **Query language** in the agent's system prompt (GQL vs Gremlin vs Cypher)
-- **Backend implementation** in `fabric-query-api/main.py` (which SDK to call)
+- **Backend implementation** in `graph-query-api/main.py` (which SDK to call)
 - **Data loading** (how topology CSVs get into the graph)
 - **OpenAPI spec description** (which query language examples to show)
 - **Infrastructure** (Bicep modules for provisioning)
@@ -35,8 +35,8 @@ What *does* change per backend:
 
 | File | What's Fabric-specific | What's generic |
 |------|----------------------|----------------|
-| `fabric-query-api/main.py` | `_execute_gql()` function, Fabric REST API call, `_fabric_headers()` | KQL endpoint, FastAPI app, request/response models, error handling |
-| `fabric-query-api/openapi.yaml` | GQL description, `workspace_id`/`graph_model_id` params | Endpoint paths, response schema |
+| `graph-query-api/main.py` | `_execute_gql()` function, Fabric REST API call, `_fabric_headers()` | KQL endpoint, FastAPI app, request/response models, error handling |
+| `graph-query-api/openapi.yaml` | GQL description, `workspace_id`/`graph_model_id` params | Endpoint paths, response schema |
 | `data/prompts/foundry_graph_explorer_agent_v2.md` | GQL syntax examples, "GQL" references throughout | Entity schema, relationship schema, query patterns (logic), scope boundaries |
 | `data/prompts/foundry_orchestrator_agent.md` | None (already generic) | Everything |
 | `scripts/provision_agents.py` | `_make_graph_openapi_tool()` description says "GQL" | Everything else |
@@ -46,7 +46,7 @@ What *does* change per backend:
 
 ```
 Agent → OpenApiTool → POST /query/graph {query: "MATCH (r:CoreRouter)..."}
-  → fabric-query-api → _execute_gql() → Fabric GraphModel REST API
+  → graph-query-api → _execute_gql() → Fabric GraphModel REST API
   → {columns, data} → Agent
 ```
 
@@ -69,7 +69,7 @@ GRAPH_BACKEND=fabric          # Options: "fabric" | "cosmosdb" | "mock"
 
 ```
 Agent → OpenApiTool → POST /query/graph {query: "..."}
-  → fabric-query-api/main.py
+  → graph-query-api/main.py
   → reads GRAPH_BACKEND env
   → dispatches to backend:
       fabric   → backends/fabric.py   → Fabric GraphModel REST API (GQL)
@@ -88,8 +88,8 @@ Agent → OpenApiTool → POST /query/graph {query: "..."}
 | **RunbookKBAgent** | No | AI Search, unrelated |
 | **HistoricalTicketAgent** | No | AI Search, unrelated |
 | **GraphExplorerAgent prompt** | Yes | Split into core schema + backend-specific query language |
-| **fabric-query-api/main.py** | Yes | Extract backend dispatch, move Fabric code to backends/ |
-| **fabric-query-api/openapi.yaml** | Yes | Make description backend-aware (template per backend) |
+| **graph-query-api/main.py** | Yes | Extract backend dispatch, move Fabric code to backends/ |
+| **graph-query-api/openapi.yaml** | Yes | Make description backend-aware (template per backend) |
 | **scripts/provision_agents.py** | Yes | Compose prompt from parts, select correct OpenAPI spec |
 | **azure_config.env.template** | Yes | Add `GRAPH_BACKEND`, add Cosmos DB vars (commented) |
 | **Frontend** | No | Receives same SSE events regardless |
@@ -104,11 +104,11 @@ Agent → OpenApiTool → POST /query/graph {query: "..."}
 **Goal**: Move Fabric-specific code into clearly labelled locations. The demo
 continues to work exactly as before — this is purely structural.
 
-#### 0.1 Restructure `fabric-query-api/` internals
+#### 0.1 Restructure `graph-query-api/` internals
 
 Current flat structure:
 ```
-fabric-query-api/
+graph-query-api/
 ├── main.py          ← 458 lines, GQL + KQL + SSE logs all mixed
 ├── openapi.yaml
 ├── Dockerfile
@@ -117,7 +117,7 @@ fabric-query-api/
 
 Target structure:
 ```
-fabric-query-api/
+graph-query-api/
 ├── main.py              ← slim: app factory, middleware, health, log streaming
 ├── config.py            ← GRAPH_BACKEND enum, env var loading
 ├── models.py            ← Pydantic request/response models (shared across backends)
@@ -193,11 +193,11 @@ def load_graph_explorer_prompt() -> str:
 
 ```python
 # Current:
-OPENAPI_SPEC_FILE = PROJECT_ROOT / "fabric-query-api" / "openapi.yaml"
+OPENAPI_SPEC_FILE = PROJECT_ROOT / "graph-query-api" / "openapi.yaml"
 
 # New:
 GRAPH_BACKEND = os.getenv("GRAPH_BACKEND", "fabric")
-OPENAPI_DIR = PROJECT_ROOT / "fabric-query-api" / "openapi"
+OPENAPI_DIR = PROJECT_ROOT / "graph-query-api" / "openapi"
 
 def _get_openapi_spec_file() -> Path:
     """Return the backend-specific OpenAPI spec for graph queries."""
@@ -228,7 +228,7 @@ def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
 
 ```bash
 # --- Graph Backend (USER: set before provisioning agents) ---
-# Controls which graph database backend is used by fabric-query-api
+# Controls which graph database backend is used by graph-query-api
 # and which query language the GraphExplorer agent uses.
 # Options: "fabric" (default, GQL → Fabric GraphModel)
 #          "cosmosdb" (Gremlin → Azure Cosmos DB)
@@ -249,7 +249,7 @@ GRAPH_BACKEND=fabric
 **Goal**: Define the `GraphBackend` protocol and implement the dispatch layer.
 After this phase, `GRAPH_BACKEND=fabric` works identically to today.
 
-#### 1.1 `fabric-query-api/backends/__init__.py` — Protocol + Factory
+#### 1.1 `graph-query-api/backends/__init__.py` — Protocol + Factory
 
 ```python
 """Graph backend abstraction layer."""
@@ -304,7 +304,7 @@ def get_backend() -> GraphBackend:
         )
 ```
 
-#### 1.2 `fabric-query-api/backends/fabric.py` — Extract from current main.py
+#### 1.2 `graph-query-api/backends/fabric.py` — Extract from current main.py
 
 Move the existing `_execute_gql()`, `_fabric_headers()`, and related logic into
 a class that implements `GraphBackend`:
@@ -329,7 +329,7 @@ class FabricGraphBackend:
 
 **The `_execute_gql()` function itself is moved here verbatim.** No logic changes.
 
-#### 1.3 `fabric-query-api/backends/cosmosdb.py` — Placeholder
+#### 1.3 `graph-query-api/backends/cosmosdb.py` — Placeholder
 
 ```python
 class CosmosDBGremlinBackend:
@@ -345,7 +345,7 @@ class CosmosDBGremlinBackend:
         pass
 ```
 
-#### 1.4 `fabric-query-api/backends/mock.py` — Static responses
+#### 1.4 `graph-query-api/backends/mock.py` — Static responses
 
 ```python
 class MockGraphBackend:
@@ -362,7 +362,7 @@ class MockGraphBackend:
         pass
 ```
 
-#### 1.5 `fabric-query-api/router_graph.py` — New graph router
+#### 1.5 `graph-query-api/router_graph.py` — New graph router
 
 ```python
 from fastapi import APIRouter, HTTPException
@@ -399,7 +399,7 @@ async def query_graph(req: GraphQueryRequest):
     )
 ```
 
-#### 1.6 `fabric-query-api/main.py` — Slimmed down
+#### 1.6 `graph-query-api/main.py` — Slimmed down
 
 After extraction, `main.py` becomes ~100 lines:
 - App factory + lifespan (creates/closes backend)
@@ -497,10 +497,10 @@ One-liner for Foundry agent description (backend-agnostic):
 **Goal**: Create per-backend OpenAPI specs for the `/query/graph` endpoint.
 Each spec is a **complete, standalone file** — no inheritance or composition.
 
-#### 3.1 Create `fabric-query-api/openapi/fabric.yaml`
+#### 3.1 Create `graph-query-api/openapi/fabric.yaml`
 
 Complete spec including:
-- `info` section (title: "Fabric Query API", version)
+- `info` section (title: "Graph Query API", version)
 - `servers` section (with `{base_url}` placeholder)
 - `/query/graph` with GQL description, `workspace_id`/`graph_model_id` params, GQL examples
 - `/query/telemetry` (unchanged, identical across all specs)
@@ -508,7 +508,7 @@ Complete spec including:
 
 This is essentially the current `openapi.yaml` renamed and moved.
 
-#### 3.2 Create `fabric-query-api/openapi/cosmosdb.yaml`
+#### 3.2 Create `graph-query-api/openapi/cosmosdb.yaml`
 
 Complete spec including:
 - Same structure as `fabric.yaml`
@@ -516,7 +516,7 @@ Complete spec including:
 - **No** `workspace_id`/`graph_model_id` params (Cosmos DB config is server-side env vars)
 - `/query/telemetry` (unchanged)
 
-#### 3.3 Create `fabric-query-api/openapi/mock.yaml`
+#### 3.3 Create `graph-query-api/openapi/mock.yaml`
 
 Complete spec including:
 - Same structure
@@ -584,7 +584,7 @@ COPY openapi/ ./openapi/
 
 #### 4.3 Update `azure.yaml` if needed
 
-The service target for `fabric-query-api` should continue to work with the same
+The service target for `graph-query-api` should continue to work with the same
 Docker build context. No changes expected unless the build context path changes.
 
 #### 4.4 Smoke test checklist
@@ -592,7 +592,7 @@ Docker build context. No changes expected unless the build context path changes.
 ```bash
 # Test 1: GRAPH_BACKEND=fabric (default) — must behave identically to current
 source azure_config.env
-cd fabric-query-api && uv run uvicorn main:app --port 8100
+cd graph-query-api && uv run uvicorn main:app --port 8100
 
 curl -s http://localhost:8100/health
 curl -s -X POST http://localhost:8100/query/graph \
@@ -625,9 +625,9 @@ curl -s -X POST http://localhost:8100/query/graph \
 
 ```
 Phase 0 — File Reorganisation
-  ├─ 0.1  Create fabric-query-api/{config,models,router_graph,router_telemetry}.py
+  ├─ 0.1  Create graph-query-api/{config,models,router_graph,router_telemetry}.py
   │       Extract from main.py, main.py becomes slim app factory
-  ├─ 0.2  Create fabric-query-api/backends/{__init__,fabric,cosmosdb,mock}.py
+  ├─ 0.2  Create graph-query-api/backends/{__init__,fabric,cosmosdb,mock}.py
   │       Move _execute_gql() into backends/fabric.py
   ├─ 0.3  Split foundry_graph_explorer_agent_v2.md into graph_explorer/ parts
   │       {core_instructions,core_schema,language_gql,language_gremlin,language_mock,description}.md
@@ -655,7 +655,7 @@ Phase 4 — Cleanup
   ├─ 4.1  Update Dockerfile for new file structure
   ├─ 4.2  Update ARCHITECTURE.md to document new structure
   ├─ 4.3  Move foundry_graph_explorer_agent_v2.md to data/prompts/deprecated/
-  └─ 4.4  Move fabric-query-api/openapi.yaml to deprecated/
+  └─ 4.4  Move graph-query-api/openapi.yaml to deprecated/
 ```
 
 ---
@@ -666,17 +666,17 @@ Phase 4 — Cleanup
 
 | File | Purpose |
 |------|---------|
-| `fabric-query-api/config.py` | `GRAPH_BACKEND` enum, env var loading |
-| `fabric-query-api/models.py` | Shared Pydantic models |
-| `fabric-query-api/router_graph.py` | `/query/graph` endpoint + backend dispatch |
-| `fabric-query-api/router_telemetry.py` | `/query/telemetry` endpoint (KQL, extracted) |
-| `fabric-query-api/backends/__init__.py` | `GraphBackend` protocol + `get_backend()` factory |
-| `fabric-query-api/backends/fabric.py` | Fabric GraphModel backend (moved from main.py) |
-| `fabric-query-api/backends/cosmosdb.py` | Cosmos DB Gremlin placeholder |
-| `fabric-query-api/backends/mock.py` | Static response placeholder |
-| `fabric-query-api/openapi/fabric.yaml` | GQL OpenAPI spec (current openapi.yaml) |
-| `fabric-query-api/openapi/cosmosdb.yaml` | Gremlin OpenAPI spec |
-| `fabric-query-api/openapi/mock.yaml` | Generic OpenAPI spec |
+| `graph-query-api/config.py` | `GRAPH_BACKEND` enum, env var loading |
+| `graph-query-api/models.py` | Shared Pydantic models |
+| `graph-query-api/router_graph.py` | `/query/graph` endpoint + backend dispatch |
+| `graph-query-api/router_telemetry.py` | `/query/telemetry` endpoint (KQL, extracted) |
+| `graph-query-api/backends/__init__.py` | `GraphBackend` protocol + `get_backend()` factory |
+| `graph-query-api/backends/fabric.py` | Fabric GraphModel backend (moved from main.py) |
+| `graph-query-api/backends/cosmosdb.py` | Cosmos DB Gremlin placeholder |
+| `graph-query-api/backends/mock.py` | Static response placeholder |
+| `graph-query-api/openapi/fabric.yaml` | GQL OpenAPI spec (current openapi.yaml) |
+| `graph-query-api/openapi/cosmosdb.yaml` | Gremlin OpenAPI spec |
+| `graph-query-api/openapi/mock.yaml` | Generic OpenAPI spec |
 | `data/prompts/graph_explorer/core_instructions.md` | Role, rules, scope (backend-agnostic) |
 | `data/prompts/graph_explorer/core_schema.md` | Entity & relationship schema (backend-agnostic) |
 | `data/prompts/graph_explorer/language_gql.md` | GQL syntax + examples |
@@ -688,8 +688,8 @@ Phase 4 — Cleanup
 
 | File | Change |
 |------|--------|
-| `fabric-query-api/main.py` | Slim down to app factory + middleware + router mounts |
-| `fabric-query-api/Dockerfile` | Update COPY commands for new structure |
+| `graph-query-api/main.py` | Slim down to app factory + middleware + router mounts |
+| `graph-query-api/Dockerfile` | Update COPY commands for new structure |
 | `scripts/provision_agents.py` | Compose prompt from parts, select backend-specific OpenAPI spec |
 | `azure_config.env.template` | Add `GRAPH_BACKEND` + Cosmos DB vars |
 
@@ -698,7 +698,7 @@ Phase 4 — Cleanup
 | File | Reason |
 |------|--------|
 | `data/prompts/foundry_graph_explorer_agent_v2.md` | Replaced by `graph_explorer/` directory |
-| `fabric-query-api/openapi.yaml` | Replaced by `openapi/{fabric,cosmosdb,mock}.yaml` |
+| `graph-query-api/openapi.yaml` | Replaced by `openapi/{fabric,cosmosdb,mock}.yaml` |
 
 ### Files that DO NOT change
 
@@ -708,7 +708,7 @@ Phase 4 — Cleanup
 | `data/prompts/foundry_telemetry_agent_v2.md` | KQL, unrelated to graph backend |
 | `data/prompts/foundry_runbook_kb_agent.md` | AI Search, unrelated |
 | `data/prompts/foundry_historical_ticket_agent.md` | AI Search, unrelated |
-| `api/` (entire directory) | Doesn't touch graph — calls fabric-query-api via agents |
+| `api/` (entire directory) | Doesn't touch graph — calls graph-query-api via agents |
 | `frontend/` (entire directory) | Receives same SSE events regardless of backend |
 | `infra/` | No Bicep changes in Phase 0-4 (Cosmos DB Bicep comes in a future phase) |
 | All `scripts/` except `provision_agents.py` | Fabric provisioning scripts are unaffected |
@@ -717,7 +717,7 @@ Phase 4 — Cleanup
 
 ## Request/Response Contract (Unchanged)
 
-The API contract between agents and fabric-query-api does **not change**:
+The API contract between agents and graph-query-api does **not change**:
 
 ### Request (POST /query/graph)
 ```json
