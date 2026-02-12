@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "14355714368578442220"
+      "templateHash": "4190418966659810158"
     }
   },
   "parameters": {
@@ -1490,7 +1490,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.40.2.10011",
-              "templateHash": "16467038262499461684"
+              "templateHash": "2475412931791075913"
             }
           },
           "parameters": {
@@ -1560,7 +1560,9 @@
               "cognitiveServicesContributor": "25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68",
               "searchIndexDataContributor": "8ebe5a00-799e-43f5-93ac-243d3dce84a7",
               "searchServiceContributor": "7ca78c08-252a-4471-8644-bb5ff32d4ba0",
-              "cosmosDbDataContributor": "00000000-0000-0000-0000-000000000002"
+              "cosmosDbDataContributor": "00000000-0000-0000-0000-000000000002",
+              "azureAiDeveloper": "64702f94-c441-49e6-a78b-ef80e0188fee",
+              "cognitiveServicesUser": "a97b65f3-24c7-4388-baec-2e87135dc908"
             }
           },
           "resources": [
@@ -1717,6 +1719,29 @@
               "properties": {
                 "principalId": "[parameters('apiContainerAppPrincipalId')]",
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').cognitiveServicesContributor)]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "condition": "[not(empty(parameters('apiContainerAppPrincipalId')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, parameters('apiContainerAppPrincipalId'), variables('roles').azureAiDeveloper)]",
+              "properties": {
+                "principalId": "[parameters('apiContainerAppPrincipalId')]",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').azureAiDeveloper)]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "condition": "[not(empty(parameters('apiContainerAppPrincipalId')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]",
+              "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName')), parameters('apiContainerAppPrincipalId'), variables('roles').cognitiveServicesUser)]",
+              "properties": {
+                "principalId": "[parameters('apiContainerAppPrincipalId')]",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').cognitiveServicesUser)]",
                 "principalType": "ServicePrincipal"
               }
             }
