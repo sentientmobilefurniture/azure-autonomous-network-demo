@@ -34,6 +34,8 @@ azd auth login
 See [ARCHITECTURE.md](ARCHITECTURE.md) for full project structure, architectural
 decisions, data flow diagrams, and the configuration signpost.
 
+![Current UI](documentation/assets/ui_current_state.png)
+
 ---
 
 ## Azure Services Used 
