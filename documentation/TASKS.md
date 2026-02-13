@@ -50,4 +50,4 @@
 ## Active Deployments
 
 cosmosprod4 (Dev deployment) - https://ca-app-4mboze7wbz4b6.calmmeadow-59f74fcf.eastus2.azurecontainerapps.io/ 
-cosmosgraphstable3 (Stable deployment - as of 13/02/26)
+cosmosgraphstable3 (Stable deployment - as of 13/02/26) - https://ca-app-o7wx7vphrn44w.proudbeach-afa9c88b.swedencentral.azurecontainerapps.io/
