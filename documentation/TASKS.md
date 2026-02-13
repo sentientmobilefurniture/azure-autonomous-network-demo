@@ -29,8 +29,9 @@
 - [x] Fix slow cosmosdb data ingestion — Async bulk upserts (50 concurrent), CSVs uploaded to blob storage, `--from-blob` flag for native blob-sourced ingestion
 - [ ] Make the agent flow even more WOWZA - Agent analyzing/auditing/classifying? Parallel execution doing some other stuff? The possibility of finetuning - THIS SHOULD ALL BE IN A KNOWLEDGE GRAPH DRREEEEEEAM deck
 - [x] Verify that the cosmosDB stuff works
-- [ ] Conversation persistence is necessary - Selection from a menu
-- [ ] Real-time graph visualization in UI (D3-force / Neovis.js over Bolt websockets)
+- [ ] Conversation persistence is necessary - Selection from a side bar menu perhaps? That means backup somewhere...cosmosdb?
+- [ ] Generalize data set to enable multiple scenario selection. API and infra logic should be decoupled from data set specifics. Instead each dataset follows a specific format with certain necessary components (perhaps a folder for entity tables, an ontology file, etc... figure it out by improving /home/hanchoong/projects/autonomous-network-demo/data/scripts), and the individual services and pipeline events and data uploads and such map to those specific components, and thus the application is decoupled from specific datasets and so we can enable multiple scenarios within the demo 
+- [x] Real-time graph visualization in UI (D3-force / Neovis.js over Bolt websockets)
 - [ ] What realtime azure component is most appropriate for ingesting real-time telemetry and alerts? Is it azure eventhub? can we simulate a constant alert ingestion via OTel, and then have a button to trigger a flood of horrible telemetry to simulate a scenario, and then fire an alert that then triggers the agent workflow? This should actually be V5
 - [ ] Multi scenario with data generalization should be V6 - We could create customized hardcoded scenarios to start and let the user select which one via a button - All the data pregenerated, ingested into cosmos - The button chooses which data tables?
 - [ ] Realtime dashboarding in the UI ought to be V7
