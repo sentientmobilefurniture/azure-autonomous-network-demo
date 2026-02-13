@@ -12,6 +12,9 @@ azure_config.env
 # --- Azure Developer CLI ---
 .azure/
 
+# --- Agent IDs (generated per-deployment by provision_agents.py) ---
+scripts/agent_ids.json
+
 # --- Python ---
 __pycache__/
 *.pyc

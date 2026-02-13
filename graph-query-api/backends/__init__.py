@@ -28,6 +28,18 @@ class GraphBackend(Protocol):
         """
         ...
 
+    async def get_topology(
+        self,
+        query: str | None = None,
+        vertex_labels: list[str] | None = None,
+    ) -> dict:
+        """Return full or filtered graph topology as {nodes: [...], edges: [...]}.
+
+        Each node: {id, label, properties}
+        Each edge: {id, source, target, label, properties}
+        """
+        ...
+
     def close(self) -> None:
         """Clean up resources (connections, clients)."""
         ...

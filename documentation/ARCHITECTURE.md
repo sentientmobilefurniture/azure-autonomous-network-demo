@@ -160,6 +160,7 @@ Browser ──POST /api/──▶  │  nginx :80                               
 │   ├── models.py               # Pydantic request/response models (shared across backends)
 │   ├── router_graph.py         # POST /query/graph — dispatches to backend via Protocol
 │   ├── router_telemetry.py     # POST /query/telemetry — SQL via Cosmos SDK
+│   ├── router_topology.py      # POST /query/topology — full graph topology for visual explorer
 │   ├── backends/               # Backend abstraction layer (V4)
 │   │   ├── __init__.py         # GraphBackend Protocol + get_backend() factory
 │   │   ├── cosmosdb.py         # Cosmos DB Gremlin via gremlinpython
@@ -172,7 +173,7 @@ Browser ──POST /api/──▶  │  nginx :80                               
 │
 ├── frontend/                   # React SPA — NOC Dashboard
 │   ├── package.json
-│   ├── vite.config.ts          # Dev server :5173, proxies /api + SSE routes → :8000
+│   ├── vite.config.ts          # Dev server :5173, proxies /api → :8000, /query → :8100
 │   ├── tailwind.config.js      # Full colour system (brand, neutral, status)
 │   ├── index.html
 │   ├── Dockerfile              # (Legacy — per-service, unused in unified deploy)
@@ -181,10 +182,11 @@ Browser ──POST /api/──▶  │  nginx :80                               
 │       ├── App.tsx             # Layout shell — three-zone resizable dashboard
 │       ├── types/index.ts      # StepEvent, ThinkingState, RunMeta
 │       ├── hooks/
-│       │   └── useInvestigation.ts   # SSE connection + all investigation state
+│       │   ├── useInvestigation.ts   # SSE connection + all investigation state
+│       │   └── useTopology.ts        # Topology data fetching (POST /query/topology)
 │       ├── components/
 │       │   ├── Header.tsx            # Branding + HealthDot + "5 Agents" indicator
-│       │   ├── MetricsBar.tsx        # PanelGroup with 6 resizable panels
+│       │   ├── MetricsBar.tsx        # PanelGroup with 2 resizable panels (graph + logs)
 │       │   ├── MetricCard.tsx        # KPI display (hardcoded for demo)
 │       │   ├── AlertChart.tsx        # Static anomaly detection chart image
 │       │   ├── LogStream.tsx         # Generic SSE log viewer (url + title props)
@@ -195,7 +197,14 @@ Browser ──POST /api/──▶  │  nginx :80                               
 │       │   ├── ThinkingDots.tsx      # Bouncing dots indicator
 │       │   ├── ErrorBanner.tsx       # Contextual error messages + retry
 │       │   ├── DiagnosisPanel.tsx    # Right panel: empty → loading → markdown
-│       │   └── HealthDot.tsx         # API health check indicator
+│       │   ├── HealthDot.tsx         # API health check indicator
+│       │   ├── GraphTopologyViewer.tsx # Interactive graph topology explorer (V6)
+│       │   └── graph/                # Graph visualisation sub-components
+│       │       ├── graphConstants.ts  # NODE_COLORS, NODE_SIZES per vertex type
+│       │       ├── GraphCanvas.tsx    # react-force-graph-2d wrapper + custom rendering
+│       │       ├── GraphTooltip.tsx   # Hover tooltip (node/edge properties)
+│       │       ├── GraphContextMenu.tsx # Right-click menu (display field, colour picker)
+│       │       └── GraphToolbar.tsx   # Search, label chips, zoom-to-fit, refresh
 │       └── styles/
 │           └── globals.css           # CSS custom properties, glass utilities, dark theme
 │
@@ -204,7 +213,9 @@ Browser ──POST /api/──▶  │  nginx :80                               
 │   ├── SCENARIO.md             # Demo scenario description
 │   ├── TASKS.md                # Task tracking
 │   ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
+│   ├── V6Interactive.md        # V6 interactive graph topology viewer spec
 │   ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
+│   ├── azure_deployment_lessons.md  # Deployment troubleshooting & lessons learned
 │   ├── assets/                 # Screenshots & diagrams
 │   └── deprecated/             # Archived docs (SETUP_COSMOSDB.md, etc.)
 │
@@ -217,8 +228,9 @@ Browser ──POST /api/──▶  │  nginx :80                               
 ## graph-query-api — V4 Backend-Agnostic Architecture
 
 The most architecturally significant service. A FastAPI microservice that provides
-two endpoints — `/query/graph` and `/query/telemetry` — consumed by Foundry agents
-via `OpenApiTool`. Runs as a Container App in production, authenticated via
+three endpoints — `/query/graph`, `/query/telemetry`, and `/query/topology` —
+consumed by Foundry agents (graph/telemetry) and the frontend graph explorer
+(topology). Runs as a Container App in production, authenticated via
 system-assigned managed identity.
 
 ### Design Principle
@@ -249,6 +261,11 @@ GRAPH_BACKEND=cosmosdb          # Options: "cosmosdb" | "mock"
 | `GraphQueryResponse` | `columns=[]`, `data=[]`, `error: str \| None` | Error field enables LLM self-repair |
 | `TelemetryQueryRequest` | `query` | SQL query string |
 | `TelemetryQueryResponse` | `columns=[]`, `rows=[]`, `error: str \| None` | Same error pattern |
+| `TopologyNode` | `id`, `label`, `type`, `properties: dict` | Single graph vertex |
+| `TopologyEdge` | `id`, `source`, `target`, `type`, `properties: dict` | Single graph edge |
+| `TopologyMeta` | `node_count`, `edge_count`, `vertex_labels`, `edge_labels` | Topology summary stats |
+| `TopologyRequest` | `query`, `vertex_labels: list[str]` | Topology filter request |
+| `TopologyResponse` | `nodes`, `edges`, `meta`, `error: str \| None` | Full topology payload |
 
 The `error` field is key to error resilience — see [Error Resilience](#error-resilience).
 
@@ -268,11 +285,20 @@ The `error` field is key to error resilience — see [Error Resilience](#error-r
 - `CosmosHttpResponseError` caught → 200 + error payload (not HTTP 400)
 - Auto-serialises `datetime` values via `.isoformat()`
 
+#### `router_topology.py` — Full Graph Topology (V6)
+
+- `POST /query/topology` — returns all nodes and edges for the interactive graph explorer
+- Reuses the singleton backend from `router_graph.py` (`get_graph_backend()`)
+- Accepts optional `vertex_labels` filter (array of vertex types to include)
+- Returns `TopologyResponse` with `nodes`, `edges`, `meta` (counts + label lists)
+- Same error-as-200 pattern as other routers
+
 #### `backends/` — Protocol + Implementations
 
 ```python
 class GraphBackend(Protocol):
     async def execute_query(self, query: str, **kwargs) -> dict: ...
+    async def get_topology(self, query: str = "", vertex_labels: list[str] | None = None) -> dict: ...
     def close(self) -> None: ...
 ```
 
@@ -281,7 +307,7 @@ class GraphBackend(Protocol):
 | Backend | Implementation | Query Language | Status |
 |---------|---------------|----------------|--------|
 | `cosmosdb` | `CosmosDBGremlinBackend` | Gremlin | Production — Cosmos DB Gremlin via gremlinpython |
-| `mock` | `MockGraphBackend` | Natural language | Working — static topology data |
+| `mock` | `MockGraphBackend` | Natural language | Working — static topology data (50 nodes, 54 edges) |
 
 **`backends/cosmosdb.py`** — Cosmos DB Gremlin backend:
 - Singleton `gremlinpython` client with `GraphSONSerializersV2d0` over WSS
@@ -294,7 +320,11 @@ class GraphBackend(Protocol):
 - Sync Gremlin execution wrapped in `asyncio.to_thread()`
 
 **`backends/mock.py`** — Pattern-matches query strings for entity types ("corerouter",
-"transportlink", etc.) and returns canned topology data. Useful for offline demos.
+"transportlink", etc.) and returns canned topology data. Also provides full
+topology via `get_topology()` — 50 nodes across 8 vertex types (CoreRouter,
+AggSwitch, BaseStation, TransportLink, MPLSPath, Service, SLAPolicy, BGPSession)
+and 54 edges across 7 relationship types. Supports `vertex_labels` filtering.
+Useful for offline demos and the interactive graph explorer.
 
 #### `main.py` — Slim App Factory
 
@@ -303,7 +333,7 @@ class GraphBackend(Protocol):
 - CORS middleware for localhost dev
 - HTTP request logging middleware with timing
 - SSE log broadcasting (asyncio.Queue subscribers + deque buffer, max 100 lines)
-- Mounts `router_graph` and `router_telemetry`
+- Mounts `router_graph`, `router_telemetry`, and `router_topology`
 - `GET /health` with backend type and version
 - `GET /api/logs` SSE stream
 
@@ -611,10 +641,11 @@ The API streams structured SSE events to the frontend. Event types:
 
 ---
 
-## Frontend Architecture — V4 NOC Dashboard
+## Frontend Architecture — V6 NOC Dashboard
 
 Dark theme component-based three-zone dashboard with vertically and horizontally
-resizable panels. Built with React 18, Vite, Tailwind CSS, and Framer Motion.
+resizable panels. Built with React 18, Vite, Tailwind CSS, Framer Motion, and
+react-force-graph-2d (interactive graph topology explorer).
 
 ### Design System
 
@@ -633,7 +664,7 @@ resizable panels. Built with React 18, Vite, Tailwind CSS, and Framer Motion.
 │  Header          (h-12, fixed)                              Zone 1  │
 ├──────────────────────────────────────────────────────────────────────┤
 │  MetricsBar      (resizable height, default 30%)            Zone 2  │
-│  [KPI] [KPI] [KPI] [KPI] [AlertChart] [API Logs]                    │
+│  [GraphTopologyViewer (64%)]  [API Logs (36%)]                      │
 │  ←──── resizable panels (react-resizable-panels) ────→              │
 ├═══════════════════════════ vertical drag handle ═════════════════════┤
 │                  (resizable height, default 70%)            Zone 3  │
@@ -668,11 +699,40 @@ A `LogStream` component in the metrics bar displays real-time backend logs via S
 
 The LogStream supports auto-scroll, manual scroll-pause, and connection status.
 
+### Interactive Graph Topology Explorer (V6)
+
+The `GraphTopologyViewer` in Zone 2 renders the full network topology as an
+interactive force-directed graph powered by `react-force-graph-2d`.
+
+**Data flow:** `useTopology` hook → `POST /query/topology` → `graph-query-api`
+→ `GraphBackend.get_topology()` → returns nodes + edges → rendered in `GraphCanvas`.
+
+**Component tree:**
+
+```
+GraphTopologyViewer.tsx          ← Orchestrator: composes all sub-components
+├── useTopology()                ← Data hook: fetches topology, manages loading/error
+├── GraphToolbar.tsx             ← Search input, label filter chips, zoom-to-fit, refresh
+├── GraphCanvas.tsx              ← react-force-graph-2d wrapper with custom node rendering
+├── GraphTooltip.tsx             ← Hover tooltip showing node/edge properties
+└── GraphContextMenu.tsx         ← Right-click: display field picker + colour customisation
+```
+
+**Key features:**
+- Colour-coded nodes by vertex type (8 types × distinct colours in `graphConstants.ts`)
+- Label filter chips in the toolbar — click to show/hide vertex types
+- Client-side search across node IDs and display fields
+- Right-click any node to change its display field or colour
+- Customisations persisted to `localStorage`
+- `ResizeObserver` dynamically sizes canvas to fill available panel space
+- Edge labels rendered on hover, curved edges between multi-connected nodes
+
 ### Hardcoded vs Live Data
 
-Metrics values (12 alerts, 3 services, $115k SLA, 231 anomalies) and the alert
-chart image are hardcoded for demo reliability. The investigation panel (SSE steps),
-diagnosis panel (final markdown), and log streams are connected to the live backend.
+The investigation panel (SSE steps), diagnosis panel (final markdown), log streams,
+and the graph topology explorer are all connected to the live backend. Previous
+hardcoded KPI cards and alert chart have been replaced by the interactive graph
+topology viewer.
 
 ---
 
@@ -720,14 +780,25 @@ pipeline in one command:
 1. Prerequisites check and Azure login
 2. Environment selection / creation
 3. `azd up` (infra + unified container deployment)
-4. Cosmos DB firewall configuration (dev IP)
-5. Search index creation (runbooks + tickets)
-6. Cosmos DB graph data loading (`provision_cosmos_gremlin.py`)
-7. Cosmos DB telemetry data loading (`provision_cosmos_telemetry.py`)
-8. Health verification
-9. AI Foundry agent provisioning (5 agents)
-10. Redeploy container with `agent_ids.json` baked in
-11. Local API + Frontend startup (optional)
+4. Search index creation (runbooks + tickets)
+5. Cosmos DB graph data loading (`provision_cosmos_gremlin.py`)
+6. Cosmos DB telemetry data loading (`provision_cosmos_telemetry.py`)
+7. Health verification
+8. AI Foundry agent provisioning (5 agents)
+9. Redeploy container with `agent_ids.json` baked in
+10. Local API + Frontend startup (optional)
+
+**Skip flags** allow selectively bypassing expensive steps during iterative
+development:
+
+| Flag | Skips |
+|------|-------|
+| `--skip-infra` | Step 3 (`azd up`) — skip infrastructure provisioning |
+| `--skip-index` | Step 4 — skip search index creation |
+| `--skip-data` | Steps 5-6 — skip Cosmos DB data loading |
+| `--skip-agents` | Step 8 — skip agent provisioning |
+| `--skip-local` | Step 10 — skip local API + frontend startup |
+| `--yes` | Auto-confirm all prompts |
 
 `azd up` runs the infrastructure + service deployment cycle:
 1. `preprovision.sh` syncs `azure_config.env` → azd environment variables
@@ -799,7 +870,7 @@ it's user-set or auto-populated.
 | `api/pyproject.toml` | Python deps for API | uv (api) |
 | `graph-query-api/pyproject.toml` | Python deps for graph-query-api | uv (graph-query-api) |
 | `frontend/package.json` | Node deps for frontend | npm |
-| `frontend/vite.config.ts` | Dev server port, `/api` proxy target | Vite |
+| `frontend/vite.config.ts` | Dev server port, `/api` proxy → :8000, `/query` proxy → :8100 | Vite |
 | `frontend/tailwind.config.js` | Colour system, fonts | Tailwind CSS |
 | `infra/main.bicepparam` | Bicep parameter values (reads env vars) | azd/Bicep |
 | `scripts/agent_ids.json` | Provisioned Foundry agent IDs | scripts, API (orchestrator) |
@@ -904,6 +975,7 @@ the project root. For code-only changes, use `azd deploy app` (~60 seconds).
 | `@microsoft/fetch-event-source` | `^2.0.1` | POST-capable SSE client |
 | `react-markdown` | `^10.1.0` | Markdown rendering in diagnosis + step cards |
 | `react-resizable-panels` | `^4.6.2` | Resizable panel layout (metrics bar + vertical split) |
+| `react-force-graph-2d` | `^1.26.9` | Force-directed graph visualisation (topology explorer) |
 | `tailwindcss` | `3.x` | Utility-first CSS |
 
 ---
@@ -932,7 +1004,8 @@ the project root. For code-only changes, use `azd deploy app` (~60 seconds).
 
 ### Frontend Customisation
 
-- **Add metric card:** Add entry to `metrics` array in `MetricsBar.tsx`, add `<Panel>`
-- **Make metrics live:** Replace hardcoded values with hook polling `/api/metrics`
 - **Adjust zone split:** Change `defaultSize` props in `App.tsx` (currently 30/70)
+- **Add panels to metrics bar:** Add `<Panel>` entries in `MetricsBar.tsx` alongside the graph viewer
+- **Customise graph colours:** Edit `NODE_COLORS` in `graphConstants.ts`
+- **Add graph context menu actions:** Extend `GraphContextMenu.tsx`
 - **State migration:** Replace `useInvestigation` with Zustand store if prop-drilling grows

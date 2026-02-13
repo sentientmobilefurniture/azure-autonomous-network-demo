@@ -190,7 +190,18 @@ def create_search_index(*, index_name: str, container_name: str) -> None:
     indexer_client.create_or_update_skillset(skillset)
     print(f"✓ Skillset '{skillset.name}' created")
 
-    # 4. Create and run indexer
+    # 4. Wait for any running indexer on this service to finish (concurrent runs not allowed)
+    for existing in indexer_client.get_indexers():
+        for _wait in range(60):  # up to 5 min
+            st = indexer_client.get_indexer_status(existing.name)
+            if st.last_result and st.last_result.status == "inProgress":
+                if _wait == 0:
+                    print(f"ℹ Waiting for running indexer '{existing.name}' to finish...")
+                time.sleep(5)
+            else:
+                break
+
+    # Create and run indexer
     indexer = SearchIndexer(
         name=f"{index_name}-indexer",
         data_source_name=data_source.name,

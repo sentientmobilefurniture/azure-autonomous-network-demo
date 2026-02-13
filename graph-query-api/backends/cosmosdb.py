@@ -227,6 +227,85 @@ class CosmosDBGremlinBackend:
         raw_results = await asyncio.to_thread(_submit_query, query)
         return _normalise_results(raw_results)
 
+    # ----- topology endpoint support -----------------------------------
+
+    async def get_topology(
+        self,
+        query: str | None = None,
+        vertex_labels: list[str] | None = None,
+    ) -> dict:
+        """Return nodes + edges for the graph topology viewer.
+
+        Uses two Gremlin queries:
+          1) g.V()… → vertex id, label, properties
+          2) g.E()… → edge id, label, source/target ids, properties
+
+        Supports optional *vertex_labels* filtering via hasLabel().
+        The *query* parameter is reserved for future free-form Gremlin but
+        is currently unsupported for safety — callers should use
+        vertex_labels instead.
+        """
+        if query:
+            raise ValueError(
+                "Free-form topology queries are not yet supported. "
+                "Use vertex_labels to filter."
+            )
+
+        # Build vertex / edge traversals, optionally filtered by label
+        if vertex_labels:
+            label_csv = ", ".join(f"'{lbl}'" for lbl in vertex_labels)
+            v_query = (
+                f"g.V().hasLabel({label_csv})"
+                ".project('id','label','properties')"
+                ".by(id).by(label).by(valueMap())"
+            )
+            # Edges: both endpoints must be in the filtered label set
+            e_query = (
+                f"g.V().hasLabel({label_csv}).bothE()"
+                ".where(otherV().hasLabel({label_csv}))"
+                ".project('id','label','source','target','properties')"
+                ".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+            )
+        else:
+            v_query = (
+                "g.V()"
+                ".project('id','label','properties')"
+                ".by(id).by(label).by(valueMap())"
+            )
+            e_query = (
+                "g.E()"
+                ".project('id','label','source','target','properties')"
+                ".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+            )
+
+        raw_vertices, raw_edges = await asyncio.gather(
+            asyncio.to_thread(_submit_query, v_query),
+            asyncio.to_thread(_submit_query, e_query),
+        )
+
+        # Flatten Gremlin valueMap lists inside properties
+        nodes = []
+        for v in raw_vertices:
+            props = v.get("properties", {})
+            nodes.append({
+                "id": str(v["id"]),
+                "label": v["label"],
+                "properties": _flatten_valuemap(props) if isinstance(props, dict) else {},
+            })
+
+        edges = []
+        for e in raw_edges:
+            props = e.get("properties", {})
+            edges.append({
+                "id": str(e["id"]),
+                "source": str(e["source"]),
+                "target": str(e["target"]),
+                "label": e["label"],
+                "properties": _flatten_valuemap(props) if isinstance(props, dict) else {},
+            })
+
+        return {"nodes": nodes, "edges": edges}
+
     def close(self) -> None:
         """Close the singleton Gremlin client (thread-safe)."""
         global _gremlin_client
