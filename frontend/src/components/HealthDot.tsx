@@ -4,9 +4,13 @@ export function HealthDot({ label }: { label?: string }) {
   const [ok, setOk] = useState<boolean | null>(null);
 
   useEffect(() => {
-    fetch('/health')
-      .then((r) => setOk(r.ok))
-      .catch(() => setOk(false));
+    const check = () =>
+      fetch('/health')
+        .then((r) => setOk(r.ok))
+        .catch(() => setOk(false));
+    check();
+    const interval = setInterval(check, 15_000);
+    return () => clearInterval(interval);
   }, []);
 
   return (

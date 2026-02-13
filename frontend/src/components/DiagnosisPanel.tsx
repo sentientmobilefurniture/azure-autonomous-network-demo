@@ -100,7 +100,7 @@ export function DiagnosisPanel({
 
             {runMeta && (
               <div className="text-xs text-text-muted border-t border-white/5 pt-3 mt-6">
-                {runMeta.steps} agent step{runMeta.steps > 1 ? 's' : ''} ·{' '}
+                {runMeta.steps} agent step{runMeta.steps !== 1 ? 's' : ''} ·{' '}
                 {runMeta.time}
               </div>
             )}

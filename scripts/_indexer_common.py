@@ -232,5 +232,9 @@ def create_search_index(*, index_name: str, container_name: str) -> None:
             print("  Status: starting...")
     else:
         print(f"\n⚠ Timed out after {MAX_POLL_ITERATIONS * 5}s waiting for indexer.")
+        return
 
-    print(f"\n✅ Indexing complete! {search_client.get_document_count()} chunks in index.")
+    if last and last.status == "persistentFailure":
+        print(f"\n❌ Indexing failed! Check errors above. {search_client.get_document_count()} docs in index.")
+    else:
+        print(f"\n✅ Indexing complete! {search_client.get_document_count()} chunks in index.")

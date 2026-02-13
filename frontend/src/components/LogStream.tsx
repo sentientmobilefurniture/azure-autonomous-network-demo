@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 
 interface LogEntry {
+  id: number;
   ts: string;
   level: string;
   name: string;
   msg: string;
 }
+
+let _logIdCounter = 0;
 
 const LEVEL_COLORS: Record<string, string> = {
   DEBUG: 'text-gray-500',
@@ -50,7 +53,8 @@ export function LogStream({ url = '/api/logs', title = 'Logs' }: LogStreamProps)
 
     evtSource.addEventListener('log', (ev) => {
       try {
-        const entry: LogEntry = JSON.parse(ev.data);
+        const raw = JSON.parse(ev.data);
+        const entry: LogEntry = { ...raw, id: ++_logIdCounter };
         setLines((prev) => {
           const next = [...prev, entry];
           return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
@@ -106,8 +110,8 @@ export function LogStream({ url = '/api/logs', title = 'Logs' }: LogStreamProps)
         {lines.length === 0 && (
           <span className="text-text-tertiary italic">Waiting for log output...</span>
         )}
-        {lines.map((line, i) => (
-          <div key={i} className="whitespace-pre-wrap break-all">
+        {lines.map((line) => (
+          <div key={line.id} className="whitespace-pre-wrap break-all">
             <span className="text-text-tertiary">{line.ts}</span>{' '}
             <span className={LEVEL_COLORS[line.level] ?? 'text-text-secondary'}>
               {line.level.padEnd(8)}

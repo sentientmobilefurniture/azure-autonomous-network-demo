@@ -1,3 +1,4 @@
+import React from 'react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { MetricCard } from './MetricCard';
 import { AlertChart } from './AlertChart';
@@ -40,9 +41,9 @@ export function MetricsBar() {
       <PanelGroup className="h-full">
         {/* 4 metric cards */}
         {metrics.map((m, i) => (
-          <>
-            {i > 0 && <ResizeHandle key={`h-${i}`} />}
-            <Panel key={m.label} defaultSize={8} minSize={5}>
+          <React.Fragment key={m.label}>
+            {i > 0 && <ResizeHandle />}
+            <Panel defaultSize={8} minSize={5}>
               <div className="h-full px-1">
                 <MetricCard
                   label={m.label}
@@ -53,7 +54,7 @@ export function MetricsBar() {
                 />
               </div>
             </Panel>
-          </>
+          </React.Fragment>
         ))}
 
         {/* 5 — Anomaly chart */}

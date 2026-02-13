@@ -46,16 +46,12 @@ CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
 AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
 OPENAPI_DIR = PROJECT_ROOT / "graph-query-api" / "openapi"
 
-# ── Graph backend ───────────────────────────────────────────────────
-
-GRAPH_BACKEND = os.environ.get("GRAPH_BACKEND", "cosmosdb").lower()
+# ── Graph backend (resolved lazily after load_dotenv in load_config) ─
 
 OPENAPI_SPEC_MAP = {
     "cosmosdb": OPENAPI_DIR / "cosmosdb.yaml",
     "mock": OPENAPI_DIR / "mock.yaml",
 }
-
-OPENAPI_SPEC_FILE = OPENAPI_SPEC_MAP.get(GRAPH_BACKEND, OPENAPI_DIR / "cosmosdb.yaml")
 
 LANGUAGE_FILE_MAP = {
     "cosmosdb": "language_gremlin.md",
@@ -66,6 +62,16 @@ GRAPH_TOOL_DESCRIPTIONS = {
     "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore network topology and relationships.",
     "mock": "Query the network topology graph (offline mock mode).",
 }
+
+
+def _get_graph_backend() -> str:
+    """Return the graph backend value (resolved after load_dotenv)."""
+    return os.environ.get("GRAPH_BACKEND", "cosmosdb").lower()
+
+
+def _get_openapi_spec_file() -> Path:
+    backend = _get_graph_backend()
+    return OPENAPI_SPEC_MAP.get(backend, OPENAPI_DIR / "cosmosdb.yaml")
 
 
 # ── Config ──────────────────────────────────────────────────────────
@@ -142,7 +148,8 @@ def load_graph_explorer_prompt() -> tuple[str, str]:
     Also reads description.md for the agent description.
     """
     base = PROMPTS_DIR / "graph_explorer"
-    language_file = LANGUAGE_FILE_MAP.get(GRAPH_BACKEND, "language_gremlin.md")
+    backend = _get_graph_backend()
+    language_file = LANGUAGE_FILE_MAP.get(backend, "language_gremlin.md")
 
     instructions = "\n\n---\n\n".join([
         (base / "core_instructions.md").read_text(encoding="utf-8").strip(),
@@ -159,7 +166,7 @@ def load_graph_explorer_prompt() -> tuple[str, str]:
     ]
     description = " ".join(desc_lines) if desc_lines else desc_text
 
-    print(f"  GraphExplorer prompt: {len(instructions)} chars, backend={GRAPH_BACKEND}, language={language_file}")
+    print(f"  GraphExplorer prompt: {len(instructions)} chars, backend={backend}, language={language_file}")
     return instructions, description
 
 
@@ -174,7 +181,7 @@ def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
     If *keep_path* is given (e.g. "/query/graph"), all other paths are
     removed from the spec so the agent only sees its own endpoint.
     """
-    raw = OPENAPI_SPEC_FILE.read_text(encoding="utf-8")
+    raw = _get_openapi_spec_file().read_text(encoding="utf-8")
     replacements = {
         "{base_url}": config["graph_query_api_uri"].rstrip("/"),
     }
@@ -195,7 +202,7 @@ def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
     return OpenApiTool(
         name="query_graph",
         spec=spec,
-        description=GRAPH_TOOL_DESCRIPTIONS.get(GRAPH_BACKEND, GRAPH_TOOL_DESCRIPTIONS["cosmosdb"]),
+        description=GRAPH_TOOL_DESCRIPTIONS.get(_get_graph_backend(), GRAPH_TOOL_DESCRIPTIONS["cosmosdb"]),
         auth=OpenApiAnonymousAuthDetails(),
     )
 
@@ -393,7 +400,7 @@ def main():
     config = load_config()
     print(f"  Project endpoint: {config['project_endpoint']}")
     print(f"  Model: {config['model']}")
-    print(f"  Graph backend: {GRAPH_BACKEND}")
+    print(f"  Graph backend: {_get_graph_backend()}")
     api_uri = config["graph_query_api_uri"]
     if api_uri:
         print(f"  Graph Query API: {api_uri}")
