@@ -1,72 +1,39 @@
-import React from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
-import { MetricCard } from './MetricCard';
-import { AlertChart } from './AlertChart';
+import { GraphTopologyViewer } from './GraphTopologyViewer';
 import { LogStream } from './LogStream';
 
-const metrics: { label: string; value: string; colorClass: string; delta?: string; deltaColor?: string }[] = [
-  {
-    label: 'Active Alerts',
-    value: '12',
-    colorClass: 'text-status-error',
-    delta: '▲ 4 vs 1h',
-    deltaColor: 'text-status-error',
-  },
-  {
-    label: 'Services Impacted',
-    value: '3',
-    colorClass: 'text-status-warning',
-  },
-  {
-    label: 'SLA At Risk',
-    value: '$115k/hr',
-    colorClass: 'text-status-error',
-  },
-  {
-    label: 'Anomalies (24h)',
-    value: '231',
-    colorClass: 'text-brand',
-    delta: '▲ 87 vs avg',
-    deltaColor: 'text-status-error',
-  },
-];
-
-function ResizeHandle() {
-  return <PanelResizeHandle className="metrics-resize-handle" />;
-}
-
 export function MetricsBar() {
+  const graphPanelRef = useRef<HTMLDivElement>(null);
+  const [graphSize, setGraphSize] = useState({ width: 800, height: 300 });
+
+  // Track panel resize via ResizeObserver
+  useEffect(() => {
+    const el = graphPanelRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setGraphSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="h-full px-6 py-3">
       <PanelGroup className="h-full">
-        {/* 4 metric cards */}
-        {metrics.map((m, i) => (
-          <React.Fragment key={m.label}>
-            {i > 0 && <ResizeHandle />}
-            <Panel defaultSize={8} minSize={5}>
-              <div className="h-full px-1">
-                <MetricCard
-                  label={m.label}
-                  value={m.value}
-                  colorClass={m.colorClass}
-                  delta={m.delta}
-                  deltaColor={m.deltaColor}
-                />
-              </div>
-            </Panel>
-          </React.Fragment>
-        ))}
-
-        {/* 5 — Anomaly chart */}
-        <ResizeHandle />
-        <Panel defaultSize={14} minSize={8}>
-          <div className="h-full px-1">
-            <AlertChart />
+        {/* Graph topology viewer */}
+        <Panel defaultSize={64} minSize={30}>
+          <div ref={graphPanelRef} className="h-full px-1">
+            <GraphTopologyViewer width={graphSize.width} height={graphSize.height} />
           </div>
         </Panel>
 
-        {/* 6 — API logs */}
-        <ResizeHandle />
+        <PanelResizeHandle className="metrics-resize-handle" />
+
+        {/* API logs (unchanged) */}
         <Panel defaultSize={36} minSize={12}>
           <div className="h-full px-1">
             <LogStream url="/api/logs" title="API" />

@@ -91,8 +91,16 @@ chmod +x deploy.sh && ./deploy.sh
 
 `deploy.sh` handles the entire pipeline: infrastructure provisioning, data loading,
 search index creation, Cosmos DB graph + telemetry loading, agent provisioning,
-and starting local services. Run with `--help` for options (e.g., `--skip-infra`,
-`--skip-agents`).
+and starting local services. Run with `--help` for options:
+
+| Flag | Effect |
+|------|--------|
+| `--skip-infra` | Skip `azd up` (reuse existing Azure resources) |
+| `--skip-index` | Skip AI Search index creation (keeps existing indexes) |
+| `--skip-data` | Skip Cosmos DB graph + telemetry loading |
+| `--skip-agents` | Skip AI Foundry agent provisioning |
+| `--skip-local` | Skip starting local API + frontend |
+| `--yes` | Skip all confirmation prompts |
 
 ### Option B: Step-by-step
 

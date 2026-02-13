@@ -4,6 +4,8 @@ Pydantic request/response models — shared across routers and backends.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -38,3 +40,41 @@ class TelemetryQueryResponse(BaseModel):
             "Read the message, fix your query, and retry."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Topology models — used by POST /query/topology (graph viewer)
+# ---------------------------------------------------------------------------
+
+
+class TopologyNode(BaseModel):
+    id: str
+    label: str  # vertex label (CoreRouter, AggSwitch, etc.)
+    properties: dict[str, Any] = {}
+
+
+class TopologyEdge(BaseModel):
+    id: str
+    source: str  # source vertex id
+    target: str  # target vertex id
+    label: str   # edge label (connects_to, aggregates_to, etc.)
+    properties: dict[str, Any] = {}
+
+
+class TopologyMeta(BaseModel):
+    node_count: int
+    edge_count: int
+    query_time_ms: float
+    labels: list[str] = []
+
+
+class TopologyRequest(BaseModel):
+    query: str | None = None
+    vertex_labels: list[str] | None = None
+
+
+class TopologyResponse(BaseModel):
+    nodes: list[TopologyNode] = []
+    edges: list[TopologyEdge] = []
+    meta: TopologyMeta | None = None
+    error: str | None = None

@@ -17,6 +17,7 @@
 #
 # Options:
 #   --skip-infra       Skip azd up (reuse existing Azure resources)
+#   --skip-index       Skip AI Search index creation (keeps existing indexes)
 #   --skip-data        Skip graph data loading (keeps existing Cosmos data)
 #   --skip-agents      Skip agent provisioning
 #   --skip-local       Skip starting local API + frontend
@@ -53,6 +54,7 @@ banner() {
 # ── Parse arguments ─────────────────────────────────────────────────
 
 SKIP_INFRA=false
+SKIP_INDEX=false
 SKIP_DATA=false
 SKIP_AGENTS=false
 SKIP_LOCAL=false
@@ -63,6 +65,7 @@ AZURE_LOC=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-infra)   SKIP_INFRA=true; shift ;;
+    --skip-index)   SKIP_INDEX=true; shift ;;
     --skip-data)    SKIP_DATA=true; shift ;;
     --skip-agents)  SKIP_AGENTS=true; shift ;;
     --skip-local)   SKIP_LOCAL=true; shift ;;
@@ -591,24 +594,29 @@ fi
 
 # ── Step 4: Create search indexes ───────────────────────────────────
 
-step "Step 4: Creating search indexes"
-
-info "Creating runbooks-index..."
-if uv run python scripts/create_runbook_indexer.py 2>&1; then
-  ok "Runbooks index created"
+if $SKIP_INDEX; then
+  step "Step 4: Search indexes (SKIPPED)"
+  info "Keeping existing search indexes."
 else
-  fail "Runbook indexer failed. Check output above."
-  fail "Common fix: ensure blob data was uploaded (check Storage Account containers)."
-  exit 1
-fi
+  step "Step 4: Creating search indexes"
 
-echo ""
-info "Creating tickets-index..."
-if uv run python scripts/create_tickets_indexer.py 2>&1; then
-  ok "Tickets index created"
-else
-  fail "Tickets indexer failed. Check output above."
-  exit 1
+  info "Creating runbooks-index..."
+  if uv run python scripts/create_runbook_indexer.py 2>&1; then
+    ok "Runbooks index created"
+  else
+    fail "Runbook indexer failed. Check output above."
+    fail "Common fix: ensure blob data was uploaded (check Storage Account containers)."
+    exit 1
+  fi
+
+  echo ""
+  info "Creating tickets-index..."
+  if uv run python scripts/create_tickets_indexer.py 2>&1; then
+    ok "Tickets index created"
+  else
+    fail "Tickets indexer failed. Check output above."
+    exit 1
+  fi
 fi
 
 # ── Step 5: Load Cosmos DB graph data ───────────────────────────────
