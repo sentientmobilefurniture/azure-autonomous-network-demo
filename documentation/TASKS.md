@@ -29,6 +29,7 @@
 - [x] Fix slow cosmosdb data ingestion — Async bulk upserts (50 concurrent), CSVs uploaded to blob storage, `--from-blob` flag for native blob-sourced ingestion
 - [ ] Make the agent flow even more WOWZA - Agent analyzing/auditing/classifying? Parallel execution doing some other stuff? The possibility of finetuning - THIS SHOULD ALL BE IN A KNOWLEDGE GRAPH DRREEEEEEAM deck
 - [x] Verify that the cosmosDB stuff works
+- [ ] Conversation persistence is necessary - Selection from a menu
 - [ ] Real-time graph visualization in UI (D3-force / Neovis.js over Bolt websockets)
 - [ ] What realtime azure component is most appropriate for ingesting real-time telemetry and alerts? Is it azure eventhub? can we simulate a constant alert ingestion via OTel, and then have a button to trigger a flood of horrible telemetry to simulate a scenario, and then fire an alert that then triggers the agent workflow? This should actually be V5
 - [ ] Multi scenario with data generalization should be V6 - We could create customized hardcoded scenarios to start and let the user select which one via a button - All the data pregenerated, ingested into cosmos - The button chooses which data tables?
@@ -44,3 +45,9 @@
 - [ ] Better and more readable formatting of demo output
 - [ ] Logs and Application Insights to trace server-side errors
 - [ ] Display final response somewhere — wireframe needed
+
+
+## Active Deployments
+
+cosmosprod4 (Dev deployment) - https://ca-app-4mboze7wbz4b6.calmmeadow-59f74fcf.eastus2.azurecontainerapps.io/ 
+cosmosgraphstable3 (Stable deployment - as of 13/02/26)
