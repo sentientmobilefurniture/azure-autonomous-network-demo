@@ -534,63 +534,7 @@ else
   info "App URI:            $APP_URI"
 fi
 
-# ── Step 3b: Open Cosmos DB firewall for local dev IP ───────────────
-
-step "Step 3b: Configuring Cosmos DB firewall for local access"
-
-DEV_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 api.ipify.org 2>/dev/null || echo "")
-
-if [[ -z "$DEV_IP" ]]; then
-  warn "Could not detect public IP. Skipping Cosmos DB firewall update."
-  warn "If data loading fails with 403, manually add your IP to Cosmos DB firewall."
-else
-  info "Detected dev IP: $DEV_IP"
-
-  # Derive resource group and account names from config
-  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ENDPOINT%%.*}"
-  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT#*//}"  # strip https://
-  RG_NAME="${AZURE_RESOURCE_GROUP:-rg-${AZD_ENV_NAME:-$AZURE_ENV_NAME}}"
-  COSMOS_NOSQL_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT}-nosql"
-
-  # Quick check: if dev IP is already in both firewalls, skip entirely
-  CURRENT_GREMLIN_IPS=$(az cosmosdb show --name "$COSMOS_GREMLIN_ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-  CURRENT_NOSQL_IPS=$(az cosmosdb show --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-  GREMLIN_HAS_IP=false; NOSQL_HAS_IP=false
-  echo "$CURRENT_GREMLIN_IPS" | grep -q "$DEV_IP" && GREMLIN_HAS_IP=true
-  echo "$CURRENT_NOSQL_IPS" | grep -q "$DEV_IP" && NOSQL_HAS_IP=true
-
-  if $GREMLIN_HAS_IP && $NOSQL_HAS_IP; then
-    ok "Dev IP $DEV_IP already in both Cosmos DB firewalls — skipping Step 3b"
-  else
-    # Add dev IP to Gremlin account firewall
-    if $GREMLIN_HAS_IP; then
-      ok "Dev IP already in Gremlin account firewall"
-    else
-      info "Adding dev IP to Cosmos DB Gremlin account firewall..."
-      NEW_IPS="${CURRENT_GREMLIN_IPS:+$CURRENT_GREMLIN_IPS,}$DEV_IP"
-      if az cosmosdb update --name "$COSMOS_GREMLIN_ACCOUNT" --resource-group "$RG_NAME" --ip-range-filter "$NEW_IPS" -o none 2>&1; then
-        ok "Added $DEV_IP to Gremlin account firewall"
-      else
-        warn "Failed to update Gremlin firewall. You may need to add $DEV_IP manually."
-      fi
-    fi
-
-    # Add dev IP to NoSQL account firewall (if it exists)
-    if az cosmosdb show --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" -o none 2>/dev/null; then
-      if $NOSQL_HAS_IP; then
-        ok "Dev IP already in NoSQL account firewall"
-      else
-        info "Adding dev IP to Cosmos DB NoSQL account firewall..."
-        NEW_IPS="${CURRENT_NOSQL_IPS:+$CURRENT_NOSQL_IPS,}$DEV_IP"
-        if az cosmosdb update --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" --ip-range-filter "$NEW_IPS" -o none 2>&1; then
-          ok "Added $DEV_IP to NoSQL account firewall"
-        else
-          warn "Failed to update NoSQL firewall. You may need to add $DEV_IP manually."
-        fi
-      fi
-    fi
-  fi
-fi
+# (Step 3b removed — firewall logic moved into Step 5 to avoid Azure Policy race)
 
 # ── Step 4: Create search indexes ───────────────────────────────────
 
@@ -626,6 +570,54 @@ if $SKIP_DATA; then
   info "Keeping existing graph data in Cosmos DB."
 else
   step "Step 5: Loading graph data into Cosmos DB"
+
+  # ── Open Cosmos DB firewall for local dev IP ────────────────────────
+  # Moved here from Step 3b: Azure Policy can re-disable publicNetworkAccess
+  # after infra deploy, so we force-enable it right before data loading.
+  DEV_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 api.ipify.org 2>/dev/null || echo "")
+  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ENDPOINT%%.*}"
+  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT#*//}"
+  RG_NAME="${AZURE_RESOURCE_GROUP:-rg-${AZD_ENV_NAME:-$AZURE_ENV_NAME}}"
+  COSMOS_NOSQL_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT}-nosql"
+
+  if [[ -z "$DEV_IP" ]]; then
+    warn "Could not detect public IP. If data loading fails with 403, add your IP manually."
+  else
+    info "Detected dev IP: $DEV_IP — ensuring Cosmos DB firewall is open"
+
+    _open_cosmos_firewall() {
+      local ACCOUNT="$1" LABEL="$2"
+      if ! az cosmosdb show --name "$ACCOUNT" --resource-group "$RG_NAME" -o none 2>/dev/null; then
+        return 0
+      fi
+
+      local CURRENT_IPS PUB_ACCESS HAS_IP NEW_IPS
+      CURRENT_IPS=$(az cosmosdb show --name "$ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+      PUB_ACCESS=$(az cosmosdb show --name "$ACCOUNT" --resource-group "$RG_NAME" --query "publicNetworkAccess" -o tsv 2>/dev/null)
+      HAS_IP=false
+      echo "$CURRENT_IPS" | grep -q "$DEV_IP" && HAS_IP=true
+
+      if $HAS_IP && [[ "$PUB_ACCESS" == "Enabled" ]]; then
+        ok "$LABEL: firewall OK (IP present, public access enabled)"
+        return 0
+      fi
+
+      NEW_IPS="${CURRENT_IPS:+$CURRENT_IPS,}$DEV_IP"
+      $HAS_IP && NEW_IPS="$CURRENT_IPS"
+
+      info "Updating $LABEL: public-network-access=ENABLED, ensuring dev IP in firewall..."
+      if az cosmosdb update --name "$ACCOUNT" --resource-group "$RG_NAME" \
+           --public-network-access ENABLED --ip-range-filter "$NEW_IPS" -o none 2>&1; then
+        ok "$LABEL: firewall updated"
+      else
+        warn "Failed to update $LABEL firewall. You may need to update it manually."
+        warn "  az cosmosdb update --name $ACCOUNT --resource-group $RG_NAME --public-network-access ENABLED"
+      fi
+    }
+
+    _open_cosmos_firewall "$COSMOS_GREMLIN_ACCOUNT" "Gremlin"
+    _open_cosmos_firewall "$COSMOS_NOSQL_ACCOUNT"   "NoSQL"
+  fi
 
   # Verify Cosmos credentials are set
   if [[ -z "${COSMOS_GREMLIN_ENDPOINT:-}" ]] || [[ -z "${COSMOS_GREMLIN_PRIMARY_KEY:-}" ]]; then
