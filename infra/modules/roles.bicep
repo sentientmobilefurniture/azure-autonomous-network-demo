@@ -26,6 +26,9 @@ param cosmosNoSqlAccountName string = ''
 @description('Principal ID of the Container App managed identity (for Cosmos DB NoSQL data access)')
 param containerAppPrincipalId string = ''
 
+@description('Principal ID of the API Container App managed identity (for Foundry agent invocation)')
+param apiContainerAppPrincipalId string = ''
+
 // ---------------------------------------------------------------------------
 // Built-in Role Definition GUIDs
 // ---------------------------------------------------------------------------
@@ -39,6 +42,10 @@ var roles = {
   searchServiceContributor: '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
   // Cosmos DB Built-in Data Contributor (data-plane RBAC for NoSQL API)
   cosmosDbDataContributor: '00000000-0000-0000-0000-000000000002'
+  // Azure AI Developer (grants Microsoft.MachineLearningServices/workspaces/agents/* for Foundry agent invocation)
+  azureAiDeveloper: '64702f94-c441-49e6-a78b-ef80e0188fee'
+  // Cognitive Services User (broad data-plane: Microsoft.CognitiveServices/* including AIServices/agents)
+  cognitiveServicesUser: 'a97b65f3-24c7-4388-baec-2e87135dc908'
 }
 
 // ---------------------------------------------------------------------------
@@ -204,5 +211,52 @@ resource containerAppCosmosDbDataContributor 'Microsoft.DocumentDB/databaseAccou
     principalId: containerAppPrincipalId
     roleDefinitionId: '${cosmosNoSqlAccount.id}/sqlRoleDefinitions/${roles.cosmosDbDataContributor}'
     scope: cosmosNoSqlAccount.id
+  }
+}
+
+// ============================================================================
+// API CONTAINER APP ROLE ASSIGNMENTS (Foundry agent invocation)
+// ============================================================================
+
+// API Container App MI → Cognitive Services OpenAI User (invoke Foundry agents)
+resource apiOpenAiUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(apiContainerAppPrincipalId)) {
+  name: guid(foundry.id, apiContainerAppPrincipalId, roles.cognitiveServicesOpenAiUser)
+  scope: foundry
+  properties: {
+    principalId: apiContainerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesOpenAiUser)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// API Container App MI → Cognitive Services Contributor (manage agents, threads, runs)
+resource apiCognitiveServicesContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(apiContainerAppPrincipalId)) {
+  name: guid(foundry.id, apiContainerAppPrincipalId, roles.cognitiveServicesContributor)
+  scope: foundry
+  properties: {
+    principalId: apiContainerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesContributor)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// API Container App MI → Azure AI Developer (Foundry agent invocation via ML workspace namespace)
+resource apiAzureAiDeveloper 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(apiContainerAppPrincipalId)) {
+  name: guid(resourceGroup().id, apiContainerAppPrincipalId, roles.azureAiDeveloper)
+  properties: {
+    principalId: apiContainerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.azureAiDeveloper)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// API Container App MI → Cognitive Services User (broad data-plane access including AIServices/agents/*)
+resource apiCognitiveServicesUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(apiContainerAppPrincipalId)) {
+  name: guid(foundry.id, apiContainerAppPrincipalId, roles.cognitiveServicesUser)
+  scope: foundry
+  properties: {
+    principalId: apiContainerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesUser)
+    principalType: 'ServicePrincipal'
   }
 }

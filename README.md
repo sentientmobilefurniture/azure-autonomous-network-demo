@@ -26,15 +26,25 @@ The orchestrator correlates all findings into a structured diagnosis with
 recommended remediation actions.
 
 ```
-Frontend :5173  ──POST /api/alert──▶  API :8000  ──SDK──▶  Orchestrator (Foundry)
-                ◀──── SSE stream ────                        │
-                                                  ┌──────────┴──────────┐
-                                                  ▼         ▼          ▼
-                                            GraphExplorer  Telemetry  RunbookKB ...
-                                                  │         │
-                                                  ▼         ▼
-                                            graph-query-api :8100
-                                            (Cosmos Gremlin / Mock)
+                         ┌──────────────────────────────────────────┐
+                         │       Unified Container App (:80)        │
+                         │                                          │
+Browser ──POST /api/──▶  │  nginx :80                               │
+         ◀──SSE stream── │   ├─ /        → React SPA (static)      │
+                         │   ├─ /api/*   → uvicorn :8000 (API)     │
+                         │   ├─ /health  → uvicorn :8000            │
+                         │   └─ /query/* → uvicorn :8100 (graph)   │
+                         │                                          │
+                         │  supervisord manages all 3 processes     │
+                         └────────────────┬─────────────────────────┘
+                                          │ azure-ai-agents SDK
+                              ┌───────────┴──────────┐
+                              ▼         ▼            ▼
+                        GraphExplorer  Telemetry  RunbookKB ...
+                              │         │
+                              ▼         ▼
+                        graph-query-api (same container)
+                        (Cosmos Gremlin / Mock)
 ```
 
 ---
@@ -49,7 +59,7 @@ The `graph-query-api` microservice supports two backends, controlled by the
 | `cosmosdb` | Azure Cosmos DB (Gremlin API) | `azd up` provisions automatically | **Default.** Fully automated setup. |
 | `mock` | Static JSON responses | No external dependencies | Local development & testing. |
 
-Setup guide: **[Cosmos DB Setup](documentation/SETUP_COSMOSDB.md)**
+Setup guide: **[Cosmos DB Setup](documentation/deprecated/SETUP_COSMOSDB.md)** (archived — `deploy.sh` now automates this)
 
 ---
 
@@ -72,45 +82,65 @@ azd auth login
 
 ## Quick Start
 
-### 1. Configure
+### Option A: Automated (recommended)
+
+```bash
+cp azure_config.env.template azure_config.env
+chmod +x deploy.sh && ./deploy.sh
+```
+
+`deploy.sh` handles the entire pipeline: infrastructure provisioning, data loading,
+search index creation, Cosmos DB graph + telemetry loading, agent provisioning,
+and starting local services. Run with `--help` for options (e.g., `--skip-infra`,
+`--skip-agents`).
+
+### Option B: Step-by-step
+
+#### 1. Configure
 
 ```bash
 cp azure_config.env.template azure_config.env
 # Edit azure_config.env — set GRAPH_BACKEND, etc.
 ```
 
-### 2. Deploy infrastructure
+#### 2. Deploy infrastructure
 
 ```bash
 azd up -e <env-name>
 ```
 
-`azd up` provisions all Azure resources, builds and deploys the `graph-query-api`
-container, uploads data to blob storage, and populates `azure_config.env` with
-deployment outputs.
+`azd up` provisions all Azure resources, builds and deploys the **unified
+container** (nginx + API + graph-query-api), uploads data to blob storage,
+and populates `azure_config.env` with deployment outputs.
 
 Resources deployed:
+- VNet (Container Apps + Private Endpoints subnets)
 - AI Foundry (account + project + GPT-4.1 deployment)
 - Azure AI Search
 - Storage Account + blob containers (runbooks, tickets)
 - Container Apps Environment (ACR + Log Analytics)
-- `graph-query-api` Container App (system-assigned managed identity)
+- **Unified Container App** (nginx + API + graph-query-api, system-assigned managed identity)
 - Cosmos DB Gremlin account + database + graph
+- Cosmos DB NoSQL account (telemetry)
+- Cosmos DB Private Endpoints
+- RBAC role assignments (5 roles for container app identity)
 
-### 3. Set up your graph backend
+#### 3. Load Cosmos DB data
 
-Follow the backend-specific guide:
+```bash
+source azure_config.env
+uv run python scripts/cosmos/provision_cosmos_gremlin.py
+uv run python scripts/cosmos/provision_cosmos_telemetry.py
+```
 
-- **Cosmos DB** → [documentation/SETUP_COSMOSDB.md](documentation/SETUP_COSMOSDB.md)
-
-### 4. Create search indices
+#### 4. Create search indices
 
 ```bash
 uv run python scripts/create_runbook_indexer.py
 uv run python scripts/create_tickets_indexer.py
 ```
 
-### 5. Provision AI agents
+#### 5. Provision AI agents
 
 ```bash
 uv run python scripts/provision_agents.py
@@ -119,13 +149,19 @@ uv run python scripts/provision_agents.py
 Creates 5 Foundry agents: Orchestrator + GraphExplorer + Telemetry + RunbookKB +
 HistoricalTicket.
 
-### 6. Run the demo
+#### 6. Run the demo
+
+**Production (Azure):** After `deploy.sh` or `azd up` completes, the app is live at
+the Container App URL (printed as `APP_URI` in `azure_config.env`). No local
+services needed.
+
+**Local development:**
 
 ```bash
 # Terminal 1 — Backend API
 cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Terminal 2 — Frontend
+# Terminal 2 — Frontend (dev server with HMR)
 cd frontend && npm install && npm run dev
 ```
 
@@ -137,17 +173,21 @@ Open http://localhost:5173
 
 ```
 .
-├── azure.yaml                  # azd service definitions & hooks
+├── azure.yaml                  # azd service definitions & hooks (1 unified service)
 ├── azure_config.env            # Runtime config (single source of truth, gitignored)
 ├── azure_config.env.template   # Template for azure_config.env
+├── deploy.sh                   # End-to-end deployment script
+├── Dockerfile                  # Unified container: nginx + API + graph-query-api
+├── nginx.conf                  # Reverse proxy config (hardcoded localhost)
+├── supervisord.conf            # Process manager for unified container
+├── .dockerignore               # Build context exclusions
 ├── pyproject.toml              # Python deps for scripts/ (uv-managed)
 │
 ├── api/                        # FastAPI backend (port 8000)
 │   └── app/
 │       ├── main.py             # App factory, CORS, router mounting
 │       ├── orchestrator.py     # Agent orchestrator bridge
-│       ├── routers/            # REST endpoints (alert, agents, logs)
-│       └── mcp/                # MCP server (stub)
+│       └── routers/            # REST endpoints (alert, agents, logs)
 │
 ├── graph-query-api/            # Graph & telemetry microservice (port 8100)
 │   ├── main.py                 # FastAPI app with lifespan management
@@ -157,19 +197,18 @@ Open http://localhost:5173
 │   ├── backends/
 │   │   ├── cosmosdb.py         # Cosmos DB Gremlin (gremlinpython)
 │   │   └── mock.py             # Static JSON responses
-│   ├── openapi/                # Backend-specific OpenAPI specs
-│   └── Dockerfile
+│   └── openapi/                # Backend-specific OpenAPI specs
 │
-├── frontend/                   # React/Vite NOC dashboard (port 5173)
+├── frontend/                   # React/Vite NOC dashboard
 │   └── src/
 │       ├── App.tsx             # Main app component
 │       ├── components/         # AlertPanel, AgentTimeline, etc.
 │       └── hooks/              # SSE streaming hook
 │
 ├── infra/                      # Bicep IaC (azd up)
-│   ├── main.bicep              # Orchestrator (subscription-scoped)
+│   ├── main.bicep              # Orchestrator (subscription-scoped, 1 Container App)
 │   ├── main.bicepparam         # Parameter file (reads env vars)
-│   └── modules/                # AI Foundry, Search, Storage, Cosmos, Container Apps
+│   └── modules/                # AI Foundry, Search, Storage, Cosmos, VNet, Roles
 │
 ├── data/
 │   ├── graph_schema.yaml       # Declarative graph schema manifest
@@ -184,7 +223,8 @@ Open http://localhost:5173
 │   ├── create_runbook_indexer.py
 │   ├── create_tickets_indexer.py
 │   ├── cosmos/                 # Cosmos DB-specific scripts
-│   │   └── provision_cosmos_gremlin.py   # YAML-manifest-driven graph loader
+│   │   ├── provision_cosmos_gremlin.py   # YAML-manifest-driven graph loader
+│   │   └── provision_cosmos_telemetry.py # CSV telemetry data → Cosmos NoSQL
 │   └── testing_scripts/        # Smoke tests & CLI orchestrator
 │
 ├── hooks/
@@ -194,19 +234,14 @@ Open http://localhost:5173
 └── documentation/
     ├── ARCHITECTURE.md         # Full architecture reference
     ├── SCENARIO.md             # Demo scenario narrative
-    ├── SETUP_COSMOSDB.md       # Cosmos DB backend setup guide
-    ├── V5MULTISCENARIODEMO.md  # V5 multi-scenario demo spec
-    ├── VUNKAGENTRETHINK.md     # Agent architecture rethink notes
-    ├── assets/                 # Screenshots & diagrams
-    ├── ui_states/              # UI state screenshots
-    └── previous_dev_phases/    # Archived design docs
+    └── ...
 ```
 
 ---
 
 ## Operations
 
-### Running locally
+### Running locally (development)
 
 ```bash
 # Terminal 1 — Backend API
@@ -219,19 +254,22 @@ cd frontend && npm run dev
 cd graph-query-api && source ../azure_config.env && uv run uvicorn main:app --host 0.0.0.0 --port 8100 --reload
 ```
 
-> **Note:** The backend API talks to the **deployed** `graph-query-api` in Azure
-> (via agents' `OpenApiTool`). Running it locally is for direct testing only.
+> **Note:** When running locally, the API talks to **remote** Azure resources
+> (Foundry agents, Cosmos DB). The agents' `OpenApiTool` calls go to the
+> **deployed** Container App URL (set in `GRAPH_QUERY_API_URI`).
+> Running graph-query-api locally is for direct endpoint testing only.
 
-### Redeploying graph-query-api
+### Redeploying the app
 
 ```bash
-azd deploy graph-query-api    # Rebuilds Docker image in ACR, updates Container App
+azd deploy app    # Rebuilds unified container in ACR, creates new Container App revision
 ```
 
 ### Reprovisioning agents
 
 ```bash
 uv run python scripts/provision_agents.py    # Deletes old agents, creates fresh ones
+azd deploy app                                # Rebake container with new agent_ids.json
 ```
 
 ### CLI testing (no UI)
@@ -248,17 +286,17 @@ uv run python scripts/testing_scripts/test_orchestrator.py "08:15:00 MAJOR ROUTE
 
 ```bash
 source azure_config.env
-CA_NAME=ca-graphquery-<suffix>    # Check Azure portal for exact name
-RG=$AZURE_RESOURCE_GROUP
+# Container App name format: ca-app-<resourceToken>
+CA_NAME=$(az containerapp list --resource-group $AZURE_RESOURCE_GROUP --query "[?contains(name,'ca-app')].name" -o tsv)
 
 # View logs
-az containerapp logs show --name $CA_NAME --resource-group $RG --type console --tail 50
+az containerapp logs show --name $CA_NAME --resource-group $AZURE_RESOURCE_GROUP --type console --tail 50
 
 # Stream logs
-az containerapp logs show --name $CA_NAME --resource-group $RG --type console --follow
+az containerapp logs show --name $CA_NAME --resource-group $AZURE_RESOURCE_GROUP --type console --follow
 
 # Check status
-az containerapp show --name $CA_NAME --resource-group $RG \
+az containerapp show --name $CA_NAME --resource-group $AZURE_RESOURCE_GROUP \
   --query "{fqdn:properties.configuration.ingress.fqdn, revision:properties.latestRevisionName}" -o table
 ```
 

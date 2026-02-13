@@ -15,10 +15,11 @@ hooks:
     run: hooks/postprovision.sh
     description: Upload runbooks and tickets to blob storage
 
-# Services
+# Single unified service — all 3 services (nginx + API + graph-query-api)
+# run in one container via supervisord
 services:
-  graph-query-api:
-    project: ./graph-query-api
+  app:
+    project: .
     language: python
     host: containerapp
     docker:

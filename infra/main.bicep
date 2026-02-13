@@ -30,6 +30,9 @@ param gptCapacity int = 300
 @allowed(['cosmosdb'])
 param graphBackend string = 'cosmosdb'
 
+@description('Developer IP for local Cosmos DB access (leave empty in CI/CD)')
+param devIpAddress string = ''
+
 // Derived flag for conditional deployment
 var deployCosmosGremlin = graphBackend == 'cosmosdb'
 
@@ -61,6 +64,19 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 // ---------------------------------------------------------------------------
 // Module Deployments
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Virtual Network (Container Apps + Private Endpoints subnets)
+// ---------------------------------------------------------------------------
+
+module vnet 'modules/vnet.bicep' = {
+  scope: rg
+  params: {
+    name: 'vnet-${resourceToken}'
+    location: location
+    tags: tags
+  }
+}
 
 module search 'modules/search.bicep' = {
   scope: rg
@@ -94,6 +110,7 @@ module cosmosGremlin 'modules/cosmos-gremlin.bicep' = if (deployCosmosGremlin) {
     partitionKeyPath: '/partitionKey'
     maxThroughput: 1000
     tags: union(tags, { component: 'graph-backend' })
+    devIpAddress: devIpAddress
   }
 }
 
@@ -114,7 +131,7 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Container Apps (graph-query-api micro-service)
+// Container Apps Environment + Unified App
 // ---------------------------------------------------------------------------
 
 module containerAppsEnv 'modules/container-apps-environment.bicep' = {
@@ -123,24 +140,31 @@ module containerAppsEnv 'modules/container-apps-environment.bicep' = {
     name: 'cae-${resourceToken}'
     location: location
     tags: tags
+    infrastructureSubnetId: vnet.outputs.containerAppsSubnetId
   }
 }
 
-module graphQueryApi 'modules/container-app.bicep' = {
+// Single unified container: nginx (:80) + API (:8000) + graph-query-api (:8100)
+module app 'modules/container-app.bicep' = {
   scope: rg
   params: {
-    name: 'ca-graphquery-${resourceToken}'
+    name: 'ca-app-${resourceToken}'
     location: location
-    tags: union(tags, { 'azd-service-name': 'graph-query-api' })
+    tags: union(tags, { 'azd-service-name': 'app' })
     containerAppsEnvironmentId: containerAppsEnv.outputs.id
     containerRegistryName: containerAppsEnv.outputs.registryName
-    targetPort: 8100
-    externalIngress: true   // Foundry OpenApiTool calls from outside the VNet
+    targetPort: 80
+    externalIngress: true
     minReplicas: 1
-    maxReplicas: 2
-    cpu: '0.25'
-    memory: '0.5Gi'
+    maxReplicas: 3
+    cpu: '1.0'
+    memory: '2Gi'
     env: union([
+      { name: 'PROJECT_ENDPOINT', value: aiFoundry.outputs.foundryEndpoint }
+      { name: 'AI_FOUNDRY_PROJECT_NAME', value: aiFoundry.outputs.projectName }
+      { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
+      { name: 'CORS_ORIGINS', value: '*' }
+      { name: 'AGENT_IDS_PATH', value: '/app/scripts/agent_ids.json' }
       { name: 'GRAPH_BACKEND', value: graphBackend }
     ], deployCosmosGremlin ? [
       { name: 'COSMOS_GREMLIN_ENDPOINT', value: cosmosGremlin!.outputs.gremlinEndpoint }
@@ -166,7 +190,28 @@ module roles 'modules/roles.bicep' = {
     searchPrincipalId: search.outputs.principalId
     foundryPrincipalId: aiFoundry.outputs.foundryPrincipalId
     cosmosNoSqlAccountName: deployCosmosGremlin ? 'cosmos-gremlin-${resourceToken}-nosql' : ''
-    containerAppPrincipalId: graphQueryApi.outputs.principalId
+    containerAppPrincipalId: app.outputs.principalId
+    apiContainerAppPrincipalId: app.outputs.principalId
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Private Endpoints — Cosmos DB Gremlin + NoSQL over VNet backbone
+// Protects the Container App → Cosmos DB path from Azure Policy toggling
+// publicNetworkAccess. Traffic stays on the VNet regardless.
+// ---------------------------------------------------------------------------
+
+module cosmosPrivateEndpoints 'modules/cosmos-private-endpoints.bicep' = if (deployCosmosGremlin) {
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    vnetId: vnet.outputs.id
+    privateEndpointsSubnetId: vnet.outputs.privateEndpointsSubnetId
+    cosmosGremlinAccountId: cosmosGremlin!.outputs.cosmosAccountId
+    cosmosGremlinAccountName: cosmosGremlin!.outputs.cosmosAccountName
+    cosmosNoSqlAccountId: cosmosGremlin!.outputs.cosmosNoSqlAccountId
+    cosmosNoSqlAccountName: cosmosGremlin!.outputs.cosmosNoSqlAccountName
   }
 }
 
@@ -175,6 +220,7 @@ module roles 'modules/roles.bicep' = {
 // ---------------------------------------------------------------------------
 
 output AZURE_RESOURCE_GROUP string = rg.name
+output AZURE_VNET_NAME string = vnet.outputs.name
 output AZURE_AI_FOUNDRY_NAME string = aiFoundry.outputs.foundryName
 output AZURE_AI_FOUNDRY_ENDPOINT string = aiFoundry.outputs.foundryEndpoint
 output AZURE_AI_FOUNDRY_PROJECT_NAME string = aiFoundry.outputs.projectName
@@ -182,8 +228,10 @@ output AZURE_SEARCH_NAME string = search.outputs.name
 output AZURE_SEARCH_ENDPOINT string = search.outputs.endpoint
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerAppsEnv.outputs.registryEndpoint
-output GRAPH_QUERY_API_URI string = graphQueryApi.outputs.uri
-output GRAPH_QUERY_API_PRINCIPAL_ID string = graphQueryApi.outputs.principalId
+output APP_URI string = app.outputs.uri
+output APP_PRINCIPAL_ID string = app.outputs.principalId
+// Foundry agents use GRAPH_QUERY_API_URI — same container, same URL
+output GRAPH_QUERY_API_URI string = app.outputs.uri
 output COSMOS_GREMLIN_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.gremlinEndpoint : ''
 output COSMOS_GREMLIN_ACCOUNT_NAME string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosAccountName : ''
 output COSMOS_NOSQL_ENDPOINT string = deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosNoSqlEndpoint : ''

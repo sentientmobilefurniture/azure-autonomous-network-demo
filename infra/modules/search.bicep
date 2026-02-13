@@ -13,7 +13,7 @@ param tags object = {}
 
 @description('SKU for the search service')
 @allowed(['free', 'basic', 'standard', 'standard2', 'standard3'])
-param skuName string = 'basic'
+param skuName string = 'standard'
 
 // ---------------------------------------------------------------------------
 // AI Search Service

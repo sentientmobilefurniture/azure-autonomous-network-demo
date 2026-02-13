@@ -5,13 +5,9 @@ Returns the list of provisioned Foundry agents.
 Reads from agent_ids.json when available, otherwise returns stub data.
 """
 
-import logging
-
 from fastapi import APIRouter
 
 from app.orchestrator import load_agents_from_file
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agents"])
 

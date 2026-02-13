@@ -8,9 +8,9 @@
 #   2. Data uploads (runbooks → blob, tickets → blob)
 #   3. Search indexes (runbooks-index, tickets-index)
 #   4. Cosmos DB graph data (vertices + edges from graph_schema.yaml)
-#   5. Container App deployment (graph-query-api)
+#   5. Unified Container App deployment (nginx + API + graph-query-api)
 #   6. AI Foundry agents (5 agents: orchestrator + 4 specialists)
-#   7. Local services (API :8000, Frontend :5173)
+#   7. Local services (optional — all services deployed to Azure)
 #
 # Usage:
 #   chmod +x deploy.sh && ./deploy.sh
@@ -164,6 +164,16 @@ if ! azd auth login --check-status &>/dev/null 2>&1; then
   azd auth login
 fi
 ok "azd authenticated"
+
+# Ensure required resource providers are registered (idempotent, skips if already registered)
+for provider in Microsoft.App Microsoft.ContainerService; do
+  state=$(az provider show --namespace "$provider" --query "registrationState" -o tsv 2>/dev/null || echo "NotRegistered")
+  if [[ "$state" != "Registered" ]]; then
+    info "Registering resource provider $provider (state: $state)..."
+    az provider register --namespace "$provider" --wait
+    ok "$provider registered"
+  fi
+done
 
 # ── Step 1: Environment selection ───────────────────────────────────
 
@@ -332,9 +342,9 @@ COSMOS_NOSQL_DATABASE=${COSMOS_NOSQL_DATABASE:-telemetrydb}
 # --- App / CORS ---
 CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
 
-# --- graph-query-api (AUTO: populated after azd up) ---
+# --- Unified app (AUTO: populated after azd up) ---
+APP_URI=${APP_URI:-}
 GRAPH_QUERY_API_URI=${GRAPH_QUERY_API_URI:-}
-GRAPH_QUERY_API_PRINCIPAL_ID=${GRAPH_QUERY_API_PRINCIPAL_ID:-}
 ENVEOF
 
 ok "azure_config.env written with GRAPH_BACKEND=cosmosdb"
@@ -358,7 +368,7 @@ else
   echo "   • Storage Account (runbooks + tickets blob containers)"
   echo "   • Cosmos DB Gremlin (database: networkgraph, graph: topology)"
   echo "   • Container Apps Environment (ACR + Log Analytics)"
-  echo "   • graph-query-api Container App"
+  echo "   • Unified Container App (nginx + API + graph-query-api)"
   echo ""
 
   if ! $AUTO_YES; then
@@ -373,10 +383,25 @@ else
   azd env set GRAPH_BACKEND "cosmosdb"
   azd env set GPT_CAPACITY_1K_TPM "${GPT_CAPACITY_1K_TPM:-300}"
 
+  # Auto-detect dev IP for Cosmos DB firewall whitelist
+  if [[ -z "${DEV_IP_ADDRESS:-}" ]]; then
+    info "Detecting dev machine IP for Cosmos DB firewall..."
+    DEV_IP_ADDRESS=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || true)
+    if [[ -n "$DEV_IP_ADDRESS" ]]; then
+      export DEV_IP_ADDRESS
+      ok "Dev IP: $DEV_IP_ADDRESS (will be added to Cosmos DB firewall)"
+    else
+      warn "Could not detect dev IP — Cosmos DB will only be accessible from VNet"
+    fi
+  else
+    export DEV_IP_ADDRESS
+    ok "Using DEV_IP_ADDRESS=$DEV_IP_ADDRESS for Cosmos DB firewall"
+  fi
+
   info "Running azd up (this may take 10-15 minutes)..."
   echo ""
 
-  # azd up runs: preprovision → Bicep → deploy graph-query-api → postprovision
+  # azd up runs: preprovision → Bicep → deploy unified app → postprovision
   if ! azd up; then
     fail "azd up failed. Check the output above for errors."
     fail "Common issues:"
@@ -397,7 +422,7 @@ else
   [[ -z "${STORAGE_ACCOUNT_NAME:-}" ]]    && MISSING_AFTER_AZD+=("STORAGE_ACCOUNT_NAME")
   [[ -z "${AI_FOUNDRY_NAME:-}" ]]         && MISSING_AFTER_AZD+=("AI_FOUNDRY_NAME")
   [[ -z "${PROJECT_ENDPOINT:-}" ]]        && MISSING_AFTER_AZD+=("PROJECT_ENDPOINT")
-  [[ -z "${GRAPH_QUERY_API_URI:-}" ]]     && MISSING_AFTER_AZD+=("GRAPH_QUERY_API_URI")
+  [[ -z "${APP_URI:-}" ]]                  && MISSING_AFTER_AZD+=("APP_URI")
   [[ -z "${COSMOS_GREMLIN_ENDPOINT:-}" ]] && MISSING_AFTER_AZD+=("COSMOS_GREMLIN_ENDPOINT")
 
   if (( ${#MISSING_AFTER_AZD[@]} > 0 )); then
@@ -409,7 +434,65 @@ else
 
   ok "All critical config values populated"
   info "Cosmos DB endpoint: $COSMOS_GREMLIN_ENDPOINT"
-  info "Graph Query API:    $GRAPH_QUERY_API_URI"
+  info "App URI:            $APP_URI"
+fi
+
+# ── Step 3b: Open Cosmos DB firewall for local dev IP ───────────────
+
+step "Step 3b: Configuring Cosmos DB firewall for local access"
+
+DEV_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 api.ipify.org 2>/dev/null || echo "")
+
+if [[ -z "$DEV_IP" ]]; then
+  warn "Could not detect public IP. Skipping Cosmos DB firewall update."
+  warn "If data loading fails with 403, manually add your IP to Cosmos DB firewall."
+else
+  info "Detected dev IP: $DEV_IP"
+
+  # Derive resource group and account names from config
+  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ENDPOINT%%.*}"
+  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT#*//}"  # strip https://
+  RG_NAME="${AZURE_RESOURCE_GROUP:-rg-${AZD_ENV_NAME:-$AZURE_ENV_NAME}}"
+  COSMOS_NOSQL_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT}-nosql"
+
+  # Quick check: if dev IP is already in both firewalls, skip entirely
+  CURRENT_GREMLIN_IPS=$(az cosmosdb show --name "$COSMOS_GREMLIN_ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+  CURRENT_NOSQL_IPS=$(az cosmosdb show --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+  GREMLIN_HAS_IP=false; NOSQL_HAS_IP=false
+  echo "$CURRENT_GREMLIN_IPS" | grep -q "$DEV_IP" && GREMLIN_HAS_IP=true
+  echo "$CURRENT_NOSQL_IPS" | grep -q "$DEV_IP" && NOSQL_HAS_IP=true
+
+  if $GREMLIN_HAS_IP && $NOSQL_HAS_IP; then
+    ok "Dev IP $DEV_IP already in both Cosmos DB firewalls — skipping Step 3b"
+  else
+    # Add dev IP to Gremlin account firewall
+    if $GREMLIN_HAS_IP; then
+      ok "Dev IP already in Gremlin account firewall"
+    else
+      info "Adding dev IP to Cosmos DB Gremlin account firewall..."
+      NEW_IPS="${CURRENT_GREMLIN_IPS:+$CURRENT_GREMLIN_IPS,}$DEV_IP"
+      if az cosmosdb update --name "$COSMOS_GREMLIN_ACCOUNT" --resource-group "$RG_NAME" --ip-range-filter "$NEW_IPS" -o none 2>&1; then
+        ok "Added $DEV_IP to Gremlin account firewall"
+      else
+        warn "Failed to update Gremlin firewall. You may need to add $DEV_IP manually."
+      fi
+    fi
+
+    # Add dev IP to NoSQL account firewall (if it exists)
+    if az cosmosdb show --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" -o none 2>/dev/null; then
+      if $NOSQL_HAS_IP; then
+        ok "Dev IP already in NoSQL account firewall"
+      else
+        info "Adding dev IP to Cosmos DB NoSQL account firewall..."
+        NEW_IPS="${CURRENT_NOSQL_IPS:+$CURRENT_NOSQL_IPS,}$DEV_IP"
+        if az cosmosdb update --name "$COSMOS_NOSQL_ACCOUNT" --resource-group "$RG_NAME" --ip-range-filter "$NEW_IPS" -o none 2>&1; then
+          ok "Added $DEV_IP to NoSQL account firewall"
+        else
+          warn "Failed to update NoSQL firewall. You may need to add $DEV_IP manually."
+        fi
+      fi
+    fi
+  fi
 fi
 
 # ── Step 4: Create search indexes ───────────────────────────────────
@@ -510,13 +593,13 @@ else
   fi
 fi
 
-# ── Step 6: Verify graph-query-api health ───────────────────────────
+# ── Step 6: Verify unified app health ───────────────────────────────
 
-step "Step 6: Verifying graph-query-api deployment"
+step "Step 6: Verifying unified app deployment"
 
-GQ_URI="${GRAPH_QUERY_API_URI:-}"
+GQ_URI="${APP_URI:-}"
 if [[ -z "$GQ_URI" ]]; then
-  fail "GRAPH_QUERY_API_URI not set — cannot verify deployment."
+  fail "APP_URI not set — cannot verify deployment."
   exit 1
 fi
 
@@ -537,14 +620,14 @@ done
 
 if $HEALTH_OK; then
   HEALTH_BODY=$(curl -s "$GQ_URI/health" 2>/dev/null)
-  ok "graph-query-api is healthy: $HEALTH_BODY"
+  ok "App is healthy: $HEALTH_BODY"
 else
-  fail "graph-query-api not responding after 5 attempts."
+  fail "App not responding after 5 attempts."
   fail "The Container App may still be starting or the image build may have failed."
   echo ""
   info "Debug commands:"
   echo "   az containerapp logs show --name <ca-name> --resource-group ${AZURE_RESOURCE_GROUP:-} --type console --tail 50"
-  echo "   azd deploy graph-query-api"
+  echo "   azd deploy app"
   warn "Continuing anyway — agent provisioning may fail if the API is down."
 fi
 
@@ -587,17 +670,42 @@ else
   fi
 fi
 
-# ── Step 8: Start local services ────────────────────────────────────
+# ── Step 7b: Redeploy API with agent_ids.json ──────────────────────
+
+step "Step 7b: Redeploying app with agent_ids.json"
+
+if [[ -f "$AGENT_IDS_FILE" ]]; then
+  info "agent_ids.json exists — rebuilding app container to include it..."
+
+  if azd deploy app 2>&1; then
+    ok "App redeployed with agent_ids.json"
+  else
+    fail "App redeploy failed."
+    echo "   To retry: azd deploy app"
+    warn "Continuing — the API container may not have agent IDs yet."
+  fi
+else
+  warn "Skipping app redeploy — agent_ids.json not found."
+  warn "You can redeploy later: azd deploy app"
+fi
+
+# ── Step 8: Start local services (optional — all services deployed to Azure) ──
 
 if $SKIP_LOCAL; then
   step "Step 8: Local services (SKIPPED)"
   echo ""
-  ok "Deployment complete! Start services manually:"
+  ok "Deployment complete! All services are running in Azure."
   echo ""
+  echo "   App URL:   ${APP_URI:-<check azure_config.env>}"
+  echo ""
+  echo "   To run locally instead:"
   echo "   # Terminal 1 — API"
   echo "   cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
   echo ""
-  echo "   # Terminal 2 — Frontend"
+  echo "   # Terminal 2 — Graph Query API"
+  echo "   cd graph-query-api && source ../azure_config.env && uv run uvicorn main:app --host 0.0.0.0 --port 8100 --reload"
+  echo ""
+  echo "   # Terminal 3 — Frontend"
   echo "   cd frontend && npm install && npm run dev"
   echo ""
   echo "   Open http://localhost:5173"
@@ -670,7 +778,7 @@ echo "    AI Foundry:       ${AI_FOUNDRY_NAME:-<pending>}"
 echo "    AI Search:        ${AI_SEARCH_NAME:-<pending>}"
 echo "    Storage:          ${STORAGE_ACCOUNT_NAME:-<pending>}"
 echo "    Cosmos DB:        ${COSMOS_GREMLIN_ENDPOINT:-<pending>}"
-echo "    graph-query-api:  ${GRAPH_QUERY_API_URI:-<pending>}"
+echo "    App URL:          ${APP_URI:-<pending>}"
 echo ""
 
 if [[ -f "$AGENT_IDS_FILE" ]]; then
@@ -704,7 +812,7 @@ fi
 
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
-echo "    azd deploy graph-query-api         # Redeploy container after code changes"
+echo "    azd deploy app                     # Redeploy unified app after code changes"
 echo "    source azure_config.env && uv run python scripts/provision_agents.py --force  # Re-provision agents"
 echo "    azd down --force --purge           # Tear down all Azure resources"
 echo ""
