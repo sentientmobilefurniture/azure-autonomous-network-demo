@@ -12,11 +12,11 @@ interface DiagnosisPanelProps {
 export function DiagnosisPanel({
   finalMessage,
   running,
-  runStarted,
+  runStarted: _runStarted,
   runMeta,
 }: DiagnosisPanelProps) {
   return (
-    <div className="w-1/2 overflow-y-auto p-4 flex flex-col sm:w-full lg:w-1/2">
+    <div className="w-full lg:w-1/2 overflow-y-auto p-4 flex flex-col">
       <AnimatePresence mode="wait">
         {/* State 1: Empty — before any investigation */}
         {!finalMessage && !running && (
@@ -40,7 +40,7 @@ export function DiagnosisPanel({
         )}
 
         {/* State 2: Loading — investigation running, no final message yet */}
-        {!finalMessage && running && runStarted && (
+        {!finalMessage && running && (
           <motion.div
             key="loading"
             className="glass-card p-6 flex-1 flex flex-col items-center justify-center text-center"

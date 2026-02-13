@@ -12,6 +12,7 @@ and a copy of every log record.
 import asyncio
 import json
 import logging
+import threading
 from collections import deque
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -25,21 +26,33 @@ router = APIRouter(prefix="/api", tags=["logs"])
 # Broadcast hub — fan-out log records to all connected SSE clients
 # ---------------------------------------------------------------------------
 
+_lock = threading.Lock()  # Protects _subscribers and _log_buffer from cross-thread access
 _subscribers: set[asyncio.Queue] = set()
 _log_buffer: deque[dict] = deque(maxlen=100)  # last 100 lines for new connects
 
+# Cache the running event loop for thread-safe queue puts
+_event_loop: asyncio.AbstractEventLoop | None = None
+
 
 def _broadcast(record: dict) -> None:
-    """Push a log record dict to every connected subscriber queue."""
-    _log_buffer.append(record)
-    dead: list[asyncio.Queue] = []
-    for q in _subscribers:
+    """Push a log record dict to every connected subscriber queue (thread-safe)."""
+    with _lock:
+        _log_buffer.append(record)
+        dead: list[asyncio.Queue] = []
+        subscribers_snapshot = list(_subscribers)
+    # Enqueue outside the lock to avoid holding it during potentially slow ops
+    for q in subscribers_snapshot:
         try:
-            q.put_nowait(record)
-        except asyncio.QueueFull:
+            if _event_loop is not None and _event_loop.is_running():
+                _event_loop.call_soon_threadsafe(q.put_nowait, record)
+            else:
+                q.put_nowait(record)
+        except (asyncio.QueueFull, RuntimeError):
             dead.append(q)
-    for q in dead:
-        _subscribers.discard(q)
+    if dead:
+        with _lock:
+            for q in dead:
+                _subscribers.discard(q)
 
 
 # ---------------------------------------------------------------------------
@@ -78,12 +91,19 @@ logging.getLogger().addHandler(_handler)
 
 async def _log_event_generator() -> AsyncGenerator:
     """Yields SSE events for each log record."""
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+
     q: asyncio.Queue = asyncio.Queue(maxsize=500)
-    _subscribers.add(q)
+
+    # Snapshot buffer BEFORE subscribing to avoid duplicate delivery
+    with _lock:
+        buffered = list(_log_buffer)
+        _subscribers.add(q)
 
     try:
         # Send buffered history first so the panel isn't empty on connect
-        for rec in list(_log_buffer):
+        for rec in buffered:
             yield {"event": "log", "data": json.dumps(rec)}
 
         # Then stream live
@@ -91,7 +111,8 @@ async def _log_event_generator() -> AsyncGenerator:
             rec = await q.get()
             yield {"event": "log", "data": json.dumps(rec)}
     finally:
-        _subscribers.discard(q)
+        with _lock:
+            _subscribers.discard(q)
 
 
 @router.get("/logs")

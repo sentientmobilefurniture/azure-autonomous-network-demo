@@ -24,7 +24,12 @@ router = APIRouter(prefix="/api", tags=["alert"])
 
 class AlertRequest(BaseModel):
     """Incoming NOC alert payload."""
-    text: str = Field(..., description="The alert text to send to the Orchestrator")
+    text: str = Field(
+        ...,
+        description="The alert text to send to the Orchestrator",
+        min_length=1,
+        max_length=10_000,
+    )
 
 
 async def _stub_event_generator(alert_text: str):

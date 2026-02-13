@@ -24,6 +24,8 @@ import asyncio
 import json
 import os
 import logging
+import threading
+import time as _time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -80,7 +82,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -89,7 +91,6 @@ app.add_middleware(
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log every incoming request with timing and full error details."""
-    import time as _time
     body = b""
     if request.method in ("POST", "PUT", "PATCH"):
         body = await request.body()
@@ -127,20 +128,31 @@ app.include_router(telemetry_router)
 # Log streaming SSE
 # ---------------------------------------------------------------------------
 
+_lock = threading.Lock()  # Protects _log_subscribers from cross-thread access
 _log_subscribers: set[asyncio.Queue] = set()
 _log_buffer: deque[dict] = deque(maxlen=100)
 
+# Cache the running event loop for thread-safe queue puts
+_event_loop: asyncio.AbstractEventLoop | None = None
+
 
 def _broadcast_log(record: dict) -> None:
-    _log_buffer.append(record)
+    with _lock:
+        _log_buffer.append(record)
+        subscribers_snapshot = list(_log_subscribers)
     dead: list[asyncio.Queue] = []
-    for q in _log_subscribers:
+    for q in subscribers_snapshot:
         try:
-            q.put_nowait(record)
-        except asyncio.QueueFull:
+            if _event_loop is not None and _event_loop.is_running():
+                _event_loop.call_soon_threadsafe(q.put_nowait, record)
+            else:
+                q.put_nowait(record)
+        except (asyncio.QueueFull, RuntimeError):
             dead.append(q)
-    for q in dead:
-        _log_subscribers.discard(q)
+    if dead:
+        with _lock:
+            for q in dead:
+                _log_subscribers.discard(q)
 
 
 class _SSELogHandler(logging.Handler):
@@ -165,16 +177,24 @@ logging.getLogger().addHandler(_sse_handler)
 
 
 async def _log_sse_generator():
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+
     q: asyncio.Queue = asyncio.Queue(maxsize=500)
-    _log_subscribers.add(q)
+
+    # Snapshot buffer BEFORE subscribing to avoid duplicate delivery
+    with _lock:
+        buffered = list(_log_buffer)
+        _log_subscribers.add(q)
     try:
-        for rec in list(_log_buffer):
+        for rec in buffered:
             yield f"event: log\ndata: {json.dumps(rec)}\n\n"
         while True:
             rec = await q.get()
             yield f"event: log\ndata: {json.dumps(rec)}\n\n"
     finally:
-        _log_subscribers.discard(q)
+        with _lock:
+            _log_subscribers.discard(q)
 
 
 @app.get("/api/logs", summary="Stream logs via SSE")

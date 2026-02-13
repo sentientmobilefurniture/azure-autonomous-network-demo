@@ -17,6 +17,7 @@ export function useInvestigation() {
 
   const abortRef = useRef<AbortController | null>(null);
   const startTimeRef = useRef<number>(0);
+  const stepCountRef = useRef<number>(0);
 
   const submitAlert = useCallback(async () => {
     abortRef.current?.abort();
@@ -31,6 +32,7 @@ export function useInvestigation() {
     setRunStarted(false);
     setRunMeta(null);
     startTimeRef.current = Date.now();
+    stepCountRef.current = 0;
 
     // Auto-abort after 5 minutes to prevent indefinite "processing..." hangs
     const timeoutId = setTimeout(() => {
@@ -65,6 +67,7 @@ export function useInvestigation() {
                 break;
               case 'step_complete':
                 setThinking(null);
+                stepCountRef.current += 1;
                 setSteps((prev) => [...prev, data as StepEvent]);
                 break;
               case 'message':
@@ -74,10 +77,10 @@ export function useInvestigation() {
               case 'run_complete': {
                 setThinking(null);
                 const elapsed = ((Date.now() - startTimeRef.current) / 1000).toFixed(0);
-                setRunMeta((prev) => ({
-                  steps: prev?.steps ?? 0,
+                setRunMeta({
+                  steps: stepCountRef.current,
                   time: `${elapsed}s`,
-                }));
+                });
                 break;
               }
               case 'error':
@@ -103,13 +106,11 @@ export function useInvestigation() {
     } finally {
       clearTimeout(timeoutId);
       setRunning(false);
-      setSteps((prev) => {
-        setRunMeta((m) => ({
-          steps: prev.length,
-          time: m?.time ?? `${((Date.now() - startTimeRef.current) / 1000).toFixed(0)}s`,
-        }));
-        return prev;
-      });
+      // Ensure runMeta is set with correct step count from ref
+      setRunMeta((m) => ({
+        steps: stepCountRef.current,
+        time: m?.time ?? `${((Date.now() - startTimeRef.current) / 1000).toFixed(0)}s`,
+      }));
     }
   }, [alert]);
 

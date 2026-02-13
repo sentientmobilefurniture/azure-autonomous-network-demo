@@ -28,7 +28,7 @@ export function InvestigationPanel({
   runMeta,
 }: InvestigationPanelProps) {
   return (
-    <div className="w-1/2 border-r border-white/10 overflow-y-auto p-4 flex flex-col sm:w-full lg:w-1/2">
+    <div className="w-full lg:w-1/2 border-r border-white/10 overflow-y-auto p-4 flex flex-col">
       <AlertInput
         alert={alert}
         onAlertChange={onAlertChange}

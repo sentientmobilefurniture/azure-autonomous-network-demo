@@ -18,7 +18,6 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -28,7 +27,7 @@ from azure.ai.agents.models import AgentEventHandler
 
 # ── Config ──────────────────────────────────────────────────────────
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(PROJECT_ROOT / "azure_config.env", override=True)
 
 AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"

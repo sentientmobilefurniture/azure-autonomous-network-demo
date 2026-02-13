@@ -25,6 +25,7 @@ export default {
           primary: '#FFFFFF',
           secondary: '#A1A1AA',
           muted: '#71717A',
+          tertiary: '#52525B',
         },
         border: {
           subtle: 'hsla(0, 0%, 100%, 0.08)',

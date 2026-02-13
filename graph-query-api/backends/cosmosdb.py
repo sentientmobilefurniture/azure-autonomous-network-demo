@@ -228,9 +228,13 @@ class CosmosDBGremlinBackend:
         return _normalise_results(raw_results)
 
     def close(self) -> None:
-        """Close the singleton Gremlin client."""
+        """Close the singleton Gremlin client (thread-safe)."""
         global _gremlin_client
-        if _gremlin_client is not None:
-            logger.info("Closing Cosmos DB Gremlin client")
-            _gremlin_client.close()
-            _gremlin_client = None
+        with _gremlin_lock:
+            if _gremlin_client is not None:
+                logger.info("Closing Cosmos DB Gremlin client")
+                try:
+                    _gremlin_client.close()
+                except Exception:
+                    pass
+                _gremlin_client = None

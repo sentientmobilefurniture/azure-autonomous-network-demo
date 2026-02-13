@@ -31,9 +31,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
-AGENT_IDS_FILE = Path(os.getenv("AGENT_IDS_PATH", str(PROJECT_ROOT / "scripts" / "agent_ids.json")))
 
 load_dotenv(CONFIG_FILE)
+
+# Evaluate AFTER load_dotenv so AGENT_IDS_PATH from azure_config.env is visible
+AGENT_IDS_FILE = Path(os.getenv("AGENT_IDS_PATH", str(PROJECT_ROOT / "scripts" / "agent_ids.json")))
+
+# Cached credential singleton — avoids re-probing credential sources on every request
+_credential = None
+
+def _get_credential():
+    global _credential
+    if _credential is None:
+        from azure.identity import DefaultAzureCredential
+        _credential = DefaultAzureCredential()
+    return _credential
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +89,12 @@ def _load_agent_names() -> dict[str, str]:
 
 def _get_project_client():
     """Create an AIProjectClient with the project-scoped endpoint."""
-    from azure.identity import DefaultAzureCredential
     from azure.ai.projects import AIProjectClient
 
     base_endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
     project_name = os.environ["AI_FOUNDRY_PROJECT_NAME"]
     endpoint = f"{base_endpoint}/api/projects/{project_name}"
-    return AIProjectClient(endpoint=endpoint, credential=DefaultAzureCredential())
+    return AIProjectClient(endpoint=endpoint, credential=_get_credential())
 
 
 def load_agents_from_file() -> list[dict] | None:
@@ -136,7 +147,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
 
         def __init__(self):
             super().__init__()
-            self.t0 = time.time()
+            self.t0 = time.monotonic()
             self.step_starts: dict[str, float] = {}
             self.ui_step = 0
             self.total_tokens = 0
@@ -145,7 +156,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             self.run_error_detail = ""
 
         def _elapsed(self) -> str:
-            return f"{time.time() - self.t0:.1f}s"
+            return f"{time.monotonic() - self.t0:.1f}s"
 
         # -- Run lifecycle ---------------------------------------------------
 
@@ -158,9 +169,13 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 self.total_tokens = getattr(run.usage, "total_tokens", 0) or 0
             elif status == "failed":
                 err = run.last_error
-                # Extract structured error info if available
-                code = getattr(err, "code", None) or (err.get("code") if isinstance(err, dict) else None) or "unknown"
-                msg = getattr(err, "message", None) or (err.get("message") if isinstance(err, dict) else str(err))
+                if err is None:
+                    code = "unknown"
+                    msg = "Run failed with no error details"
+                else:
+                    # Extract structured error info if available
+                    code = getattr(err, "code", None) or (err.get("code") if isinstance(err, dict) else None) or "unknown"
+                    msg = getattr(err, "message", None) or (err.get("message") if isinstance(err, dict) else str(err))
                 self.run_failed = True
                 self.run_error_detail = f"[{code}] {msg}"
                 logger.error(
@@ -179,14 +194,14 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             logger.info("on_run_step: id=%s status=%s type=%s", step.id, status, step_type)
 
             if status == "in_progress" and step.id not in self.step_starts:
-                self.step_starts[step.id] = time.time()
+                self.step_starts[step.id] = time.monotonic()
                 # Emit an early "thinking" event so UI shows activity
                 _put("step_thinking", {"agent": "Orchestrator", "status": "calling sub-agent..."})
 
             elif status == "failed" and step_type == "tool_calls":
                 # Capture and log full detail about the failed tool call
                 start = self.step_starts.get(step.id, self.t0)
-                duration = f"{time.time() - start:.1f}s"
+                duration = f"{time.monotonic() - start:.1f}s"
                 last_err = step.last_error if hasattr(step, "last_error") else None
                 err_code = ""
                 err_msg = "(no error detail)"
@@ -232,7 +247,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
 
             elif status == "completed" and step_type == "tool_calls":
                 start = self.step_starts.get(step.id, self.t0)
-                duration = f"{time.time() - start:.1f}s"
+                duration = f"{time.monotonic() - start:.1f}s"
 
                 if not hasattr(step.step_details, "tool_calls"):
                     return
@@ -423,11 +438,13 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                                 ),
                             })
 
-                _put("run_complete", {
-                    "steps": handler.ui_step,
-                    "tokens": handler.total_tokens,
-                    "time": handler._elapsed(),
-                })
+                # Only emit run_complete on success (error event already sent on failure)
+                if not handler.run_failed:
+                    _put("run_complete", {
+                        "steps": handler.ui_step,
+                        "tokens": handler.total_tokens,
+                        "time": handler._elapsed(),
+                    })
 
         except Exception as e:
             logger.exception("Orchestrator run failed")

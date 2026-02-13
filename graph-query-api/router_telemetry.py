@@ -19,7 +19,7 @@ from fastapi import APIRouter
 from config import (
     COSMOS_NOSQL_ENDPOINT,
     COSMOS_NOSQL_DATABASE,
-    credential,
+    get_credential,
 )
 from models import TelemetryQueryRequest, TelemetryQueryResponse
 
@@ -47,7 +47,13 @@ def _get_cosmos_client(endpoint: str) -> CosmosClient:
     global _cosmos_client, _cosmos_endpoint
     with _cosmos_lock:
         if _cosmos_client is None or endpoint != _cosmos_endpoint:
-            _cosmos_client = CosmosClient(url=endpoint, credential=credential)
+            # Close the old client if endpoint changed to avoid resource leak
+            if _cosmos_client is not None:
+                try:
+                    _cosmos_client.close()
+                except Exception:
+                    pass
+            _cosmos_client = CosmosClient(url=endpoint, credential=get_credential())
             _cosmos_endpoint = endpoint
         return _cosmos_client
 
@@ -71,7 +77,7 @@ def _execute_cosmos_sql(
     cosmos_database: str = "",
 ) -> dict:
     """Execute a Cosmos SQL query against a named container and return structured results."""
-    import time as _time
+    import time as _time  # TODO: move to module level when convenient
 
     endpoint = cosmos_endpoint or COSMOS_NOSQL_ENDPOINT
     db_name = cosmos_database or COSMOS_NOSQL_DATABASE

@@ -72,7 +72,7 @@ export function StepCard({ step }: { step: StepEvent }) {
                 <span className="text-[10px] font-medium text-text-muted uppercase">
                   ▾ Response
                 </span>
-                <div className="text-xs prose prose-xs prose-invert max-w-none mt-1 bg-white/5 rounded p-2">
+                <div className="text-xs prose prose-sm prose-invert max-w-none mt-1 bg-white/5 rounded p-2">
                   <ReactMarkdown>{step.response}</ReactMarkdown>
                 </div>
               </div>

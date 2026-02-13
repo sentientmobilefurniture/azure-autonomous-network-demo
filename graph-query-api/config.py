@@ -43,10 +43,17 @@ COSMOS_GREMLIN_DATABASE = os.getenv("COSMOS_GREMLIN_DATABASE", "networkgraph")
 COSMOS_GREMLIN_GRAPH = os.getenv("COSMOS_GREMLIN_GRAPH", "topology")
 
 # ---------------------------------------------------------------------------
-# Shared credential (used by Cosmos DB AAD auth)
+# Shared credential (lazy-initialised to avoid probing at import time)
 # ---------------------------------------------------------------------------
 
-credential = DefaultAzureCredential()
+_credential = None
+
+def get_credential():
+    """Return a cached DefaultAzureCredential (lazy-initialised)."""
+    global _credential
+    if _credential is None:
+        _credential = DefaultAzureCredential()
+    return _credential
 
 # ---------------------------------------------------------------------------
 # Required env vars per backend (used by lifespan health check)
