@@ -124,25 +124,119 @@ choose() {
 
 banner
 
-step "Step 0: Checking prerequisites"
+step "Step 0: Checking & installing prerequisites"
+
+# ── Auto-install helpers ────────────────────────────────────────────
+
+install_python3() {
+  info "Installing Python 3..."
+  if command -v apt-get &>/dev/null; then
+    sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-venv python3-pip >/dev/null
+  elif command -v dnf &>/dev/null; then
+    sudo dnf install -y python3 >/dev/null
+  elif command -v brew &>/dev/null; then
+    brew install python@3.12
+  else
+    fail "Cannot auto-install Python 3 — unknown package manager."
+    fail "Install manually: https://www.python.org/downloads/"
+    return 1
+  fi
+}
+
+install_uv() {
+  info "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Add to PATH for this session
+  export PATH="$HOME/.local/bin:$PATH"
+}
+
+install_node() {
+  info "Installing Node.js 20 via nvm..."
+  if ! command -v nvm &>/dev/null; then
+    # nvm is a shell function; try sourcing it
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+      source "$NVM_DIR/nvm.sh"
+    else
+      info "Installing nvm first..."
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+      export NVM_DIR="$HOME/.nvm"
+      source "$NVM_DIR/nvm.sh"
+    fi
+  fi
+  nvm install 20
+  nvm use 20
+}
+
+install_az() {
+  info "Installing Azure CLI..."
+  curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+}
+
+install_azd() {
+  info "Installing Azure Developer CLI..."
+  curl -fsSL https://aka.ms/install-azd.sh | bash
+  export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+}
+
+# ── Check each prerequisite, offer install if missing ───────────────
 
 PREREQ_OK=true
 
-check_cmd() {
-  local cmd="$1" install_hint="$2"
+ensure_cmd() {
+  local cmd="$1" friendly="$2" installer="$3"
   if command -v "$cmd" &>/dev/null; then
-    ok "$cmd: $(command -v "$cmd")"
+    ok "$friendly: $(command -v "$cmd")"
+    return 0
+  fi
+
+  warn "$friendly not found."
+  if $AUTO_YES || confirm "Install $friendly now?"; then
+    if $installer; then
+      # Re-check
+      if command -v "$cmd" &>/dev/null; then
+        ok "$friendly installed: $(command -v "$cmd")"
+        return 0
+      fi
+      # Some tools (node via nvm) may need hash reset
+      hash -r 2>/dev/null
+      if command -v "$cmd" &>/dev/null; then
+        ok "$friendly installed: $(command -v "$cmd")"
+        return 0
+      fi
+    fi
+    fail "$friendly installation failed."
+    PREREQ_OK=false
   else
-    fail "$cmd not found. Install: $install_hint"
+    fail "$friendly is required. Skipping."
     PREREQ_OK=false
   fi
 }
 
-check_cmd az     "https://learn.microsoft.com/cli/azure/install-azure-cli-linux"
-check_cmd azd    "curl -fsSL https://aka.ms/install-azd.sh | bash"
-check_cmd uv     "curl -LsSf https://astral.sh/uv/install.sh | sh"
-check_cmd node   "nvm install 20"
-check_cmd python3 "apt install python3"
+ensure_cmd python3 "Python 3.11+" install_python3
+ensure_cmd uv      "uv"           install_uv
+ensure_cmd node    "Node.js 20+"  install_node
+ensure_cmd az      "Azure CLI"    install_az
+ensure_cmd azd     "Azure Developer CLI" install_azd
+
+# Verify Python version is 3.11+
+if command -v python3 &>/dev/null; then
+  PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+  PY_MAJOR=$(echo "$PY_VER" | cut -d. -f1)
+  PY_MINOR=$(echo "$PY_VER" | cut -d. -f2)
+  if (( PY_MAJOR < 3 || (PY_MAJOR == 3 && PY_MINOR < 11) )); then
+    fail "Python $PY_VER found but 3.11+ is required."
+    PREREQ_OK=false
+  fi
+fi
+
+# Verify Node.js version is 20+
+if command -v node &>/dev/null; then
+  NODE_MAJOR=$(node --version | sed 's/v//' | cut -d. -f1)
+  if (( NODE_MAJOR < 20 )); then
+    warn "Node.js v$(node --version | sed 's/v//') found but 20+ is recommended."
+  fi
+fi
 
 if ! $PREREQ_OK; then
   fail "Missing prerequisites. Install them and re-run."
