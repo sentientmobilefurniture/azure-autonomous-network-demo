@@ -85,22 +85,49 @@ azd auth login
 ### Option A: Automated (recommended)
 
 ```bash
-cp azure_config.env.template azure_config.env
-chmod +x deploy.sh && ./deploy.sh
+chmod +x deploy_app.sh
+./deploy_app.sh --env myenv --location eastus2
 ```
 
-`deploy.sh` handles the entire pipeline: infrastructure provisioning, data loading,
-search index creation, Cosmos DB graph + telemetry loading, agent provisioning,
-and starting local services. Run with `--help` for options:
+`deploy_app.sh` is the **environment-isolated** deployment script. Each azd
+environment gets its own config file under `envs/{name}.env` — no risk of
+cross-environment contamination when switching between deployments.
+
+**How it works:**
+1. Creates `envs/{name}.env` from `azure_config.env.template` (if new)
+2. Symlinks `azure_config.env → envs/{name}.env` (hooks & scripts work unchanged)
+3. Runs the full pipeline: infra → data → indexes → agents → local services
+4. Switching environments just moves the symlink
+
+```bash
+# Fresh deployment
+./deploy_app.sh --env cosmosprod5 --location eastus2
+
+# Reuse existing infra, just re-index
+./deploy_app.sh --env cosmosprod5 --skip-infra
+
+# Use a specific env file
+./deploy_app.sh --env-file envs/cosmosgraphstable3.env
+
+# Interactive — lists existing environments and lets you choose
+./deploy_app.sh
+```
 
 | Flag | Effect |
 |------|--------|
+| `--env NAME` | azd environment name (creates `envs/{NAME}.env` if needed) |
+| `--env-file PATH` | Use an existing env file directly |
+| `--location LOC` | Azure location (default: swedencentral) |
 | `--skip-infra` | Skip `azd up` (reuse existing Azure resources) |
 | `--skip-index` | Skip AI Search index creation (keeps existing indexes) |
 | `--skip-data` | Skip Cosmos DB graph + telemetry loading |
 | `--skip-agents` | Skip AI Foundry agent provisioning |
 | `--skip-local` | Skip starting local API + frontend |
 | `--yes` | Skip all confirmation prompts |
+
+> **Note:** `deploy.sh` (legacy) still works but uses a single shared
+> `azure_config.env` file, which can cause cross-environment contamination
+> when switching between deployments. Prefer `deploy_app.sh`.
 
 ### Option B: Step-by-step
 
@@ -182,9 +209,13 @@ Open http://localhost:5173
 ```
 .
 ├── azure.yaml                  # azd service definitions & hooks (1 unified service)
-├── azure_config.env            # Runtime config (single source of truth, gitignored)
-├── azure_config.env.template   # Template for azure_config.env
-├── deploy.sh                   # End-to-end deployment script
+├── azure_config.env            # Symlink → envs/{active-env}.env (gitignored)
+├── azure_config.env.template   # Template for per-environment config files
+├── deploy_app.sh               # Environment-isolated deployment script (recommended)
+├── deploy.sh                   # Legacy deployment script (single shared config)
+├── envs/                       # Per-environment config files (gitignored)
+│   ├── cosmosprod5.env         #   Created by deploy_app.sh
+│   └── cosmosgraphstable3.env  #   One file per azd environment
 ├── Dockerfile                  # Unified container: nginx + API + graph-query-api
 ├── nginx.conf                  # Reverse proxy config (hardcoded localhost)
 ├── supervisord.conf            # Process manager for unified container
@@ -347,7 +378,11 @@ curl -s http://localhost:8000/health
 
 ## Configuration Reference
 
-All configuration lives in `azure_config.env` (single source of truth). Key sections:
+Configuration is managed per-environment in `envs/{name}.env` files, created by
+`deploy_app.sh`. A symlink at `azure_config.env` points to the active environment's
+file so that hooks, scripts, and local dev commands all read the correct config.
+
+Key sections:
 
 | Section | Examples | Set by |
 |---------|----------|--------|
