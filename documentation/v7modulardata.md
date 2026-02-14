@@ -9,7 +9,8 @@ stack — data generation, graph schema, prompts, telemetry, runbooks, tickets,
 alert storms, and agent configuration — resolves to that scenario's data.
 
 The application becomes a **scenario-agnostic incident investigation platform**.
-New scenarios are created by authoring a data pack — no code changes required.
+Once v7 is fully implemented (all 6 phases), new scenarios are created by
+authoring a data pack — no code changes required.
 
 ### Core Ambition: Multi-Scenario Runtime
 
@@ -181,11 +182,21 @@ For **any** dataset to work with this stack, it must provide:
 
 4. Prompt fragments:
    - orchestrator.md — telemetry baselines for THIS domain
-   - graph_explorer/core_schema.md — auto-generated from graph_schema.yaml
+   - graph_explorer/schema.md — auto-generated from graph_schema.yaml + CSVs
    - telemetry_agent.md — container schemas with property names and ranges
    - default_alert.md — a demo alert input for this scenario
 
-5. Scenario manifest (scenario.yaml):
+5. Optional custom instructions (convention-based, zero-cost if unused):
+   - orchestrator_custom.md — extra investigation hints, domain heuristics
+   - graph_explorer/custom_instructions.md — traversal recipes, entity tips
+   - telemetry_custom.md — metric interpretation guidance
+   - runbook_custom.md — domain-specific search hints
+   - ticket_custom.md — domain-specific search hints
+   If any of these files exist in the scenario's prompts/ directory, they
+   are appended to the corresponding agent's composed prompt. If absent,
+   the prompt is assembled without them — no placeholder files needed.
+
+6. Scenario manifest (scenario.yaml):
    - Cosmos mapping (database names, container definitions)
    - Search index names and blob container names
    - Graph visualisation styles (node colours, sizes per entity type)
@@ -204,10 +215,18 @@ knowledge retrieval, and graph visualisation — works without code changes.
 
 ```
 data/
+├── shared_prompts/                       # Domain-agnostic prompt templates
+│   ├── orchestrator_core.md               # Investigation methodology, report format
+│   ├── graph_explorer_core.md             # Role, rules, generic traversal patterns
+│   ├── telemetry_core.md                  # Role, SQL rules
+│   ├── runbook_core.md                    # Role, search rules
+│   ├── ticket_core.md                     # Role, search rules
+│   └── language_{backend}.md              # Gremlin / mock query language files
 ├── scenarios/
 │   ├── telco-noc/                        # Current scenario, relocated
 │   │   ├── scenario.yaml                 # Scenario manifest (metadata + pointers)
-│   │   ├── generator/                    # Data generation scripts
+│   │   ├── graph_schema.yaml             # Graph ontology (committed, not gitignored)
+│   │   ├── scripts/                      # Data generation scripts
 │   │   │   ├── generate_topology.py      # Produces entities/ CSVs
 │   │   │   ├── generate_routing.py       # Produces entities/ junction tables
 │   │   │   ├── generate_telemetry.py     # Produces telemetry/ CSVs
@@ -219,7 +238,6 @@ data/
 │   │       │   ├── ...
 │   │       │   ├── FactMPLSPathHops.csv
 │   │       │   └── FactServiceDependency.csv
-│   │       ├── graph_schema.yaml         # Graph ontology (vertices + edges)
 │   │       ├── telemetry/                # Alert + link telemetry CSVs
 │   │       │   ├── AlertStream.csv
 │   │       │   └── LinkTelemetry.csv
@@ -227,42 +245,30 @@ data/
 │   │       │   ├── runbooks/             # Operational procedures (.md)
 │   │       │   └── tickets/              # Historical incidents (.txt)
 │   │       └── prompts/                  # Scenario-specific prompt fragments
-│   │           ├── orchestrator.md        # Investigation flow + telemetry baselines
-│   │           ├── graph_explorer/        # Schema, instructions, query examples
-│   │           ├── telemetry_agent.md     # Container schemas + value ranges
+│   │           ├── orchestrator.md       # Investigation flow + telemetry baselines
+│   │           ├── orchestrator_custom.md # (optional) Extra investigation hints
+│   │           ├── graph_explorer/       # Schema, instructions, query examples
+│   │           │   ├── schema.md         # Auto-generated from graph_schema.yaml
+│   │           │   └── custom_instructions.md  # (optional) Traversal recipes, domain tips
+│   │           ├── telemetry_agent.md    # Container schemas + value ranges
+│   │           ├── telemetry_custom.md   # (optional) Metric interpretation guidance
 │   │           ├── runbook_agent.md
+│   │           ├── runbook_custom.md     # (optional) Domain-specific search hints
 │   │           ├── ticket_agent.md
+│   │           ├── ticket_custom.md      # (optional) Domain-specific search hints
 │   │           └── default_alert.md      # Default demo alert storm input
 │   │
-│   ├── cloud-outage/                     # Future scenario
+│   ├── cloud-outage/                     # Future scenario (agent-generated)
 │   │   ├── scenario.yaml
-│   │   ├── generator/
+│   │   ├── graph_schema.yaml
+│   │   ├── scripts/
 │   │   └── data/
 │   │
-│   └── power-grid/                       # Future scenario
+│   └── power-grid/                       # Future scenario (agent-generated)
 │       ├── scenario.yaml
-│       ├── generator/
+│       ├── graph_schema.yaml
+│       ├── scripts/
 │       └── data/
-│
-└── scenario_template/                    # Scaffolding for new scenarios
-    ├── scenario.yaml.template
-    ├── generator/
-    │   ├── generate_topology.py.template
-    │   ├── generate_routing.py.template
-    │   ├── generate_telemetry.py.template
-    │   └── generate_tickets.py.template
-    └── data/
-        ├── graph_schema.yaml.template
-        └── prompts/
-            ├── orchestrator.md.template
-            ├── graph_explorer/
-            │   ├── core_instructions.md.template
-            │   ├── core_schema.md.template
-            │   └── language_gremlin.md.template
-            ├── telemetry_agent.md.template
-            ├── runbook_agent.md.template
-            ├── ticket_agent.md.template
-            └── default_alert.md.template
 ```
 
 ### Scenario Manifest (`scenario.yaml`)
@@ -289,7 +295,7 @@ domain: telecommunications
 
 paths:
   entities: data/entities              # CSV files for graph vertices + edges
-  graph_schema: data/graph_schema.yaml # Gremlin ingestion manifest
+  graph_schema: graph_schema.yaml      # Gremlin ingestion manifest (at scenario root, not inside data/)
   telemetry: data/telemetry            # AlertStream.csv, LinkTelemetry.csv
   runbooks: data/knowledge/runbooks    # .md files → AI Search
   tickets: data/knowledge/tickets      # .txt files → AI Search
@@ -305,7 +311,7 @@ cosmos:
     database: networkgraph            # shared database
     graph: topology                   # deploy script prefixes: telco-noc-topology
   nosql:
-    database: telemetrydb             # deploy script prefixes: telco-noc-telemetrydb
+    database: telemetry              # deploy script prefixes: telco-noc-telemetry
     containers:
       - name: AlertStream
         partition_key: /SourceNodeType
@@ -441,22 +447,28 @@ Move current files into the new directory structure:
 ```
 Current                              → New
 data/network/*.csv                   → data/scenarios/telco-noc/data/entities/*.csv
-data/graph_schema.yaml               → data/scenarios/telco-noc/data/graph_schema.yaml
+data/graph_schema.yaml               → data/scenarios/telco-noc/graph_schema.yaml
 data/telemetry/*.csv                 → data/scenarios/telco-noc/data/telemetry/*.csv
 data/runbooks/*.md                   → data/scenarios/telco-noc/data/knowledge/runbooks/*.md
 data/tickets/*.txt                   → data/scenarios/telco-noc/data/knowledge/tickets/*.txt
-data/prompts/foundry_orchestrator_agent.md    → data/scenarios/telco-noc/data/prompts/orchestrator.md
+data/prompts/foundry_orchestrator_agent.md    → data/scenarios/telco-noc/data/prompts/foundry_orchestrator_agent.md
 data/prompts/graph_explorer/         → data/scenarios/telco-noc/data/prompts/graph_explorer/
-data/prompts/foundry_telemetry_agent_v2.md    → data/scenarios/telco-noc/data/prompts/telemetry_agent.md
-data/prompts/foundry_runbook_kb_agent.md      → data/scenarios/telco-noc/data/prompts/runbook_agent.md
-data/prompts/foundry_historical_ticket_agent.md → data/scenarios/telco-noc/data/prompts/ticket_agent.md
-data/prompts/alert_storm.md          → data/scenarios/telco-noc/data/prompts/default_alert.md
+data/prompts/foundry_telemetry_agent_v2.md    → data/scenarios/telco-noc/data/prompts/foundry_telemetry_agent_v2.md
+data/prompts/foundry_runbook_kb_agent.md      → data/scenarios/telco-noc/data/prompts/foundry_runbook_kb_agent.md
+data/prompts/foundry_historical_ticket_agent.md → data/scenarios/telco-noc/data/prompts/foundry_historical_ticket_agent.md
+data/prompts/alert_storm.md          → data/scenarios/telco-noc/data/prompts/alert_storm.md
 data/prompts/graph_explorer/description.md  → data/scenarios/telco-noc/data/prompts/graph_explorer/description.md
 data/prompts/graph_explorer/language_mock.md → data/scenarios/telco-noc/data/prompts/graph_explorer/language_mock.md
-data/scripts/generate_topology_data.py   → data/scenarios/telco-noc/generator/generate_topology.py
-data/scripts/generate_routing_data.py    → data/scenarios/telco-noc/generator/generate_routing.py
-data/scripts/generate_alert_stream.py    → data/scenarios/telco-noc/generator/generate_telemetry.py
-data/scripts/generate_tickets.py         → data/scenarios/telco-noc/generator/generate_tickets.py
+data/scripts/generate_topology_data.py   → data/scenarios/telco-noc/scripts/generate_topology.py
+data/scripts/generate_routing_data.py    → data/scenarios/telco-noc/scripts/generate_routing.py
+data/scripts/generate_alert_stream.py    → data/scenarios/telco-noc/scripts/generate_telemetry.py
+data/scripts/generate_tickets.py         → data/scenarios/telco-noc/scripts/generate_tickets.py
+```
+
+> **Note:** Prompt files keep their original filenames in Phase 1. They are
+> renamed to the canonical convention (`orchestrator.md`, `telemetry_agent.md`,
+> etc.) in **Phase 3** when `provision_agents.py` is updated to use the prompt
+> composition system. This avoids file-level symlink complexity (see M2).
 ```
 
 **Backwards compatibility:** Create symlinks at old locations pointing to new
@@ -485,10 +497,13 @@ data is ingested into Cosmos DB, AI Search, and Blob Storage.
 **Tasks:**
 - [ ] Create `scripts/scenario_loader.py` with `ScenarioLoader` class
 - [ ] Create `data/scenarios/telco-noc/` directory structure
+- [ ] Create `data/shared_prompts/` with domain-agnostic prompt templates
 - [ ] Move all data files into new structure (use git mv for history)
 - [ ] Write `scenario.yaml` for telco-noc
 - [ ] Add `DEFAULT_SCENARIO` + `LOADED_SCENARIOS` to `azure_config.env.template`
+- [ ] Update `preprovision.sh` to sync `DEFAULT_SCENARIO` and `LOADED_SCENARIOS` to azd env
 - [ ] Create backwards-compat symlinks at old locations
+- [ ] Update Dockerfile to copy `data/scenarios/*/scenario.yaml` and `scripts/scenario_loader.py`
 - [ ] Test that existing `deploy_app.sh` still works with symlinks
 
 ---
@@ -636,7 +651,7 @@ for SCENARIO in $(echo "$LOADED_SCENARIOS" | tr ',' ' '); do
   az storage blob upload \
     --account-name "$STORAGE_ACCOUNT" \
     --container-name "${SCENARIO}-network-data" \
-    --file "$SCENARIO_DIR/data/graph_schema.yaml" \
+    --file "$SCENARIO_DIR/graph_schema.yaml" \
     --name "graph_schema.yaml" \
     --auth-mode login --overwrite
 
@@ -654,8 +669,12 @@ done
 
 #### 2.5 Add Container App ingestion endpoint
 
-Add `POST /api/scenario/{name}/ingest` to the main API (port 8000). This
-endpoint runs inside the VNet and has private endpoint access to Cosmos:
+Add `POST /api/scenario/{name}/ingest` to the **main API** (port 8000). This
+endpoint lives in the main API (not graph-query-api) because:
+1. It runs inside the VNet with private endpoint access to Cosmos
+2. The main API's `pyproject.toml` gains `gremlinpython` (Phase 2.9) for Gremlin writes
+3. It needs `ScenarioLoader` to resolve blob container names, which lives in `scripts/`
+4. The graph-query-api is a read-only query service — write operations belong in the main API
 
 ```python
 @router.post("/api/scenario/{scenario_name}/ingest")
@@ -781,10 +800,53 @@ GraphExplorer prompt =
     shared/graph_explorer_core.md         (role, rules)
   + scenario/prompts/graph_explorer/schema.md    (full ontology)
   + graph_backend/language_{backend}.md   (query language)
+  + scenario/prompts/graph_explorer/custom_instructions.md  (optional — domain tips)
 
 Telemetry prompt =
     shared/telemetry_core.md              (role, SQL rules)
   + scenario/prompts/telemetry_agent.md   (container schemas, value ranges)
+  + scenario/prompts/telemetry_custom.md  (optional — interpretation guidance)
+
+Runbook prompt =
+    shared/runbook_core.md                (role, search rules)
+  + scenario/prompts/runbook_custom.md    (optional — domain-specific search hints)
+
+Ticket prompt =
+    shared/ticket_core.md                 (role, search rules)
+  + scenario/prompts/ticket_custom.md     (optional — domain-specific search hints)
+```
+
+**Optional custom instructions convention:** Each agent's prompt composition
+checks for a `*_custom.md` file in the scenario's `prompts/` directory. If the
+file exists, its contents are appended to the composed prompt. If it doesn't
+exist, the prompt is assembled without it — no empty placeholder files required.
+
+This is where scenario authors add domain knowledge that can't be derived from
+schema + CSVs alone:
+- Traversal recipes ("to trace blast radius, follow CONNECTS_TO → SERVES → BOUND_BY")
+- Interpretation heuristics ("BER > 1e-6 on a transport link indicates physical-layer damage")
+- "What you can answer" overrides for the graph explorer
+- Domain-specific investigation tips for the orchestrator
+- Telemetry metric interpretation guidance ("UtilizationPct = 0 with other down indicators means link is dead, not idle")
+
+The prompt builder implementation:
+```python
+# SHARED_PROMPTS = PROJECT_ROOT / "data" / "shared_prompts"
+# (see data/shared_prompts/ in the Target Architecture directory tree)
+
+def _load_optional(prompts_dir: Path, filename: str) -> str:
+    """Load an optional custom instructions file. Returns empty string if absent."""
+    path = prompts_dir / filename
+    if path.exists():
+        return "\n\n" + path.read_text().strip()
+    return ""
+
+def compose_graph_explorer_prompt(scenario: ScenarioLoader, backend: str) -> str:
+    shared = (SHARED_PROMPTS / "graph_explorer_core.md").read_text()
+    schema = generate_schema_prompt(scenario)  # auto-generated from graph_schema.yaml
+    language = (SHARED_PROMPTS / f"language_{backend}.md").read_text()
+    custom = _load_optional(scenario.prompts_dir / "graph_explorer", "custom_instructions.md")
+    return f"{shared}\n\n{schema}\n\n{language}{custom}"
 ```
 
 #### 3.2 Auto-generate schema prompt from graph_schema.yaml
@@ -874,13 +936,19 @@ pre-provisioning agent sets for all `LOADED_SCENARIOS` during deployment
 storing the agent ID map per scenario in `agent_ids.json`.
 
 **Tasks:**
-- [ ] Create `data/shared_prompts/` with domain-agnostic prompt templates
+- [ ] Rename prompt files to canonical convention (deferred from Phase 1):
+  - `foundry_orchestrator_agent.md` → `orchestrator.md`
+  - `foundry_telemetry_agent_v2.md` → `telemetry_agent.md`
+  - `foundry_runbook_kb_agent.md` → `runbook_agent.md`
+  - `foundry_historical_ticket_agent.md` → `ticket_agent.md`
+  - `alert_storm.md` → `default_alert.md`
+- [ ] Extract domain-agnostic sections from current prompts into `data/shared_prompts/`
 - [ ] Build prompt composition logic in `provision_agents.py` or a new `prompt_builder.py`
 - [ ] Create schema prompt auto-generator from `graph_schema.yaml` + CSVs
 - [ ] Create telemetry prompt auto-generator from `scenario.yaml`
 - [ ] Create OpenAPI spec generator from scenario manifest (entity types, container names)
-- [ ] Extract domain-agnostic sections from current orchestrator prompt
 - [ ] Update `provision_agents.py` to use composed prompts + generated OpenAPI specs
+- [ ] Extract provisioning logic into importable module (for runtime re-provisioning)
 - [ ] Implement scenario-switch agent re-provisioning (Option B)
 - [ ] Test agent provisioning + full investigation with generated prompts
 - [ ] Test scenario switch — verify prompts regenerate correctly
@@ -895,26 +963,35 @@ without code changes.
 #### 4.1 Dynamic telemetry containers (`router_telemetry.py`)
 
 Replace `VALID_CONTAINERS = {"AlertStream", "LinkTelemetry"}` with scenario-aware
-routing. The graph-query-api needs to know which Cosmos database and containers
-to query based on the active scenario:
+routing. The graph-query-api reads the active scenario from the `X-Scenario`
+request header (see S1 decision in the audit section) and resolves the correct
+Cosmos database and containers:
 
 ```python
-# graph-query-api receives the active scenario name from the frontend
-# (via header, query param, or session) and resolves the correct database.
+# graph-query-api reads X-Scenario header on every request (see S1).
+# It derives resource names directly from the scenario name — no need
+# to import ScenarioLoader or read scenario.yaml at runtime.
 #
 # Cosmos NoSQL databases are scenario-prefixed:
-#   telco-noc-telemetrydb / cloud-outage-telemetrydb
+#   telco-noc-telemetry / cloud-outage-telemetry
 #
 # Container names remain the same within each database (AlertStream, LinkTelemetry)
 # since the database itself provides namespace isolation.
 
 def get_telemetry_db(scenario_name: str) -> str:
-    return f"{scenario_name}-telemetrydb"
+    return f"{scenario_name}-telemetry"
 
 def get_valid_containers(scenario_name: str) -> set[str]:
-    """Load valid container names from the scenario manifest."""
-    loader = ScenarioLoader(scenario_name)
-    return {c["name"] for c in loader.cosmos_config["nosql"]["containers"]}
+    """Discover valid container names for a scenario.
+
+    The graph-query-api does NOT import ScenarioLoader (it's a separate
+    service). Instead it discovers containers by one of:
+      A. Listing containers from the Cosmos database directly
+      B. Receiving valid container names via a startup config call to the
+         main API's /api/scenario endpoint
+    Falls back to a default set if discovery fails.
+    """
+    ...
 ```
 
 Similarly, the Gremlin backend routes to the correct graph:
@@ -927,7 +1004,7 @@ The mock backend has 200+ lines of hardcoded topology data. Options:
 1. **Read from CSVs at startup** — `backends/mock.py` loads from the active
    scenario's `entities/` directory and builds `_TOPOLOGY_NODES` / `_TOPOLOGY_EDGES`
    dynamically.
-2. **Generate mock data file** — the scenario's generator scripts produce a
+2. **Generate mock data file** — the scenario's data generation scripts produce a
    `mock_topology.json` file; mock backend loads it.
 
 Option 1 is cleaner — the mock backend becomes truly data-agnostic.
@@ -1015,6 +1092,10 @@ Selecting a scenario:
 The default scenario on page load is `DEFAULT_SCENARIO` from the server config.
 
 **Tasks:**
+- [ ] Add `X-Scenario` header support to both services (FastAPI dependency)
+- [ ] Add `X-Scenario` request interceptor to frontend (Axios/fetch)
+- [ ] Refactor `CosmosDBGremlinBackend` to accept graph name as constructor param
+- [ ] Create backend factory caching backends per scenario name
 - [ ] Make `VALID_CONTAINERS` dynamic in `router_telemetry.py`
 - [ ] Refactor `backends/mock.py` to load from CSVs dynamically
 - [ ] Add `/api/scenario`, `/api/scenarios`, and `/api/scenario/switch` endpoints
@@ -1022,8 +1103,8 @@ The default scenario on page load is `DEFAULT_SCENARIO` from the server config.
 - [ ] Update frontend to fetch scenario config at startup
 - [ ] Replace hardcoded `DEFAULT_ALERT` with server-fetched value
 - [ ] Replace `graphConstants.ts` with scenario-driven node styling (from `/api/scenario` → `graph_styles`)
+- [ ] Update `GraphTooltip.tsx` to read node colours from scenario-driven state (not import `NODE_COLORS`)
 - [ ] Add auto-assign colour palette fallback for unlisted node types
-- [ ] Make `graphConstants.ts` read node styles from scenario config
 - [ ] Replace hardcoded app title in `Header.tsx` with generic platform name + scenario context
 - [ ] Replace hardcoded toolbar title in `GraphToolbar.tsx` with scenario-driven title
 - [ ] Set `document.title` dynamically on scenario load
@@ -1031,79 +1112,53 @@ The default scenario on page load is `DEFAULT_SCENARIO` from the server config.
 
 ---
 
-### Phase 5: Data Generator Framework
+### Phase 5: Agent-Generated Scenarios
 
-**Goal:** New scenarios can be created by copying the template and editing
-configuration — no Python code knowledge needed for simple scenarios.
+**Goal:** New scenarios are authored by an AI agent using the
+`graph-data-scenarios` skill, not by generic scaffolding tools or templates.
 
-#### 5.1 Generator contract
+#### 5.1 Approach
 
-Each scenario's `generator/` directory contains Python scripts that:
-1. Read configuration from the scenario's `scenario.yaml` (or use their own
-   config files)
-2. Write output to `../data/` (the scenario's data directory)
-3. Follow a standard interface:
+Instead of a generator framework with templates, CLI scaffolding commands, and
+validation tooling, scenario creation is fully agent-forward:
 
-```python
-# Every generator script must expose a main() function
-def main(output_dir: Path, config: dict) -> None:
-    """Generate data files into output_dir."""
-    ...
-```
+1. An AI coding agent reads the `custom_skills/graph-data-scenarios/` skill
+2. The skill's SKILL.md and reference files teach the agent the convention
+   contract, CSV formats, graph schema YAML structure, telemetry patterns,
+   and ticket format
+3. The agent generates the data scripts (`scripts/generate_*.py`) and
+   supporting artefacts (`graph_schema.yaml`, `scenario.yaml`, prompts)
+4. The existing reference implementation (`data/scripts/`) serves as the
+   canonical example — no separate templates needed
 
-#### 5.2 Universal generator runner
+#### 5.2 What the skill covers
 
-Create `scripts/generate_scenario_data.py`:
+| Reference file | Contents |
+|----------------|----------|
+| `convention-contract.md` | Full invariant checklist — what any dataset must provide |
+| `topology-patterns.md` | Script structure, entity ID conventions, FK patterns, junction tables |
+| `telemetry-patterns.md` | Baseline generation, cascade timeline, no-null rule, link telemetry |
+| `ticket-format.md` | Ticket `.txt` format, entity ID cross-references, diversity guidelines |
+| `graph-schema-format.md` | `graph_schema.yaml` specification — vertices, edges, filters |
 
-```bash
-# Generate all data for a scenario
-uv run python scripts/generate_scenario_data.py --scenario telco-noc
+#### 5.3 Scenario validation
 
-# Generate only topology
-uv run python scripts/generate_scenario_data.py --scenario telco-noc --only topology
-```
+Validation is the agent's responsibility. The convention contract includes a
+cross-reference integrity checklist:
 
-This script:
-1. Loads `scenario.yaml`
-2. Discovers generator scripts in `generator/`
-3. Runs them in order (topology → routing → telemetry → tickets)
-4. Validates output (CSVs exist, schema matches, etc.)
+- Every `SourceNodeId` in AlertStream matches a vertex ID in a `Dim*.csv`
+- Every junction table ID references an existing entity
+- Every `csv_file` in `graph_schema.yaml` exists
+- Every ticket references real entity IDs
+- No null values in telemetry numeric columns
 
-#### 5.3 Scenario template scaffolding
-
-Create `data/scenario_template/` with:
-- `scenario.yaml.template` — annotated template with all configurable fields
-- `generator/*.py.template` — skeleton generators with inline documentation
-- `data/prompts/*.md.template` — prompt templates with `{{PLACEHOLDER}}` markers
-- `data/graph_schema.yaml.template` — annotated graph schema skeleton
-
-Add a scaffolding command:
-
-```bash
-# Create a new scenario from the template
-uv run python scripts/create_scenario.py --name cloud-outage --domain cloud
-
-# Creates data/scenarios/cloud-outage/ with all template files populated
-```
-
-#### 5.4 Scenario validation
-
-Create `scripts/validate_scenario.py` that checks:
-- `scenario.yaml` exists and parses
-- All paths in manifest point to existing files/directories
-- CSV files match the graph schema (column names, referenced entity IDs)
-- Prompt files exist for all required agents
-- Telemetry CSV columns match container definitions
-- No orphaned entity IDs in edges/telemetry
+The agent should verify these invariants after generating the data scripts
+by reading the outputs and cross-checking IDs.
 
 **Tasks:**
-- [ ] Define generator contract and interface
-- [ ] Create `scripts/generate_scenario_data.py` runner
-- [ ] Refactor current generators to follow the contract
-- [ ] Create `data/scenario_template/` with all template files
-- [ ] Create `scripts/create_scenario.py` scaffolding command
-- [ ] Create `scripts/validate_scenario.py` validation tool
-- [ ] Document the scenario creation workflow
+- [x] Create `custom_skills/graph-data-scenarios/` skill (SKILL.md + references)
+- [ ] Validate skill coverage by having an agent generate a test scenario
+- [ ] Iterate on skill content based on agent output quality
 
 ---
 
@@ -1127,7 +1182,7 @@ the second scenario and validates everything works together.
 
 #### 6.2 Create second scenario (cloud-outage)
 
-Using the Phase 5 generator framework + scenario template, create
+Using an AI agent with the `graph-data-scenarios` skill, create
 `data/scenarios/cloud-outage/` as the validation scenario (see "Second Scenario
 Candidate" section below for details).
 
@@ -1149,7 +1204,7 @@ Candidate" section below for details).
   agent sets (Option A from Phase 3.5)
 
 **Tasks:**
-- [ ] Build the `cloud-outage` scenario using the generator framework
+- [ ] Build the `cloud-outage` scenario using an agent with the `graph-data-scenarios` skill
 - [ ] Deploy with `--scenarios telco-noc,cloud-outage`
 - [ ] Verify data isolation — no cross-scenario data leakage
 - [ ] Test scenario switch via UI dropdown end-to-end
@@ -1173,7 +1228,9 @@ Candidate" section below for details).
    identical output when reassembled. Test with diff.
 4. **Phase 4** — Frontend/API updates. New endpoints are additive; existing ones
    unchanged. Scenario selector dropdown added.
-5. **Phase 5** — Generator framework is new tooling, doesn't affect existing flow.
+5. **Phase 5** — Agent-generated scenarios. The `graph-data-scenarios` skill
+   is already created; new scenarios are authored by AI agents following the
+   skill's convention contract. No framework code to build or maintain.
 6. **Phase 6** — Integration test with two scenarios loaded simultaneously.
    Validates that all earlier phases support multi-scenario correctly.
 
@@ -1191,9 +1248,9 @@ alert storm and diff the situation report structure.
 | Phase 2: Blob-first ingestion + endpoints | 6-8 hours | Medium — refactor scripts into importable modules, add ingestion endpoint, blob-first pipeline |
 | Phase 3: Prompt decomposition + switch strategy | 5-7 hours | Medium — prompt quality must not degrade; agent re-provisioning logic |
 | Phase 4: API + frontend (scenario routing + selector) | 4-5 hours | Medium — Cosmos routing + scenario switch UX |
-| Phase 5: Generator framework | 4-6 hours | Low — new tooling |
+| Phase 5: Agent-generated scenarios (skill) | Done | Low — skill already created |
 | Phase 6: Integration test + second scenario | 4-6 hours | Medium — end-to-end validation |
-| **Total** | **26-37 hours** | |
+| **Total** | **22-30 hours + skill iteration** | |
 
 ---
 
@@ -1316,36 +1373,11 @@ on any graph structure without entity-specific tuning.
 
 ### CRITICAL Issues
 
-#### C1. Cosmos Gremlin graphs cannot be created via the data plane
+#### ~~C1. Cosmos Gremlin graphs cannot be created via the data plane~~ (Resolved)
 
-The plan says "deploy script prefixes: `telco-noc-topology`" and shows the
-ingestion script writing data to scenario-prefixed graphs. But **Cosmos DB
-Gremlin containers (graphs) can only be created through the management plane**
-(Bicep, ARM, Azure CLI, or `azure-mgmt-cosmosdb` SDK) — the `gremlinpython`
-library only supports data operations.
-
-Currently, Bicep creates exactly one graph resource:
-
-```bicep
-// infra/modules/cosmos-gremlin.bicep
-resource graph ... {
-  name: graphName  // param default: 'topology'
-}
-```
-
-**Impact:** The plan does not address how additional scenario-prefixed graphs
-are created. Without this, multi-scenario graph data cannot be deployed.
-
-**Fix (resolved in Phase 2.3):** The revised Phase 2 uses Azure CLI calls in
-`postprovision.sh` to create scenario-prefixed graphs and NoSQL databases
-dynamically:
-```bash
-az cosmosdb gremlin graph create --name telco-noc-topology ...
-az cosmosdb sql database create --name telco-noc-telemetry ...
-```
-This runs after Bicep creates the base accounts and before blob data is
-uploaded. The Container App's managed identity (or the deployer's CLI
-credentials) has sufficient permissions for control-plane resource creation.
+> **Resolved in Phase 2.3.** Azure CLI calls in `postprovision.sh` create
+> scenario-prefixed graphs (`az cosmosdb gremlin graph create --name telco-noc-topology`)
+> and NoSQL databases dynamically. No action needed beyond implementing Phase 2.3.
 
 #### C2. `graph_schema.yaml` `data_dir` path will break after relocation
 
@@ -1461,28 +1493,27 @@ For multi-scenario, the graph-query-api needs to either:
            _backends[scenario] = CosmosDBGremlinBackend(graph=f"{scenario}-topology")
        return _backends[scenario]
    ```
-3. The router reads the active scenario from a request header
-   (`X-Scenario: telco-noc`) or a session/FastAPI dependency.
+3. The router reads the active scenario from the `X-Scenario` request header
+   (see S1 decision).
 
 Similarly for telemetry: `router_telemetry.py` creates a Cosmos NoSQL client
 with a single database reference. The same factory pattern is needed.
 
-#### H2. `ScenarioLoader` cannot be imported by `graph-query-api`
+#### H2. `ScenarioLoader` cannot be imported by `graph-query-api` — resolved by X-Scenario header
 
-`ScenarioLoader` lives at `scripts/scenario_loader.py`. But `scripts/` has no
-`__init__.py` and is not a Python package. More importantly, `graph-query-api`
-is a **separate service** with its own `pyproject.toml` and `uv.lock` — it
-cannot import from `scripts/` without `sys.path` hacks.
+`ScenarioLoader` lives at `scripts/scenario_loader.py`. `graph-query-api`
+cannot import it (separate service, separate `pyproject.toml`).
 
-**Fix:** Choose one:
-1. **Make `scenario_loader` a proper package** — move it to a shared location
-   (e.g., `lib/scenario_loader/`) with its own `pyproject.toml` and add it as
-   a path dependency in both `api/pyproject.toml` and
-   `graph-query-api/pyproject.toml`.
-2. **Duplicate a lightweight config reader** in `graph-query-api` — a 20-line
-   YAML reader that only needs `scenario.yaml`, not the full `ScenarioLoader`.
-3. **Serve scenario config via API** (see C3 option 2) — avoid the import issue
-   entirely.
+**Resolution (applied via S1 decision):** The graph-query-api does **not** need
+`ScenarioLoader`. It reads the `X-Scenario` header and derives resource names
+directly:
+- Gremlin graph: `f"{scenario}-topology"`
+- Telemetry database: `f"{scenario}-telemetry"`
+- Valid containers: discovered by listing from the Cosmos database, or via a
+  startup config call to the main API's `/api/scenario` endpoint
+
+The main API (port 8000) is the *only* service that needs `ScenarioLoader`
+(for ingestion, prompt composition, and agent provisioning).
 
 #### H3. Agent re-provisioning (Option B) lacks error handling and concurrency safety
 
@@ -1525,16 +1556,13 @@ default to `"telemetrydb"` while the actual database is `"telemetry"`. This
 silent mismatch could cause data to be ingested into the wrong database or
 queries to fail with unhelpful errors.
 
-The plan compounds this by proposing `telco-noc-telemetrydb` as the
-scenario-prefixed name — following the Python default pattern rather than the
-Bicep pattern.
-
-**Fix:**
-1. Align the defaults: change Python defaults to `"telemetry"` to match Bicep.
-2. Document the canonical name as `telemetry` and use
-   `telco-noc-telemetry` (not `telco-noc-telemetrydb`) for scenario-prefixed names.
-3. Better yet: make the Bicep `telemetryDbName` a parameter (not a var) so it
-   flows through `postprovision.sh` → env vars → Python consistently.
+**Resolution (applied):** The canonical name is `telemetry` (matching Bicep).
+All references in this plan now use `telco-noc-telemetry` for scenario-prefixed
+names. When implementing:
+1. Change Python defaults in `config.py` and `provision_cosmos_telemetry.py`
+   from `"telemetrydb"` to `"telemetry"` to match Bicep.
+2. Make the Bicep `telemetryDbName` a parameter (not a var) so it flows through
+   `postprovision.sh` → env vars → Python consistently.
 
 #### H5. Cosmos Gremlin partition key convention is non-obvious
 
@@ -1557,7 +1585,8 @@ include a `partition_key_path` field, so there's no enforcement.
 
 **Fix:** Add to the Convention Contract:
 - "All Gremlin graphs use `/partitionKey` as the partition key path."
-- Add validation to `validate_scenario.py` (Phase 5.4) to check this.
+- Agent-generated scenarios should include this in their `scenario.yaml` and
+  the agent should verify it when creating new scenarios.
 
 ---
 
@@ -1566,9 +1595,9 @@ include a `partition_key_path` field, so there's no enforcement.
 #### M1. `graph_schema.yaml` does not move cleanly under the scenario `data/` dir
 
 The plan puts `graph_schema.yaml` inside the scenario's `data/` directory
-alongside `entities/`, `telemetry/`, etc. But the plan also says generators
-write output to `../data/` — which means `generate_topology.py` (in
-`generator/`) writes to `data/entities/`. This is fine structurally, but:
+alongside `entities/`, `telemetry/`, etc. But the plan also says data generation
+scripts write output to `../data/` — which means `generate_topology.py` (in
+`scripts/`) writes to `data/entities/`. This is fine structurally, but:
 
 - The `data/` directory is proposed as **gitignored** (the plan says "Generated
   output (gitignored)"). But `graph_schema.yaml` is hand-authored and must
@@ -1579,7 +1608,7 @@ write output to `../data/` — which means `generate_topology.py` (in
 data/scenarios/telco-noc/
 ├── scenario.yaml
 ├── graph_schema.yaml        ← here, not inside data/
-├── generator/
+├── scripts/
 └── data/                    ← gitignored generated output
 ```
 Or only gitignore `data/entities/` and `data/telemetry/` (the generated CSVs)
@@ -1646,22 +1675,11 @@ synced.
 **Fix:** Add to Phase 1.4 tasks:
 - Update `preprovision.sh` to sync `DEFAULT_SCENARIO` and `LOADED_SCENARIOS`.
 
-#### M5. Bicep infrastructure needs multi-graph and multi-database loop support
+#### ~~M5. Bicep infrastructure needs multi-graph and multi-database loop support~~ (Resolved)
 
-For multi-scenario deployment, Bicep needs to create:
-- Multiple Gremlin graphs in the shared `networkgraph` database
-- Multiple NoSQL databases (one per scenario)
-- Multiple blob containers (per scenario)
-
-Currently, Bicep creates exactly one of each. All three modules (`cosmos-gremlin.bicep`,
-`storage.bicep`) need loop constructs.
-
-**Fix (resolved in Phase 2.3):** Dynamic Cosmos resource creation is handled
-via Azure CLI in `postprovision.sh` — `az cosmosdb gremlin graph create` and
-`az cosmosdb sql database create` for each scenario. Blob containers are
-created implicitly by `az storage blob upload-batch` (which creates the
-container if it doesn't exist). This avoids complex Bicep refactoring while
-keeping Bicep responsible for the base accounts/databases.
+> **Resolved in Phase 2.3.** Dynamic Cosmos resource creation is handled via
+> Azure CLI in `postprovision.sh`. Blob containers are created implicitly by
+> `az storage blob upload-batch`. No Bicep loop constructs needed.
 
 #### M6. `provision_agents.py` uses `os.environ["RUNBOOKS_INDEX_NAME"]` with no default
 
@@ -1683,8 +1701,8 @@ entry point.
 
 #### M7. Multi-scenario NoSQL: separate databases vs shared database with separate containers
 
-The plan uses **separate databases** per scenario (`telco-noc-telemetrydb`,
-`cloud-outage-telemetrydb`). This works but is heavyweight:
+The plan uses **separate databases** per scenario (`telco-noc-telemetry`,
+`cloud-outage-telemetry`). This works but is heavyweight:
 - Cosmos DB has a soft limit of 25 databases per account.
 - Each database has its own throughput allocation (cost).
 - The `create_database_if_not_exists` call adds latency to the deploy loop.
@@ -1740,21 +1758,9 @@ whatever the platform calls its agents.
 **Fix:** Make stub agent names match the generic platform branding. Low
 priority since stubs are only for local dev without provisioned agents.
 
-#### L4. `description.md` and `language_mock.md` not listed in the relocation table
+#### L4. ~~`description.md` and `language_mock.md` not listed in the relocation table~~ (Resolved)
 
-`data/prompts/graph_explorer/description.md` and
-`data/prompts/graph_explorer/language_mock.md` exist but aren't mentioned in
-the Phase 1.2 file relocation mapping. `description.md` is used by
-`provision_agents.py` to set the agent's `description` field. `language_mock.md`
-is the mock-backend counterpart to `language_gremlin.md`.
-
-**Fix:** Add both to the relocation table:
-```
-data/prompts/graph_explorer/description.md   → data/scenarios/telco-noc/data/prompts/graph_explorer/description.md
-data/prompts/graph_explorer/language_mock.md → data/scenarios/telco-noc/data/prompts/graph_explorer/language_mock.md
-```
-
-> **Note:** These have been added to the Phase 1.2 relocation table.
+> **Resolved.** Both files are now included in the Phase 1.2 relocation table.
 
 #### L5. `ScenarioLoader.list_scenarios()` signature inconsistency
 
@@ -1762,12 +1768,13 @@ The pseudocode shows `def list_scenarios(cls, ...)` with a `cls` parameter
 (classmethod style) but it's defined as a regular instance method. Minor, but
 should be clarified as either `@classmethod` or `@staticmethod`.
 
-#### L6. Phase 2.6 uses deprecated FastAPI `on_event("startup")`
+#### L6. `api/app/main.py` has no startup lifecycle hook
 
-`@app.on_event("startup")` is deprecated since FastAPI 0.93. The codebase's
-`api/app/main.py` does not use any startup handler currently, so this is an
-opportunity to use the modern `lifespan` async context manager pattern.
-The code sample in Phase 2.6 has been updated to use `lifespan`.
+The codebase's `api/app/main.py` currently uses **neither** `on_event("startup")`
+nor the `lifespan` pattern — there is no startup hook at all. Phase 2.6
+introduces a *new* lifespan handler (not a migration from an existing one).
+The Phase 2.6 code sample correctly uses the modern `lifespan` async context
+manager pattern.
 
 #### L7. Phase 4.3 `default_alert` returns content, not path
 
@@ -1782,21 +1789,48 @@ documentation.
 
 ### Structural Observations (Not Bugs)
 
-#### S1. The two-service architecture adds scenario-routing complexity
+#### S1. Scenario propagation: `X-Scenario` header (DECIDED)
 
 The frontend calls **two independent backend services** (API on 8000,
 graph-query-api on 8100) via Vite proxy / nginx. Scenario context must be
-propagated to **both** services. The plan's scenario switch endpoint is on the
-API (port 8000), but the graph-query-api (port 8100) also needs to know the
-active scenario to route Cosmos queries.
+propagated to **both** services.
 
-Options:
-- **Scenario header** — frontend sends `X-Scenario: telco-noc` on all requests
-  to both services. Simple, stateless.
-- **Shared state** — API notifies graph-query-api of scenario changes via an
-  internal endpoint or shared env/file. More complex.
+**Decision: `X-Scenario` request header.**
 
-The plan should explicitly specify the propagation mechanism.
+The frontend sends an `X-Scenario: telco-noc` header on **every** request to
+both backend services. This is the simplest, most stateless approach:
+
+- **Frontend:** A React context or Zustand store holds `activeScenario`. An
+  Axios/fetch interceptor adds `X-Scenario: {activeScenario}` to all outgoing
+  requests. On scenario switch, `activeScenario` updates and all subsequent
+  requests target the new scenario.
+- **API (port 8000):** A FastAPI dependency reads `request.headers["x-scenario"]`
+  and uses it to load the correct scenario config, agent IDs, and search index
+  names. Falls back to `DEFAULT_SCENARIO` if the header is missing.
+- **graph-query-api (port 8100):** Same pattern — reads `X-Scenario` header
+  to resolve the correct Gremlin graph name (`{scenario}-topology`) and
+  telemetry database (`{scenario}-telemetry`). Falls back to `DEFAULT_SCENARIO`.
+- **Agent re-provisioning (Option B):** When `POST /api/scenario/switch` is
+  called, the API re-provisions agents. Subsequent `X-Scenario` headers ensure
+  all data queries target the switched scenario immediately.
+- **No shared state needed.** Each service independently resolves scenario
+  config from the header value. No inter-service notification mechanism
+  required.
+
+**Implementation detail:** Both services extract the scenario name via a
+shared FastAPI dependency:
+```python
+from fastapi import Header
+
+def get_active_scenario(
+    x_scenario: str = Header(default=None),
+) -> str:
+    return x_scenario or os.getenv("DEFAULT_SCENARIO", "telco-noc")
+```
+
+This resolves the H1/H2 issues for graph-query-api — it doesn't need to
+import `ScenarioLoader`. It only needs the scenario *name* to derive
+resource names (`{name}-topology`, `{name}-telemetry`).
 
 #### S2. Agent OpenAPI specs reference `{base_url}` — generation must preserve this
 
@@ -1805,24 +1839,21 @@ The plan should explicitly specify the propagation mechanism.
 substitution logic must be preserved. The generated spec should use
 `{base_url}` as a placeholder, not a hardcoded URL.
 
-#### S3. ~~The `--from-blob` telemetry ingestion mode needs scenario-aware blob paths~~
+#### ~~S3. `--from-blob` telemetry ingestion mode needs scenario-aware blob paths~~ (Resolved)
 
-**Resolved by Phase 2 redesign.** The Blob-first ingestion architecture makes
-`--from-blob` the *primary* ingestion path, not an alternative. All ingestion
-functions accept `blob_container` as a parameter (scenario-prefixed, e.g.
-`telco-noc-telemetry-data`), so scenario-aware blob paths are built-in.
+> **Resolved by Phase 2 redesign.** All ingestion functions accept
+> `blob_container` as a parameter (scenario-prefixed).
 
 ---
 
 ### Recommended Phase Ordering Adjustments
 
-1. **Do NOT rename prompt files in Phase 1.** Keep original filenames and only
-   rename them in Phase 3 when `provision_agents.py` is updated. This avoids
-   the file-level symlink complexity described in M2.
+1. **Prompt file renames are deferred to Phase 3** (applied to Phase 1.2).
+   Original filenames are kept during relocation in Phase 1, avoiding
+   file-level symlink complexity.
 
-2. **Phase 2 now creates Cosmos resources via Azure CLI** in `postprovision.sh`
-   (Phase 2.3), so Bicep doesn't need multi-graph loop support. This is
-   simpler and more flexible for dynamic scenario lists.
+2. **Phase 2 creates Cosmos resources via Azure CLI** in `postprovision.sh`
+   (Phase 2.3), so Bicep doesn't need multi-graph loop support.
 
 3. **Address Docker/container changes early** (C3). The Dockerfile update should
    be part of Phase 1, not deferred to Phase 4. The Blob-first ingestion
@@ -1835,3 +1866,8 @@ functions accept `blob_container` as a parameter (scenario-prefixed, e.g.
    is not expensive and eliminates an entire class of runtime issues. The
    naming convention is straightforward (`{scenario}-{agent_name}`) and
    `agent_ids.json` already supports nested structure.
+
+5. **Scenario propagation uses `X-Scenario` headers** (applied to S1, Phase
+   4.1). Both services read the scenario name from request headers. The
+   graph-query-api derives resource names directly without needing
+   `ScenarioLoader`.
