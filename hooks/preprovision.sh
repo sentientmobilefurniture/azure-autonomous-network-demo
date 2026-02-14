@@ -22,12 +22,14 @@ if [ -f "$CONFIG_FILE" ]; then
 
   # Sync selected variables to azd env for Bicep
   # (POSIX-compatible — no associative arrays)
-  for var_name in AZURE_LOCATION GPT_CAPACITY_1K_TPM GRAPH_BACKEND; do
+  for var_name in AZURE_LOCATION GPT_CAPACITY_1K_TPM GRAPH_BACKEND DEFAULT_SCENARIO LOADED_SCENARIOS; do
     value=""
     case "$var_name" in
       AZURE_LOCATION)      value="${AZURE_LOCATION:-}" ;;
       GPT_CAPACITY_1K_TPM) value="${GPT_CAPACITY_1K_TPM:-}" ;;
       GRAPH_BACKEND)       value="${GRAPH_BACKEND:-}" ;;
+      DEFAULT_SCENARIO)    value="${DEFAULT_SCENARIO:-}" ;;
+      LOADED_SCENARIOS)    value="${LOADED_SCENARIOS:-}" ;;
     esac
     if [ -n "$value" ]; then
       azd env set "$var_name" "$value"

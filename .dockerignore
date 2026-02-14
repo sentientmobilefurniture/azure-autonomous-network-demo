@@ -20,10 +20,15 @@ fabric_implementation_references
 # Frontend build artifacts (built inside Docker)
 frontend/dist
 
-# Data files (uploaded separately)
+# Data files (uploaded separately or generated)
 data/telemetry
 data/tickets
 data/runbooks
+data/network
+data/scenarios/*/data/entities
+data/scenarios/*/data/telemetry
+data/scenarios/*/data/knowledge
+data/scenarios/*/scripts
 
 # Misc
 **/.DS_Store

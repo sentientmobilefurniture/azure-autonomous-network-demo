@@ -121,7 +121,7 @@ PREV_GPT_CAPACITY="${GPT_CAPACITY_1K_TPM:-10}"
 PREV_GRAPH_BACKEND="${GRAPH_BACKEND:-cosmosdb}"
 PREV_COSMOS_GREMLIN_DB="${COSMOS_GREMLIN_DATABASE:-networkgraph}"
 PREV_COSMOS_GREMLIN_GRAPH="${COSMOS_GREMLIN_GRAPH:-topology}"
-PREV_COSMOS_NOSQL_DB="${COSMOS_NOSQL_DATABASE:-telemetrydb}"
+PREV_COSMOS_NOSQL_DB="${COSMOS_NOSQL_DATABASE:-telemetry}"
 
 cat > "$CONFIG_FILE" <<EOF
 # ============================================================================

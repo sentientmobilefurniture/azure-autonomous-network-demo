@@ -47,7 +47,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "telemetry"
 
 ENDPOINT = os.environ.get("COSMOS_NOSQL_ENDPOINT", "")
-DATABASE = os.environ.get("COSMOS_NOSQL_DATABASE", "telemetrydb")
+DATABASE = os.environ.get("COSMOS_NOSQL_DATABASE", "telemetry")
 
 STORAGE_ACCOUNT = os.environ.get("STORAGE_ACCOUNT_NAME", "")
 BLOB_CONTAINER = "telemetry-data"

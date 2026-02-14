@@ -47,6 +47,12 @@ COPY api/app/ ./app/
 # Copy agent_ids.json (may not exist on first deploy)
 RUN mkdir -p /app/scripts
 COPY scripts/agent_ids.json* /app/scripts/
+COPY scripts/scenario_loader.py /app/scripts/
+
+# Copy scenario manifests for runtime resolution (YAML files only)
+# Prompts (.md) are excluded by .dockerignore (*.md) — they're only needed
+# at agent provisioning time (CLI), not at Container App runtime.
+COPY data/scenarios/ /app/data/scenarios/
 
 # ── Frontend static files ─────────────────────────────────────────
 COPY --from=frontend-build /build/dist /usr/share/nginx/html

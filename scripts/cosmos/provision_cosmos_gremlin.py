@@ -293,7 +293,20 @@ def main():
     # Load schema
     schema_path = args.schema if args.schema.is_absolute() else PROJECT_ROOT / args.schema
     schema = load_schema(schema_path)
-    data_dir = PROJECT_ROOT / schema["data_dir"]
+
+    # Resolve data_dir: try relative to schema file first, then PROJECT_ROOT.
+    # .resolve() is critical — if schema_path is a symlink (e.g.
+    # data/graph_schema.yaml -> scenarios/telco-noc/graph_schema.yaml),
+    # .parent on the unresolved path gives data/ instead of the actual dir.
+    resolved_schema = schema_path.resolve()
+    schema_relative = resolved_schema.parent / schema["data_dir"]
+    project_relative = PROJECT_ROOT / schema["data_dir"]
+    if schema_relative.exists():
+        data_dir = schema_relative
+    elif project_relative.exists():
+        data_dir = project_relative
+    else:
+        data_dir = schema_relative  # will fail with clear error
 
     print(f"Cosmos DB Gremlin: {ENDPOINT} / {DATABASE} / {GRAPH}")
     print(f"Schema: {schema_path.relative_to(PROJECT_ROOT)}")

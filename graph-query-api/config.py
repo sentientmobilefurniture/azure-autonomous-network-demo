@@ -31,7 +31,7 @@ GRAPH_BACKEND = GraphBackendType(os.getenv("GRAPH_BACKEND", "cosmosdb").lower())
 # ---------------------------------------------------------------------------
 
 COSMOS_NOSQL_ENDPOINT = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
-COSMOS_NOSQL_DATABASE = os.getenv("COSMOS_NOSQL_DATABASE", "telemetrydb")
+COSMOS_NOSQL_DATABASE = os.getenv("COSMOS_NOSQL_DATABASE", "telemetry")
 
 # ---------------------------------------------------------------------------
 # Cosmos DB Gremlin settings (used by GRAPH_BACKEND=cosmosdb)
