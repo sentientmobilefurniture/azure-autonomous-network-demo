@@ -122,486 +122,486 @@ def _ensure_gremlin_graph(graph_name: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/scenarios", summary="List loaded scenarios")
-async def list_scenarios():
-
-    # 1. Read manifests
-    emit("parsing", "Reading scenario.yaml and graph_schema.yaml...", 5)
-    scenario_yaml = scenario_dir / "scenario.yaml"
-    graph_schema_yaml = scenario_dir / "graph_schema.yaml"
-
-    if not scenario_yaml.exists():
-        raise ValueError("scenario.yaml not found in uploaded archive")
-    if not graph_schema_yaml.exists():
-        raise ValueError("graph_schema.yaml not found in uploaded archive")
-
-    manifest = yaml.safe_load(scenario_yaml.read_text())
-    schema = yaml.safe_load(graph_schema_yaml.read_text())
-    scenario_name = manifest["name"]
-    display_name = manifest.get("display_name", scenario_name)
-
-    # Resolve data_dir relative to graph_schema.yaml
-    data_dir = graph_schema_yaml.parent / schema.get("data_dir", "data/entities")
-    if not data_dir.exists():
-        raise ValueError(f"data_dir '{schema.get('data_dir')}' not found in archive")
-
-    emit("parsing", f"Scenario: {display_name} ({scenario_name})", 10)
-
-    # 2. Determine graph/database names
-    cosmos_config = manifest.get("cosmos", {})
-    gremlin_graph = f"{scenario_name}-{cosmos_config.get('gremlin', {}).get('graph', 'topology')}"
-    nosql_db_name = f"{scenario_name}-{cosmos_config.get('nosql', {}).get('database', 'telemetry')}"
-    containers_config = cosmos_config.get("nosql", {}).get("containers", [])
-
-    # 3. Create Gremlin graph (ARM)
-    emit("infra", f"Ensuring Gremlin graph '{gremlin_graph}' exists...", 15)
-    await asyncio.to_thread(_ensure_gremlin_graph, gremlin_graph)
-
-    # 4. Load graph data
-    emit("graph", "Connecting to Cosmos Gremlin...", 20)
-    gremlin_c = await asyncio.to_thread(_gremlin_client, gremlin_graph)
-
-    try:
-        # Clear existing data
-        emit("graph", "Clearing existing graph data...", 22)
-        await asyncio.to_thread(_gremlin_submit, gremlin_c, "g.V().drop()")
-
-        # Load vertices
-        vertices = schema.get("vertices", [])
-        total_vertices = 0
-        for vi, vdef in enumerate(vertices):
-            label = vdef["label"]
-            csv_path = data_dir / vdef["csv_file"]
-            if not csv_path.exists():
-                emit("graph", f"⚠ CSV not found: {vdef['csv_file']} — skipping {label}", 25)
-                continue
-
-            rows = await asyncio.to_thread(_read_csv, csv_path)
-            pct = 25 + int(25 * vi / max(len(vertices), 1))
-            emit("graph", f"Loading {label} ({len(rows)} vertices)...", pct)
-
-            for row in rows:
-                vertex_id = row[vdef["id_column"]]
-                pk_value = vdef["partition_key"]
-                props = vdef.get("properties", [])
-
-                prop_parts = [".property('id', id_val)", ".property('partitionKey', pk_val)"]
-                bindings = {"label_val": label, "id_val": vertex_id, "pk_val": pk_value}
-
-                for pi, prop_name in enumerate(props):
-                    if prop_name in row:
-                        param = f"p{pi}"
-                        prop_parts.append(f".property('{prop_name}', {param})")
-                        bindings[param] = row[prop_name]
-
-                query = "g.addV(label_val)" + "".join(prop_parts)
-                await asyncio.to_thread(_gremlin_submit, gremlin_c, query, bindings)
-                total_vertices += 1
-
-        # Load edges
-        edges = schema.get("edges", [])
-        total_edges = 0
-        for ei, edef in enumerate(edges):
-            elabel = edef["label"]
-            csv_path = data_dir / edef["csv_file"]
-            if not csv_path.exists():
-                continue
-
-            rows = await asyncio.to_thread(_read_csv, csv_path)
-
-            # Apply filter
-            row_filter = edef.get("filter")
-            if row_filter:
-                fcol = row_filter["column"]
-                fval = row_filter["value"]
-                negate = row_filter.get("negate", False)
-                if negate:
-                    rows = [r for r in rows if r.get(fcol) != fval]
-                else:
-                    rows = [r for r in rows if r.get(fcol) == fval]
-
-            pct = 50 + int(15 * ei / max(len(edges), 1))
-            emit("graph", f"Loading {elabel} edges ({len(rows)} rows)...", pct)
-
-            source = edef["source"]
-            target = edef["target"]
-            edge_props = edef.get("properties", [])
-
-            for row in rows:
-                src_val = row[source["column"]]
-                tgt_val = row[target["column"]]
-                bindings = {"src_val": src_val, "tgt_val": tgt_val}
-
-                query = (
-                    f"g.V().has('{source['label']}', '{source['property']}', src_val)"
-                    f".addE('{elabel}')"
-                    f".to(g.V().has('{target['label']}', '{target['property']}', tgt_val))"
-                )
-
-                for pi, prop in enumerate(edge_props):
-                    param = f"ep{pi}"
-                    if "column" in prop:
-                        bindings[param] = row[prop["column"]]
-                    elif "value" in prop:
-                        bindings[param] = prop["value"]
-                    else:
-                        continue
-                    query += f".property('{prop['name']}', {param})"
-
-                await asyncio.to_thread(_gremlin_submit, gremlin_c, query, bindings)
-                total_edges += 1
-
-        emit("graph", f"Graph loaded: {total_vertices} vertices, {total_edges} edges", 65)
-
-    finally:
-        gremlin_c.close()
-
-    # 5. Load telemetry (NoSQL)
-    if containers_config and COSMOS_NOSQL_ENDPOINT:
-        emit("telemetry", "Connecting to Cosmos NoSQL...", 70)
-        telemetry_dir = scenario_dir / manifest.get("paths", {}).get("telemetry", "data/telemetry")
-
-        def _load_all_telemetry():
-            """Run all NoSQL operations in a single thread (no event loop conflicts)."""
-            cosmos = CosmosClient(COSMOS_NOSQL_ENDPOINT, credential=get_credential())
-            db = cosmos.create_database_if_not_exists(nosql_db_name)
-
-            for ci, cdef in enumerate(containers_config):
-                cname = cdef["name"]
-                pk_path = cdef.get("partition_key", "/id")
-                csv_file = cdef.get("csv_file", f"{cname}.csv")
-                numeric_fields = cdef.get("numeric_fields", [])
-                id_field = cdef.get("id_field")
-
-                csv_path = telemetry_dir / csv_file
-                if not csv_path.exists():
-                    emit("telemetry", f"⚠ CSV not found: {csv_file} — skipping {cname}", 72)
-                    continue
-
-                pct = 72 + int(25 * ci / max(len(containers_config), 1))
-                emit("telemetry", f"Loading {cname} from {csv_file}...", pct)
-
-                container = db.create_container_if_not_exists(
-                    id=cname, partition_key=PartitionKey(path=pk_path),
-                )
-
-                rows = _read_csv(csv_path)
-                emit("telemetry", f"Upserting {len(rows)} docs into {cname}...", pct + 5)
-
-                for row in rows:
-                    for nf in numeric_fields:
-                        if nf in row and row[nf]:
-                            try:
-                                row[nf] = float(row[nf])
-                            except (ValueError, TypeError):
-                                pass
-                    if id_field and id_field in row:
-                        row["id"] = row[id_field]
-                    elif "id" not in row:
-                        keys = list(row.keys())
-                        row["id"] = f"{row.get(keys[0], '')}-{row.get(keys[1], '')}"
-
-                    container.upsert_item(row)
-
-                emit("telemetry", f"✓ {cname}: {len(rows)} docs upserted", pct + 10)
-
-        await asyncio.to_thread(_load_all_telemetry)
-
-        emit("telemetry", f"Telemetry loaded into {nosql_db_name}", 92)
-    else:
-        emit("telemetry", "No telemetry containers or NoSQL endpoint not configured — skipping", 92)
-
-    # 6. Store prompts in Cosmos (if prompts directory exists in archive)
-    prompts_dir = scenario_dir / manifest.get("paths", {}).get("prompts", "data/prompts")
-    stored_prompts = []
-    if prompts_dir.exists() and COSMOS_NOSQL_ENDPOINT:
-        emit("prompts", "Storing prompts in Cosmos DB...", 94)
-
-        # Map prompt filenames to agent names
-        PROMPT_AGENT_MAP = {
-            "foundry_orchestrator_agent.md": "orchestrator",
-            "orchestrator.md": "orchestrator",
-            "foundry_telemetry_agent_v2.md": "telemetry",
-            "telemetry_agent.md": "telemetry",
-            "foundry_runbook_kb_agent.md": "runbook",
-            "runbook_agent.md": "runbook",
-            "foundry_historical_ticket_agent.md": "ticket",
-            "ticket_agent.md": "ticket",
-            "alert_storm.md": "default_alert",
-            "default_alert.md": "default_alert",
-        }
-
-        try:
-            from router_prompts import _get_prompts_container
-            prompts_container = _get_prompts_container()
-
-            for md_file in prompts_dir.glob("*.md"):
-                agent = PROMPT_AGENT_MAP.get(md_file.name)
-                if not agent:
-                    continue
-
-                content = md_file.read_text()
-
-                # Check existing versions
-                query = (
-                    "SELECT c.version FROM c "
-                    "WHERE c.agent = @agent AND c.scenario = @scenario AND c.name = @name "
-                    "ORDER BY c.version DESC"
-                )
-                existing = list(prompts_container.query_items(
-                    query=query,
-                    parameters=[
-                        {"name": "@agent", "value": agent},
-                        {"name": "@scenario", "value": scenario_name},
-                        {"name": "@name", "value": md_file.stem},
-                    ],
-                    enable_cross_partition_query=False,
-                ))
-                next_version = (existing[0]["version"] + 1) if existing else 1
-                doc_id = f"{scenario_name}/{md_file.stem}/v{next_version}"
-
-                prompts_container.upsert_item({
-                    "id": doc_id,
-                    "agent": agent,
-                    "scenario": scenario_name,
-                    "name": md_file.stem,
-                    "version": next_version,
-                    "content": content,
-                    "description": f"Auto-imported from {scenario_name} upload",
-                    "tags": [scenario_name, agent],
-                    "is_active": True,
-                    "deleted": False,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "created_by": "scenario-upload",
-                })
-                stored_prompts.append(doc_id)
-
-            # Handle graph_explorer composite prompt
-            ge_dir = prompts_dir / "graph_explorer"
-            if ge_dir.exists():
-                parts = []
-                for part_name in ["core_instructions.md", "core_schema.md", "language_gremlin.md"]:
-                    part_file = ge_dir / part_name
-                    if part_file.exists():
-                        parts.append(part_file.read_text())
-
-                if parts:
-                    composed = "\n\n---\n\n".join(parts)
-                    existing = list(prompts_container.query_items(
-                        query="SELECT c.version FROM c WHERE c.agent = 'graph_explorer' AND c.scenario = @scenario AND c.name = 'graph_explorer' ORDER BY c.version DESC",
-                        parameters=[{"name": "@scenario", "value": scenario_name}],
-                        enable_cross_partition_query=False,
-                    ))
-                    next_version = (existing[0]["version"] + 1) if existing else 1
-                    doc_id = f"{scenario_name}/graph_explorer/v{next_version}"
-
-                    prompts_container.upsert_item({
-                        "id": doc_id,
-                        "agent": "graph_explorer",
-                        "scenario": scenario_name,
-                        "name": "graph_explorer",
-                        "version": next_version,
-                        "content": composed,
-                        "description": f"Composed from core_instructions + core_schema + language_gremlin ({scenario_name})",
-                        "tags": [scenario_name, "graph_explorer", "composed"],
-                        "is_active": True,
-                        "deleted": False,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "created_by": "scenario-upload",
-                    })
-                    stored_prompts.append(doc_id)
-
-            emit("prompts", f"Stored {len(stored_prompts)} prompts in Cosmos", 97)
-        except Exception as e:
-            logger.warning("Failed to store prompts (non-fatal): %s", e)
-            emit("prompts", f"⚠ Prompt storage failed (non-fatal): {e}", 97)
-    else:
-        emit("prompts", "No prompts directory found or NoSQL not configured — skipping", 97)
-
-    # 7. Upload knowledge files to blob + create AI Search indexes
-    knowledge_dir = scenario_dir / manifest.get("paths", {}).get("runbooks", "data/knowledge/runbooks")
-    tickets_dir_path = scenario_dir / manifest.get("paths", {}).get("tickets", "data/knowledge/tickets")
-    runbooks_index_name = ""
-    tickets_index_name = ""
-    storage_account = os.getenv("STORAGE_ACCOUNT_NAME", "")
-    ai_search_name = os.getenv("AI_SEARCH_NAME", "")
-
-    if storage_account and ai_search_name:
-        try:
-            from azure.storage.blob import BlobServiceClient
-
-            blob_url = f"https://{storage_account}.blob.core.windows.net"
-            blob_service = BlobServiceClient(blob_url, credential=get_credential())
-
-            # Upload runbooks
-            if knowledge_dir.exists() and any(knowledge_dir.glob("*.md")):
-                rb_container_name = f"{scenario_name}-runbooks"
-                emit("knowledge", f"Uploading runbooks to blob container '{rb_container_name}'...", 80)
-                try:
-                    blob_service.create_container(rb_container_name)
-                except Exception:
-                    pass  # container may already exist
-
-                for md_file in knowledge_dir.glob("*.md"):
-                    blob_client = blob_service.get_blob_client(rb_container_name, md_file.name)
-                    with open(md_file, "rb") as f:
-                        blob_client.upload_blob(f, overwrite=True)
-
-                emit("knowledge", f"Uploaded {len(list(knowledge_dir.glob('*.md')))} runbook files", 83)
-
-                # Create search index
-                emit("knowledge", f"Creating AI Search index '{scenario_name}-runbooks-index'...", 85)
-                try:
-                    from search_indexer import create_search_index as create_idx
-                    idx_result = await asyncio.to_thread(
-                        create_idx,
-                        index_name=f"{scenario_name}-runbooks-index",
-                        container_name=rb_container_name,
-                        on_progress=lambda msg: emit("knowledge", msg, 87),
-                    )
-                    runbooks_index_name = idx_result.get("index_name", "")
-                    emit("knowledge", f"Runbooks index: {idx_result.get('document_count', 0)} docs", 89)
-                except Exception as e:
-                    logger.warning("Runbooks indexer failed (non-fatal): %s", e)
-                    emit("knowledge", f"⚠ Runbooks indexer failed: {e}", 89)
-
-            # Upload tickets
-            if tickets_dir_path.exists() and any(tickets_dir_path.glob("*.txt")):
-                tk_container_name = f"{scenario_name}-tickets"
-                emit("knowledge", f"Uploading tickets to blob container '{tk_container_name}'...", 90)
-                try:
-                    blob_service.create_container(tk_container_name)
-                except Exception:
-                    pass
-
-                for txt_file in tickets_dir_path.glob("*.txt"):
-                    blob_client = blob_service.get_blob_client(tk_container_name, txt_file.name)
-                    with open(txt_file, "rb") as f:
-                        blob_client.upload_blob(f, overwrite=True)
-
-                emit("knowledge", f"Uploaded {len(list(tickets_dir_path.glob('*.txt')))} ticket files", 93)
-
-                # Create search index
-                emit("knowledge", f"Creating AI Search index '{scenario_name}-tickets-index'...", 94)
-                try:
-                    from search_indexer import create_search_index as create_idx
-                    idx_result = await asyncio.to_thread(
-                        create_idx,
-                        index_name=f"{scenario_name}-tickets-index",
-                        container_name=tk_container_name,
-                        on_progress=lambda msg: emit("knowledge", msg, 95),
-                    )
-                    tickets_index_name = idx_result.get("index_name", "")
-                    emit("knowledge", f"Tickets index: {idx_result.get('document_count', 0)} docs", 97)
-                except Exception as e:
-                    logger.warning("Tickets indexer failed (non-fatal): %s", e)
-                    emit("knowledge", f"⚠ Tickets indexer failed: {e}", 97)
-
-        except Exception as e:
-            logger.warning("Knowledge upload failed (non-fatal): %s", e)
-            emit("knowledge", f"⚠ Knowledge upload failed: {e}", 97)
-    else:
-        if not storage_account:
-            emit("knowledge", "STORAGE_ACCOUNT_NAME not set — skipping blob upload", 97)
-        elif not ai_search_name:
-            emit("knowledge", "AI_SEARCH_NAME not set — skipping index creation", 97)
-
-    # 8. Done
-    result = {
-        "scenario": scenario_name,
-        "display_name": display_name,
-        "graph": gremlin_graph,
-        "telemetry_db": nosql_db_name,
-        "vertices": total_vertices,
-        "edges": total_edges,
-        "prompts": stored_prompts,
-        "runbooks_index": runbooks_index_name,
-        "tickets_index": tickets_index_name,
-    }
-    emit("done", f"Scenario '{display_name}' loaded successfully!", 100)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.post("/scenario/upload", summary="Upload and ingest a scenario")
-async def upload_scenario(file: UploadFile = File(...)):
-    """
-    Upload a scenario as a .tar.gz archive and ingest into Cosmos DB.
-
-    The archive must contain at least:
-      - scenario.yaml (scenario manifest)
-      - graph_schema.yaml (graph ontology)
-      - data/entities/*.csv (vertex + edge CSVs)
-      - data/telemetry/*.csv (telemetry CSVs)
-
-    Returns an SSE stream with progress events.
-    """
-    if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
-        raise HTTPException(400, "File must be a .tar.gz archive")
-
-    # Read upload into memory
-    content = await file.read()
-    logger.info("Received scenario upload: %s (%d bytes)", file.filename, len(content))
-
-    async def event_generator():
-        progress: asyncio.Queue = asyncio.Queue()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
-
-            # Extract archive
-            try:
-                with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
-                    tar.extractall(tmppath, filter="data")
-            except Exception as e:
-                yield {"event": "error", "data": json.dumps({"error": f"Failed to extract archive: {e}"})}
-                return
-
-            # Find scenario root (may be nested one level)
-            scenario_dir = tmppath
-            if not (scenario_dir / "scenario.yaml").exists():
-                subdirs = [d for d in tmppath.iterdir() if d.is_dir()]
-                for sd in subdirs:
-                    if (sd / "scenario.yaml").exists():
-                        scenario_dir = sd
-                        break
-
-            # Start ingestion in background
-            result_future: asyncio.Future = asyncio.get_event_loop().create_future()
-
-            async def run_ingest():
-                try:
-                    result = await _ingest_scenario(scenario_dir, progress)
-                    result_future.set_result(result)
-                except Exception as e:
-                    logger.exception("Ingestion failed")
-                    result_future.set_exception(e)
-                finally:
-                    await progress.put(None)  # sentinel
-
-            task = asyncio.create_task(run_ingest())
-
-            # Stream progress events
-            while True:
-                event = await progress.get()
-                if event is None:
-                    break
-                yield {"event": "progress", "data": json.dumps(event)}
-
-            # Final result or error
-            try:
-                result = result_future.result()
-                yield {"event": "complete", "data": json.dumps(result)}
-            except Exception as e:
-                yield {"event": "error", "data": json.dumps({"error": str(e)})}
-
-            await task
-
-    return EventSourceResponse(event_generator())
+# @router.get("/scenarios", summary="List loaded scenarios")
+# async def list_scenarios():
+
+#     # 1. Read manifests
+#     emit("parsing", "Reading scenario.yaml and graph_schema.yaml...", 5)
+#     scenario_yaml = scenario_dir / "scenario.yaml"
+#     graph_schema_yaml = scenario_dir / "graph_schema.yaml"
+
+#     if not scenario_yaml.exists():
+#         raise ValueError("scenario.yaml not found in uploaded archive")
+#     if not graph_schema_yaml.exists():
+#         raise ValueError("graph_schema.yaml not found in uploaded archive")
+
+#     manifest = yaml.safe_load(scenario_yaml.read_text())
+#     schema = yaml.safe_load(graph_schema_yaml.read_text())
+#     scenario_name = manifest["name"]
+#     display_name = manifest.get("display_name", scenario_name)
+
+#     # Resolve data_dir relative to graph_schema.yaml
+#     data_dir = graph_schema_yaml.parent / schema.get("data_dir", "data/entities")
+#     if not data_dir.exists():
+#         raise ValueError(f"data_dir '{schema.get('data_dir')}' not found in archive")
+
+#     emit("parsing", f"Scenario: {display_name} ({scenario_name})", 10)
+
+#     # 2. Determine graph/database names
+#     cosmos_config = manifest.get("cosmos", {})
+#     gremlin_graph = f"{scenario_name}-{cosmos_config.get('gremlin', {}).get('graph', 'topology')}"
+#     nosql_db_name = f"{scenario_name}-{cosmos_config.get('nosql', {}).get('database', 'telemetry')}"
+#     containers_config = cosmos_config.get("nosql", {}).get("containers", [])
+
+#     # 3. Create Gremlin graph (ARM)
+#     emit("infra", f"Ensuring Gremlin graph '{gremlin_graph}' exists...", 15)
+#     await asyncio.to_thread(_ensure_gremlin_graph, gremlin_graph)
+
+#     # 4. Load graph data
+#     emit("graph", "Connecting to Cosmos Gremlin...", 20)
+#     gremlin_c = await asyncio.to_thread(_gremlin_client, gremlin_graph)
+
+#     try:
+#         # Clear existing data
+#         emit("graph", "Clearing existing graph data...", 22)
+#         await asyncio.to_thread(_gremlin_submit, gremlin_c, "g.V().drop()")
+
+#         # Load vertices
+#         vertices = schema.get("vertices", [])
+#         total_vertices = 0
+#         for vi, vdef in enumerate(vertices):
+#             label = vdef["label"]
+#             csv_path = data_dir / vdef["csv_file"]
+#             if not csv_path.exists():
+#                 emit("graph", f"⚠ CSV not found: {vdef['csv_file']} — skipping {label}", 25)
+#                 continue
+
+#             rows = await asyncio.to_thread(_read_csv, csv_path)
+#             pct = 25 + int(25 * vi / max(len(vertices), 1))
+#             emit("graph", f"Loading {label} ({len(rows)} vertices)...", pct)
+
+#             for row in rows:
+#                 vertex_id = row[vdef["id_column"]]
+#                 pk_value = vdef["partition_key"]
+#                 props = vdef.get("properties", [])
+
+#                 prop_parts = [".property('id', id_val)", ".property('partitionKey', pk_val)"]
+#                 bindings = {"label_val": label, "id_val": vertex_id, "pk_val": pk_value}
+
+#                 for pi, prop_name in enumerate(props):
+#                     if prop_name in row:
+#                         param = f"p{pi}"
+#                         prop_parts.append(f".property('{prop_name}', {param})")
+#                         bindings[param] = row[prop_name]
+
+#                 query = "g.addV(label_val)" + "".join(prop_parts)
+#                 await asyncio.to_thread(_gremlin_submit, gremlin_c, query, bindings)
+#                 total_vertices += 1
+
+#         # Load edges
+#         edges = schema.get("edges", [])
+#         total_edges = 0
+#         for ei, edef in enumerate(edges):
+#             elabel = edef["label"]
+#             csv_path = data_dir / edef["csv_file"]
+#             if not csv_path.exists():
+#                 continue
+
+#             rows = await asyncio.to_thread(_read_csv, csv_path)
+
+#             # Apply filter
+#             row_filter = edef.get("filter")
+#             if row_filter:
+#                 fcol = row_filter["column"]
+#                 fval = row_filter["value"]
+#                 negate = row_filter.get("negate", False)
+#                 if negate:
+#                     rows = [r for r in rows if r.get(fcol) != fval]
+#                 else:
+#                     rows = [r for r in rows if r.get(fcol) == fval]
+
+#             pct = 50 + int(15 * ei / max(len(edges), 1))
+#             emit("graph", f"Loading {elabel} edges ({len(rows)} rows)...", pct)
+
+#             source = edef["source"]
+#             target = edef["target"]
+#             edge_props = edef.get("properties", [])
+
+#             for row in rows:
+#                 src_val = row[source["column"]]
+#                 tgt_val = row[target["column"]]
+#                 bindings = {"src_val": src_val, "tgt_val": tgt_val}
+
+#                 query = (
+#                     f"g.V().has('{source['label']}', '{source['property']}', src_val)"
+#                     f".addE('{elabel}')"
+#                     f".to(g.V().has('{target['label']}', '{target['property']}', tgt_val))"
+#                 )
+
+#                 for pi, prop in enumerate(edge_props):
+#                     param = f"ep{pi}"
+#                     if "column" in prop:
+#                         bindings[param] = row[prop["column"]]
+#                     elif "value" in prop:
+#                         bindings[param] = prop["value"]
+#                     else:
+#                         continue
+#                     query += f".property('{prop['name']}', {param})"
+
+#                 await asyncio.to_thread(_gremlin_submit, gremlin_c, query, bindings)
+#                 total_edges += 1
+
+#         emit("graph", f"Graph loaded: {total_vertices} vertices, {total_edges} edges", 65)
+
+#     finally:
+#         gremlin_c.close()
+
+#     # 5. Load telemetry (NoSQL)
+#     if containers_config and COSMOS_NOSQL_ENDPOINT:
+#         emit("telemetry", "Connecting to Cosmos NoSQL...", 70)
+#         telemetry_dir = scenario_dir / manifest.get("paths", {}).get("telemetry", "data/telemetry")
+
+#         def _load_all_telemetry():
+#             """Run all NoSQL operations in a single thread (no event loop conflicts)."""
+#             cosmos = CosmosClient(COSMOS_NOSQL_ENDPOINT, credential=get_credential())
+#             db = cosmos.create_database_if_not_exists(nosql_db_name)
+
+#             for ci, cdef in enumerate(containers_config):
+#                 cname = cdef["name"]
+#                 pk_path = cdef.get("partition_key", "/id")
+#                 csv_file = cdef.get("csv_file", f"{cname}.csv")
+#                 numeric_fields = cdef.get("numeric_fields", [])
+#                 id_field = cdef.get("id_field")
+
+#                 csv_path = telemetry_dir / csv_file
+#                 if not csv_path.exists():
+#                     emit("telemetry", f"⚠ CSV not found: {csv_file} — skipping {cname}", 72)
+#                     continue
+
+#                 pct = 72 + int(25 * ci / max(len(containers_config), 1))
+#                 emit("telemetry", f"Loading {cname} from {csv_file}...", pct)
+
+#                 container = db.create_container_if_not_exists(
+#                     id=cname, partition_key=PartitionKey(path=pk_path),
+#                 )
+
+#                 rows = _read_csv(csv_path)
+#                 emit("telemetry", f"Upserting {len(rows)} docs into {cname}...", pct + 5)
+
+#                 for row in rows:
+#                     for nf in numeric_fields:
+#                         if nf in row and row[nf]:
+#                             try:
+#                                 row[nf] = float(row[nf])
+#                             except (ValueError, TypeError):
+#                                 pass
+#                     if id_field and id_field in row:
+#                         row["id"] = row[id_field]
+#                     elif "id" not in row:
+#                         keys = list(row.keys())
+#                         row["id"] = f"{row.get(keys[0], '')}-{row.get(keys[1], '')}"
+
+#                     container.upsert_item(row)
+
+#                 emit("telemetry", f"✓ {cname}: {len(rows)} docs upserted", pct + 10)
+
+#         await asyncio.to_thread(_load_all_telemetry)
+
+#         emit("telemetry", f"Telemetry loaded into {nosql_db_name}", 92)
+#     else:
+#         emit("telemetry", "No telemetry containers or NoSQL endpoint not configured — skipping", 92)
+
+#     # 6. Store prompts in Cosmos (if prompts directory exists in archive)
+#     prompts_dir = scenario_dir / manifest.get("paths", {}).get("prompts", "data/prompts")
+#     stored_prompts = []
+#     if prompts_dir.exists() and COSMOS_NOSQL_ENDPOINT:
+#         emit("prompts", "Storing prompts in Cosmos DB...", 94)
+
+#         # Map prompt filenames to agent names
+#         PROMPT_AGENT_MAP = {
+#             "foundry_orchestrator_agent.md": "orchestrator",
+#             "orchestrator.md": "orchestrator",
+#             "foundry_telemetry_agent_v2.md": "telemetry",
+#             "telemetry_agent.md": "telemetry",
+#             "foundry_runbook_kb_agent.md": "runbook",
+#             "runbook_agent.md": "runbook",
+#             "foundry_historical_ticket_agent.md": "ticket",
+#             "ticket_agent.md": "ticket",
+#             "alert_storm.md": "default_alert",
+#             "default_alert.md": "default_alert",
+#         }
+
+#         try:
+#             from router_prompts import _get_prompts_container
+#             prompts_container = _get_prompts_container()
+
+#             for md_file in prompts_dir.glob("*.md"):
+#                 agent = PROMPT_AGENT_MAP.get(md_file.name)
+#                 if not agent:
+#                     continue
+
+#                 content = md_file.read_text()
+
+#                 # Check existing versions
+#                 query = (
+#                     "SELECT c.version FROM c "
+#                     "WHERE c.agent = @agent AND c.scenario = @scenario AND c.name = @name "
+#                     "ORDER BY c.version DESC"
+#                 )
+#                 existing = list(prompts_container.query_items(
+#                     query=query,
+#                     parameters=[
+#                         {"name": "@agent", "value": agent},
+#                         {"name": "@scenario", "value": scenario_name},
+#                         {"name": "@name", "value": md_file.stem},
+#                     ],
+#                     enable_cross_partition_query=False,
+#                 ))
+#                 next_version = (existing[0]["version"] + 1) if existing else 1
+#                 doc_id = f"{scenario_name}/{md_file.stem}/v{next_version}"
+
+#                 prompts_container.upsert_item({
+#                     "id": doc_id,
+#                     "agent": agent,
+#                     "scenario": scenario_name,
+#                     "name": md_file.stem,
+#                     "version": next_version,
+#                     "content": content,
+#                     "description": f"Auto-imported from {scenario_name} upload",
+#                     "tags": [scenario_name, agent],
+#                     "is_active": True,
+#                     "deleted": False,
+#                     "created_at": datetime.now(timezone.utc).isoformat(),
+#                     "created_by": "scenario-upload",
+#                 })
+#                 stored_prompts.append(doc_id)
+
+#             # Handle graph_explorer composite prompt
+#             ge_dir = prompts_dir / "graph_explorer"
+#             if ge_dir.exists():
+#                 parts = []
+#                 for part_name in ["core_instructions.md", "core_schema.md", "language_gremlin.md"]:
+#                     part_file = ge_dir / part_name
+#                     if part_file.exists():
+#                         parts.append(part_file.read_text())
+
+#                 if parts:
+#                     composed = "\n\n---\n\n".join(parts)
+#                     existing = list(prompts_container.query_items(
+#                         query="SELECT c.version FROM c WHERE c.agent = 'graph_explorer' AND c.scenario = @scenario AND c.name = 'graph_explorer' ORDER BY c.version DESC",
+#                         parameters=[{"name": "@scenario", "value": scenario_name}],
+#                         enable_cross_partition_query=False,
+#                     ))
+#                     next_version = (existing[0]["version"] + 1) if existing else 1
+#                     doc_id = f"{scenario_name}/graph_explorer/v{next_version}"
+
+#                     prompts_container.upsert_item({
+#                         "id": doc_id,
+#                         "agent": "graph_explorer",
+#                         "scenario": scenario_name,
+#                         "name": "graph_explorer",
+#                         "version": next_version,
+#                         "content": composed,
+#                         "description": f"Composed from core_instructions + core_schema + language_gremlin ({scenario_name})",
+#                         "tags": [scenario_name, "graph_explorer", "composed"],
+#                         "is_active": True,
+#                         "deleted": False,
+#                         "created_at": datetime.now(timezone.utc).isoformat(),
+#                         "created_by": "scenario-upload",
+#                     })
+#                     stored_prompts.append(doc_id)
+
+#             emit("prompts", f"Stored {len(stored_prompts)} prompts in Cosmos", 97)
+#         except Exception as e:
+#             logger.warning("Failed to store prompts (non-fatal): %s", e)
+#             emit("prompts", f"⚠ Prompt storage failed (non-fatal): {e}", 97)
+#     else:
+#         emit("prompts", "No prompts directory found or NoSQL not configured — skipping", 97)
+
+#     # 7. Upload knowledge files to blob + create AI Search indexes
+#     knowledge_dir = scenario_dir / manifest.get("paths", {}).get("runbooks", "data/knowledge/runbooks")
+#     tickets_dir_path = scenario_dir / manifest.get("paths", {}).get("tickets", "data/knowledge/tickets")
+#     runbooks_index_name = ""
+#     tickets_index_name = ""
+#     storage_account = os.getenv("STORAGE_ACCOUNT_NAME", "")
+#     ai_search_name = os.getenv("AI_SEARCH_NAME", "")
+
+#     if storage_account and ai_search_name:
+#         try:
+#             from azure.storage.blob import BlobServiceClient
+
+#             blob_url = f"https://{storage_account}.blob.core.windows.net"
+#             blob_service = BlobServiceClient(blob_url, credential=get_credential())
+
+#             # Upload runbooks
+#             if knowledge_dir.exists() and any(knowledge_dir.glob("*.md")):
+#                 rb_container_name = f"{scenario_name}-runbooks"
+#                 emit("knowledge", f"Uploading runbooks to blob container '{rb_container_name}'...", 80)
+#                 try:
+#                     blob_service.create_container(rb_container_name)
+#                 except Exception:
+#                     pass  # container may already exist
+
+#                 for md_file in knowledge_dir.glob("*.md"):
+#                     blob_client = blob_service.get_blob_client(rb_container_name, md_file.name)
+#                     with open(md_file, "rb") as f:
+#                         blob_client.upload_blob(f, overwrite=True)
+
+#                 emit("knowledge", f"Uploaded {len(list(knowledge_dir.glob('*.md')))} runbook files", 83)
+
+#                 # Create search index
+#                 emit("knowledge", f"Creating AI Search index '{scenario_name}-runbooks-index'...", 85)
+#                 try:
+#                     from search_indexer import create_search_index as create_idx
+#                     idx_result = await asyncio.to_thread(
+#                         create_idx,
+#                         index_name=f"{scenario_name}-runbooks-index",
+#                         container_name=rb_container_name,
+#                         on_progress=lambda msg: emit("knowledge", msg, 87),
+#                     )
+#                     runbooks_index_name = idx_result.get("index_name", "")
+#                     emit("knowledge", f"Runbooks index: {idx_result.get('document_count', 0)} docs", 89)
+#                 except Exception as e:
+#                     logger.warning("Runbooks indexer failed (non-fatal): %s", e)
+#                     emit("knowledge", f"⚠ Runbooks indexer failed: {e}", 89)
+
+#             # Upload tickets
+#             if tickets_dir_path.exists() and any(tickets_dir_path.glob("*.txt")):
+#                 tk_container_name = f"{scenario_name}-tickets"
+#                 emit("knowledge", f"Uploading tickets to blob container '{tk_container_name}'...", 90)
+#                 try:
+#                     blob_service.create_container(tk_container_name)
+#                 except Exception:
+#                     pass
+
+#                 for txt_file in tickets_dir_path.glob("*.txt"):
+#                     blob_client = blob_service.get_blob_client(tk_container_name, txt_file.name)
+#                     with open(txt_file, "rb") as f:
+#                         blob_client.upload_blob(f, overwrite=True)
+
+#                 emit("knowledge", f"Uploaded {len(list(tickets_dir_path.glob('*.txt')))} ticket files", 93)
+
+#                 # Create search index
+#                 emit("knowledge", f"Creating AI Search index '{scenario_name}-tickets-index'...", 94)
+#                 try:
+#                     from search_indexer import create_search_index as create_idx
+#                     idx_result = await asyncio.to_thread(
+#                         create_idx,
+#                         index_name=f"{scenario_name}-tickets-index",
+#                         container_name=tk_container_name,
+#                         on_progress=lambda msg: emit("knowledge", msg, 95),
+#                     )
+#                     tickets_index_name = idx_result.get("index_name", "")
+#                     emit("knowledge", f"Tickets index: {idx_result.get('document_count', 0)} docs", 97)
+#                 except Exception as e:
+#                     logger.warning("Tickets indexer failed (non-fatal): %s", e)
+#                     emit("knowledge", f"⚠ Tickets indexer failed: {e}", 97)
+
+#         except Exception as e:
+#             logger.warning("Knowledge upload failed (non-fatal): %s", e)
+#             emit("knowledge", f"⚠ Knowledge upload failed: {e}", 97)
+#     else:
+#         if not storage_account:
+#             emit("knowledge", "STORAGE_ACCOUNT_NAME not set — skipping blob upload", 97)
+#         elif not ai_search_name:
+#             emit("knowledge", "AI_SEARCH_NAME not set — skipping index creation", 97)
+
+#     # 8. Done
+#     result = {
+#         "scenario": scenario_name,
+#         "display_name": display_name,
+#         "graph": gremlin_graph,
+#         "telemetry_db": nosql_db_name,
+#         "vertices": total_vertices,
+#         "edges": total_edges,
+#         "prompts": stored_prompts,
+#         "runbooks_index": runbooks_index_name,
+#         "tickets_index": tickets_index_name,
+#     }
+#     emit("done", f"Scenario '{display_name}' loaded successfully!", 100)
+#     return result
+
+
+# # ---------------------------------------------------------------------------
+# # Endpoints
+# # ---------------------------------------------------------------------------
+
+
+# @router.post("/scenario/upload", summary="Upload and ingest a scenario")
+# async def upload_scenario(file: UploadFile = File(...)):
+#     """
+#     Upload a scenario as a .tar.gz archive and ingest into Cosmos DB.
+
+#     The archive must contain at least:
+#       - scenario.yaml (scenario manifest)
+#       - graph_schema.yaml (graph ontology)
+#       - data/entities/*.csv (vertex + edge CSVs)
+#       - data/telemetry/*.csv (telemetry CSVs)
+
+#     Returns an SSE stream with progress events.
+#     """
+#     if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
+#         raise HTTPException(400, "File must be a .tar.gz archive")
+
+#     # Read upload into memory
+#     content = await file.read()
+#     logger.info("Received scenario upload: %s (%d bytes)", file.filename, len(content))
+
+#     async def event_generator():
+#         progress: asyncio.Queue = asyncio.Queue()
+
+#         with tempfile.TemporaryDirectory() as tmpdir:
+#             tmppath = Path(tmpdir)
+
+#             # Extract archive
+#             try:
+#                 with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+#                     tar.extractall(tmppath, filter="data")
+#             except Exception as e:
+#                 yield {"event": "error", "data": json.dumps({"error": f"Failed to extract archive: {e}"})}
+#                 return
+
+#             # Find scenario root (may be nested one level)
+#             scenario_dir = tmppath
+#             if not (scenario_dir / "scenario.yaml").exists():
+#                 subdirs = [d for d in tmppath.iterdir() if d.is_dir()]
+#                 for sd in subdirs:
+#                     if (sd / "scenario.yaml").exists():
+#                         scenario_dir = sd
+#                         break
+
+#             # Start ingestion in background
+#             result_future: asyncio.Future = asyncio.get_event_loop().create_future()
+
+#             async def run_ingest():
+#                 try:
+#                     result = await _ingest_scenario(scenario_dir, progress)
+#                     result_future.set_result(result)
+#                 except Exception as e:
+#                     logger.exception("Ingestion failed")
+#                     result_future.set_exception(e)
+#                 finally:
+#                     await progress.put(None)  # sentinel
+
+#             task = asyncio.create_task(run_ingest())
+
+#             # Stream progress events
+#             while True:
+#                 event = await progress.get()
+#                 if event is None:
+#                     break
+#                 yield {"event": "progress", "data": json.dumps(event)}
+
+#             # Final result or error
+#             try:
+#                 result = result_future.result()
+#                 yield {"event": "complete", "data": json.dumps(result)}
+#             except Exception as e:
+#                 yield {"event": "error", "data": json.dumps({"error": str(e)})}
+
+#             await task
+
+#     return EventSourceResponse(event_generator())
 
 
 @router.get("/scenarios", summary="List loaded scenarios")

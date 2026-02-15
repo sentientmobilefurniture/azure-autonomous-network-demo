@@ -69,9 +69,9 @@ export function useTopology() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [getQueryHeaders]);
 
-  // Fetch full topology on mount
+  // Refetch when active graph changes
   useEffect(() => {
     fetchTopology();
   }, [fetchTopology]);

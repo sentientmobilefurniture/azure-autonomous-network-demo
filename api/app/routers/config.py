@@ -26,8 +26,12 @@ router = APIRouter(prefix="/api/config", tags=["configuration"])
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # Add scripts/ to path for agent_provisioner import
-if str(PROJECT_ROOT / "scripts") not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+# In container: /app/api/app/routers/config.py → PROJECT_ROOT = /app/api
+# Scripts are at /app/scripts/, so we check both locations
+for scripts_path in [PROJECT_ROOT / "scripts", PROJECT_ROOT.parent / "scripts"]:
+    if scripts_path.exists() and str(scripts_path) not in sys.path:
+        sys.path.insert(0, str(scripts_path))
+        break
 
 # ---------------------------------------------------------------------------
 # In-memory config state

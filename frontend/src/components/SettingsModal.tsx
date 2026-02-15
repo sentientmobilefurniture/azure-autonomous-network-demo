@@ -11,6 +11,8 @@ interface UploadBoxProps {
   onComplete?: () => void;
 }
 
+type ActionStatus = 'idle' | 'working' | 'done' | 'error';
+
 function UploadBox({ label, icon, hint, endpoint, accept, onComplete }: UploadBoxProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
@@ -112,6 +114,53 @@ function UploadBox({ label, icon, hint, endpoint, accept, onComplete }: UploadBo
         </div>
       )}
     </div>
+  );
+}
+
+function ActionButton({ label, icon, description, onClick }: {
+  label: string;
+  icon: string;
+  description: string;
+  onClick: () => Promise<string>;
+}) {
+  const [status, setStatus] = useState<ActionStatus>('idle');
+  const [result, setResult] = useState('');
+
+  const handleClick = useCallback(async () => {
+    setStatus('working');
+    setResult('');
+    try {
+      const msg = await onClick();
+      setResult(msg);
+      setStatus('done');
+    } catch (e) {
+      setResult(String(e));
+      setStatus('error');
+    }
+  }, [onClick]);
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={status === 'working'}
+      className={`flex-1 p-3 rounded-lg border text-left transition-colors ${
+        status === 'done' ? 'border-status-success/30 bg-status-success/5' :
+        status === 'error' ? 'border-status-error/30 bg-status-error/5' :
+        status === 'working' ? 'border-brand/30 bg-brand/5 animate-pulse' :
+        'border-white/10 bg-neutral-bg1 hover:border-white/20'
+      }`}
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <span>{icon}</span>
+        <span className="text-sm font-medium text-text-primary">{label}</span>
+        {status === 'done' && <span className="text-xs text-status-success ml-auto">✓</span>}
+        {status === 'error' && <span className="text-xs text-status-error ml-auto">✗</span>}
+        {status === 'working' && <span className="text-xs text-text-muted ml-auto">...</span>}
+      </div>
+      <p className="text-xs text-text-muted">
+        {status === 'done' ? result : status === 'error' ? result.substring(0, 80) : description}
+      </p>
+    </button>
   );
 }
 
@@ -289,6 +338,70 @@ export function SettingsModal({ open, onClose }: Props) {
               </div>
 
               {error && <p className="text-xs text-status-error">{error}</p>}
+
+              {/* Action buttons */}
+              <div className="flex gap-3">
+                <ActionButton
+                  label="Load Topology"
+                  icon="🔗"
+                  description={`Reload graph from ${activeGraph}`}
+                  onClick={async () => {
+                    // Trigger a topology refetch by posting to /query/topology with X-Graph
+                    const res = await fetch('/query/topology', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'X-Graph': activeGraph },
+                      body: JSON.stringify({}),
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const data = await res.json();
+                    if (data.error) throw new Error(data.error);
+                    return `${data.meta?.node_count ?? '?'} nodes, ${data.meta?.edge_count ?? '?'} edges`;
+                  }}
+                />
+                <ActionButton
+                  label="Provision Agents"
+                  icon="🤖"
+                  description={`Bind agents to selected data sources`}
+                  onClick={async () => {
+                    const res = await fetch('/api/config/apply', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        graph: activeGraph,
+                        runbooks_index: activeRunbooksIndex,
+                        tickets_index: activeTicketsIndex,
+                      }),
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    // Read SSE stream for progress
+                    const reader = res.body?.getReader();
+                    const decoder = new TextDecoder();
+                    let lastMsg = '';
+                    if (reader) {
+                      let buf = '';
+                      while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buf += decoder.decode(value, { stream: true });
+                        const lines = buf.split('\n');
+                        buf = lines.pop() || '';
+                        for (const line of lines) {
+                          if (line.startsWith('data: ')) {
+                            try {
+                              const d = JSON.parse(line.slice(6));
+                              if (d.detail) lastMsg = d.detail;
+                              if (d.error) throw new Error(d.error);
+                            } catch (e) {
+                              if (e instanceof Error && e.message !== 'Unexpected') throw e;
+                            }
+                          }
+                        }
+                      }
+                    }
+                    return lastMsg || 'Agents provisioned';
+                  }}
+                />
+              </div>
             </>
           )}
 
