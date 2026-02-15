@@ -1,18 +1,7 @@
-import { useState, useRef, useCallback } from 'react';
-
-interface ProgressEvent {
-  step: string;
-  detail: string;
-  pct: number;
-}
-
-interface UploadResult {
-  scenario: string;
-  display_name: string;
-  graph: string;
-  vertices: number;
-  edges: number;
-}
+import { useState, useCallback } from 'react';
+import { SavedScenario } from '../types';
+import { consumeSSE } from '../utils/sseStream';
+import { useScenarioContext } from '../context/ScenarioContext';
 
 export interface ScenarioInfo {
   graph_name: string;
@@ -28,15 +17,22 @@ export interface SearchIndex {
 }
 
 export function useScenarios() {
+  // Existing: graph scenarios & search indexes (discovery endpoints)
   const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
   const [indexes, setIndexes] = useState<SearchIndex[]>([]);
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState<ProgressEvent | null>(null);
-  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
+  // New: saved scenario records from Cosmos
+  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+
+  const {
+    setActiveScenario,
+    setProvisioningStatus,
+  } = useScenarioContext();
+
+  // Fetch graph scenarios (existing discovery endpoint)
   const fetchScenarios = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -52,104 +48,132 @@ export function useScenarios() {
     }
   }, []);
 
+  // Fetch search indexes
   const fetchIndexes = useCallback(async () => {
     try {
       const res = await fetch('/query/indexes');
       const data = await res.json();
       setIndexes(data.indexes || []);
     } catch (e) {
-      // AI Search indexes are optional — don't set top-level error
       console.warn('Failed to fetch indexes:', e);
     }
   }, []);
 
-  const uploadScenario = useCallback(async (file: File) => {
-    setUploading(true);
-    setProgress(null);
-    setUploadResult(null);
-    setError(null);
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    abortRef.current = new AbortController();
-
+  // Fetch saved scenario records from Cosmos
+  const fetchSavedScenarios = useCallback(async () => {
+    setSavedLoading(true);
     try {
-      const res = await fetch('/query/scenario/upload', {
-        method: 'POST',
-        body: formData,
-        signal: abortRef.current.signal,
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Upload failed: ${res.status} ${text}`);
-      }
-
-      // Read SSE stream
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      if (!reader) throw new Error('No response body');
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              // Check the event type from the preceding event: line
-              if ('pct' in parsed) {
-                setProgress(parsed as ProgressEvent);
-              } else if ('scenario' in parsed) {
-                setUploadResult(parsed as UploadResult);
-              } else if ('error' in parsed) {
-                setError(parsed.error);
-              }
-            } catch {
-              // not JSON, skip
-            }
-          }
-        }
-      }
-
-      // Refresh scenario list after upload
-      await fetchScenarios();
+      const res = await fetch('/query/scenarios/saved');
+      const data = await res.json();
+      setSavedScenarios(data.scenarios || []);
     } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setError('Upload cancelled');
-      } else {
-        setError(`Upload failed: ${e}`);
-      }
+      console.warn('Failed to fetch saved scenarios:', e);
     } finally {
-      setUploading(false);
-      abortRef.current = null;
+      setSavedLoading(false);
     }
-  }, [fetchScenarios]);
-
-  const cancelUpload = useCallback(() => {
-    abortRef.current?.abort();
   }, []);
 
+  // Save a scenario record to Cosmos (after all uploads succeed)
+  const saveScenario = useCallback(async (meta: {
+    name: string;
+    display_name?: string;
+    description?: string;
+    upload_results: Record<string, unknown>;
+  }) => {
+    const res = await fetch('/query/scenarios/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(meta),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Save failed: ${res.status} ${text}`);
+    }
+    const data = await res.json();
+    // Refresh the list
+    await fetchSavedScenarios();
+    return data;
+  }, [fetchSavedScenarios]);
+
+  // Delete a saved scenario record
+  const deleteSavedScenario = useCallback(async (name: string) => {
+    const res = await fetch(`/query/scenarios/saved/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Delete failed: ${res.status} ${text}`);
+    }
+    // Refresh the list
+    await fetchSavedScenarios();
+  }, [fetchSavedScenarios]);
+
+  // Select a saved scenario: update context bindings + auto-provision agents
+  const selectScenario = useCallback(async (name: string) => {
+    // 1. Update all frontend bindings instantly
+    setActiveScenario(name);
+
+    // 2. Auto-provision agents with SSE progress tracking
+    setProvisioningStatus({ state: 'provisioning', step: 'Starting...', scenarioName: name });
+
+    try {
+      const res = await fetch('/api/config/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          graph: `${name}-topology`,
+          runbooks_index: `${name}-runbooks-index`,
+          tickets_index: `${name}-tickets-index`,
+          prompt_scenario: name,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      await consumeSSE(res, {
+        onProgress: (data) => {
+          setProvisioningStatus({
+            state: 'provisioning',
+            step: data.detail || data.step,
+            scenarioName: name,
+          });
+        },
+        onComplete: () => {
+          setProvisioningStatus({ state: 'done', scenarioName: name });
+        },
+        onError: (data) => {
+          setProvisioningStatus({ state: 'error', error: data.error, scenarioName: name });
+        },
+      });
+
+      // Auto-clear "done" state after 3 seconds
+      setTimeout(() => {
+        setProvisioningStatus({ state: 'idle' });
+      }, 3000);
+    } catch (e) {
+      setProvisioningStatus({
+        state: 'error',
+        error: String(e),
+        scenarioName: name,
+      });
+    }
+  }, [setActiveScenario, setProvisioningStatus]);
+
   return {
+    // Existing discovery
     scenarios,
     indexes,
     loading,
-    uploading,
-    progress,
-    uploadResult,
     error,
     fetchScenarios,
     fetchIndexes,
-    uploadScenario,
-    cancelUpload,
+
+    // Saved scenario management
+    savedScenarios,
+    savedLoading,
+    fetchSavedScenarios,
+    saveScenario,
+    deleteSavedScenario,
+    selectScenario,
   };
 }

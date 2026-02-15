@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, Query, UploadFile, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from gremlin_python.driver import client, serializer
@@ -37,6 +37,7 @@ from config import (
     COSMOS_GREMLIN_ENDPOINT,
     COSMOS_GREMLIN_PRIMARY_KEY,
     COSMOS_GREMLIN_DATABASE,
+    COSMOS_GREMLIN_GRAPH,
     COSMOS_NOSQL_ENDPOINT,
     get_credential,
 )
@@ -741,14 +742,18 @@ def _extract_tar(content: bytes, tmppath: Path) -> Path:
 
 
 @router.post("/upload/graph", summary="Upload graph data only")
-async def upload_graph(file: UploadFile = File(...)):
+async def upload_graph(
+    file: UploadFile = File(...),
+    scenario_name: str | None = Query(default=None, description="Override scenario name from scenario.yaml"),
+):
     """Upload a tarball containing scenario.yaml + graph_schema.yaml + data/entities/*.csv.
-    Loads vertices and edges into Cosmos Gremlin. Returns SSE progress."""
+    Loads vertices and edges into Cosmos Gremlin. Returns SSE progress.
+    If scenario_name is provided, it overrides the name from scenario.yaml."""
     if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
         raise HTTPException(400, "File must be a .tar.gz archive")
 
     content = await file.read()
-    logger.info("Graph upload: %s (%d bytes)", file.filename, len(content))
+    logger.info("Graph upload: %s (%d bytes), scenario_name=%s", file.filename, len(content), scenario_name)
 
     async def stream():
         progress: asyncio.Queue = asyncio.Queue()
@@ -763,9 +768,16 @@ async def upload_graph(file: UploadFile = File(...)):
 
                     manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
                     schema = yaml.safe_load((scenario_dir / "graph_schema.yaml").read_text())
-                    scenario_name = manifest["name"]
-                    cosmos_cfg = manifest.get("cosmos", {})
-                    gremlin_graph = f"{scenario_name}-{cosmos_cfg.get('gremlin', {}).get('graph', 'topology')}"
+                    # scenario_name override takes priority over manifest
+                    sc_name = scenario_name or manifest["name"]
+                    # When scenario_name override is provided, always use hardcoded
+                    # suffix '-topology' to guarantee consistency with query-time
+                    # derivation in config.py (graph_name.rsplit('-', 1)[0]).
+                    if scenario_name:
+                        gremlin_graph = f"{sc_name}-topology"
+                    else:
+                        cosmos_cfg = manifest.get("cosmos", {})
+                        gremlin_graph = f"{sc_name}-{cosmos_cfg.get('gremlin', {}).get('graph', 'topology')}"  # noqa: E501
                     data_dir = scenario_dir / schema.get("data_dir", "data/entities")
 
                     emit("infra", f"Ensuring graph '{gremlin_graph}' exists...", 10)
@@ -833,7 +845,7 @@ async def upload_graph(file: UploadFile = File(...)):
 
                     total_v, total_e = await asyncio.to_thread(_load_graph)
                     emit("done", f"Graph loaded: {total_v} vertices, {total_e} edges → {gremlin_graph}", 100)
-                    progress.put_nowait({"_result": {"scenario": scenario_name, "graph": gremlin_graph, "vertices": total_v, "edges": total_e}})
+                    progress.put_nowait({"_result": {"scenario": sc_name, "graph": gremlin_graph, "vertices": total_v, "edges": total_e}})
             except Exception as e:
                 logger.exception("Graph upload failed")
                 progress.put_nowait({"step": "error", "detail": str(e), "pct": -1})
@@ -857,14 +869,18 @@ async def upload_graph(file: UploadFile = File(...)):
 
 
 @router.post("/upload/telemetry", summary="Upload telemetry data only")
-async def upload_telemetry(file: UploadFile = File(...)):
+async def upload_telemetry(
+    file: UploadFile = File(...),
+    scenario_name: str | None = Query(default=None, description="Override scenario name from scenario.yaml"),
+):
     """Upload a tarball containing scenario.yaml + data/telemetry/*.csv.
-    Loads into Cosmos NoSQL. Runs entirely in a background thread."""
+    Loads into Cosmos NoSQL. Runs entirely in a background thread.
+    If scenario_name is provided, it overrides the name from scenario.yaml."""
     if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
         raise HTTPException(400, "File must be a .tar.gz archive")
 
     content = await file.read()
-    logger.info("Telemetry upload: %s (%d bytes)", file.filename, len(content))
+    logger.info("Telemetry upload: %s (%d bytes), scenario_name=%s", file.filename, len(content), scenario_name)
 
     async def stream():
         progress: asyncio.Queue = asyncio.Queue()
@@ -878,9 +894,15 @@ async def upload_telemetry(file: UploadFile = File(...)):
                     scenario_dir = _extract_tar(content, tmppath)
 
                     manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
-                    scenario_name = manifest["name"]
+                    # scenario_name override takes priority over manifest
+                    sc_name = scenario_name or manifest["name"]
                     cosmos_cfg = manifest.get("cosmos", {})
-                    nosql_db = f"{scenario_name}-{cosmos_cfg.get('nosql', {}).get('database', 'telemetry')}"
+                    # When scenario_name override is provided, always use '-telemetry'
+                    # suffix to guarantee consistency with query-time derivation.
+                    if scenario_name:
+                        nosql_db = f"{sc_name}-telemetry"
+                    else:
+                        nosql_db = f"{sc_name}-{cosmos_cfg.get('nosql', {}).get('database', 'telemetry')}"
                     containers_config = cosmos_cfg.get("nosql", {}).get("containers", [])
                     telemetry_dir = scenario_dir / manifest.get("paths", {}).get("telemetry", "data/telemetry")
 
@@ -962,7 +984,7 @@ async def upload_telemetry(file: UploadFile = File(...)):
 
                     count = await asyncio.to_thread(_load)
                     emit("done", f"Telemetry loaded: {count} containers → {nosql_db}", 100)
-                    progress.put_nowait({"_result": {"scenario": scenario_name, "database": nosql_db, "containers": count}})
+                    progress.put_nowait({"_result": {"scenario": sc_name, "database": nosql_db, "containers": count}})
             except Exception as e:
                 logger.exception("Telemetry upload failed")
                 progress.put_nowait({"step": "error", "detail": str(e), "pct": -1})
@@ -986,13 +1008,18 @@ async def upload_telemetry(file: UploadFile = File(...)):
 
 
 @router.post("/upload/runbooks", summary="Upload runbooks only")
-async def upload_runbooks(file: UploadFile = File(...), scenario: str = "default"):
-    """Upload a tarball of .md runbook files. Uploads to blob + creates AI Search index."""
+async def upload_runbooks(
+    file: UploadFile = File(...),
+    scenario: str = "default",
+    scenario_name: str | None = Query(default=None, description="Override scenario name (takes priority over scenario.yaml and scenario param)"),
+):
+    """Upload a tarball of .md runbook files. Uploads to blob + creates AI Search index.
+    If scenario_name is provided, it overrides both the scenario param and scenario.yaml."""
     if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
         raise HTTPException(400, "File must be a .tar.gz archive")
 
     content = await file.read()
-    logger.info("Runbooks upload: %s (%d bytes), scenario=%s", file.filename, len(content), scenario)
+    logger.info("Runbooks upload: %s (%d bytes), scenario=%s, scenario_name=%s", file.filename, len(content), scenario, scenario_name)
 
     async def stream():
         progress: asyncio.Queue = asyncio.Queue()
@@ -1006,13 +1033,16 @@ async def upload_runbooks(file: UploadFile = File(...), scenario: str = "default
                     with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
                         tar.extractall(tmppath, filter="data")
 
-                    # Auto-detect scenario name from scenario.yaml if present
+                    # scenario_name override > scenario.yaml > scenario param
                     sc_name = scenario
-                    for root, dirs, files in os.walk(tmppath):
-                        if "scenario.yaml" in files:
-                            m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
-                            sc_name = m.get("name", scenario)
-                            break
+                    if scenario_name:
+                        sc_name = scenario_name
+                    else:
+                        for root, dirs, files in os.walk(tmppath):
+                            if "scenario.yaml" in files:
+                                m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
+                                sc_name = m.get("name", scenario)
+                                break
 
                     # Find .md files
                     md_files = list(tmppath.rglob("*.md"))
@@ -1080,13 +1110,18 @@ async def upload_runbooks(file: UploadFile = File(...), scenario: str = "default
 
 
 @router.post("/upload/tickets", summary="Upload tickets only")
-async def upload_tickets(file: UploadFile = File(...), scenario: str = "default"):
-    """Upload a tarball of .txt ticket files. Uploads to blob + creates AI Search index."""
+async def upload_tickets(
+    file: UploadFile = File(...),
+    scenario: str = "default",
+    scenario_name: str | None = Query(default=None, description="Override scenario name (takes priority over scenario.yaml and scenario param)"),
+):
+    """Upload a tarball of .txt ticket files. Uploads to blob + creates AI Search index.
+    If scenario_name is provided, it overrides both the scenario param and scenario.yaml."""
     if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
         raise HTTPException(400, "File must be a .tar.gz archive")
 
     content = await file.read()
-    logger.info("Tickets upload: %s (%d bytes), scenario=%s", file.filename, len(content), scenario)
+    logger.info("Tickets upload: %s (%d bytes), scenario=%s, scenario_name=%s", file.filename, len(content), scenario, scenario_name)
 
     async def stream():
         progress: asyncio.Queue = asyncio.Queue()
@@ -1100,12 +1135,16 @@ async def upload_tickets(file: UploadFile = File(...), scenario: str = "default"
                     with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
                         tar.extractall(tmppath, filter="data")
 
+                    # scenario_name override > scenario.yaml > scenario param
                     sc_name = scenario
-                    for root, dirs, files in os.walk(tmppath):
-                        if "scenario.yaml" in files:
-                            m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
-                            sc_name = m.get("name", scenario)
-                            break
+                    if scenario_name:
+                        sc_name = scenario_name
+                    else:
+                        for root, dirs, files in os.walk(tmppath):
+                            if "scenario.yaml" in files:
+                                m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
+                                sc_name = m.get("name", scenario)
+                                break
 
                     txt_files = list(tmppath.rglob("*.txt"))
                     if not txt_files:
@@ -1187,13 +1226,17 @@ PROMPT_AGENT_MAP = {
 
 
 @router.post("/upload/prompts", summary="Upload prompts to Cosmos DB")
-async def upload_prompts(file: UploadFile = File(...)):
-    """Upload a tarball of .md prompt files. Stores in Cosmos platform-config.prompts."""
+async def upload_prompts(
+    file: UploadFile = File(...),
+    scenario_name: str | None = Query(default=None, description="Override scenario name from scenario.yaml"),
+):
+    """Upload a tarball of .md prompt files. Stores in Cosmos platform-config.prompts.
+    If scenario_name is provided, it overrides the name from scenario.yaml."""
     if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
         raise HTTPException(400, "File must be a .tar.gz archive")
 
     content = await file.read()
-    logger.info("Prompts upload: %s (%d bytes)", file.filename, len(content))
+    logger.info("Prompts upload: %s (%d bytes), scenario_name=%s", file.filename, len(content), scenario_name)
 
     async def stream():
         progress: asyncio.Queue = asyncio.Queue()
@@ -1207,12 +1250,16 @@ async def upload_prompts(file: UploadFile = File(...)):
                     with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
                         tar.extractall(tmppath, filter="data")
 
-                    sc_name = "default"
-                    for root, dirs, files in os.walk(tmppath):
-                        if "scenario.yaml" in files:
-                            m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
-                            sc_name = m.get("name", "default")
-                            break
+                    # scenario_name override takes priority over scenario.yaml
+                    if scenario_name:
+                        sc_name = scenario_name
+                    else:
+                        sc_name = "default"
+                        for root, dirs, files in os.walk(tmppath):
+                            if "scenario.yaml" in files:
+                                m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
+                                sc_name = m.get("name", "default")
+                                break
 
                     # Find all .md files
                     all_md = list(tmppath.rglob("*.md"))

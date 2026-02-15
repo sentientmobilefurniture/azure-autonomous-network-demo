@@ -41,6 +41,7 @@ from backends import close_all_backends
 from router_topology import router as topology_router
 from router_ingest import router as ingest_router
 from router_prompts import router as prompts_router
+from router_scenarios import router as scenarios_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -129,6 +130,7 @@ app.include_router(telemetry_router)
 app.include_router(topology_router)
 app.include_router(ingest_router)
 app.include_router(prompts_router)
+app.include_router(scenarios_router)
 
 
 # ---------------------------------------------------------------------------

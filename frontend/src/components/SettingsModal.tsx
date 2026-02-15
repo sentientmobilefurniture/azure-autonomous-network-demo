@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useScenarios } from '../hooks/useScenarios';
 import { useScenarioContext } from '../context/ScenarioContext';
+import { AddScenarioModal } from './AddScenarioModal';
+import { consumeSSE } from '../utils/sseStream';
 
 interface UploadBoxProps {
   label: string;
@@ -169,7 +171,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = 'datasources' | 'upload';
+type Tab = 'scenarios' | 'datasources' | 'upload';
 
 export function SettingsModal({ open, onClose }: Props) {
   const {
@@ -179,25 +181,37 @@ export function SettingsModal({ open, onClose }: Props) {
     error,
     fetchScenarios,
     fetchIndexes,
+    savedScenarios,
+    savedLoading,
+    fetchSavedScenarios,
+    saveScenario,
+    deleteSavedScenario,
+    selectScenario,
   } = useScenarios();
 
   const {
+    activeScenario,
     activeGraph,
     activeRunbooksIndex,
     activeTicketsIndex,
+    activePromptSet,
+    setActiveScenario,
     setActiveGraph,
     setActiveRunbooksIndex,
     setActiveTicketsIndex,
+    setActivePromptSet,
   } = useScenarioContext();
 
-  const [tab, setTab] = useState<Tab>('datasources');
+  const [tab, setTab] = useState<Tab>('scenarios');
   const [promptScenarios, setPromptScenarios] = useState<{scenario: string; prompt_count: number}[]>([]);
-  const [activePromptSet, setActivePromptSet] = useState('');
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       fetchScenarios();
       fetchIndexes();
+      fetchSavedScenarios();
       // Fetch available prompt sets
       fetch('/query/prompts/scenarios')
         .then(r => r.json())
@@ -209,7 +223,7 @@ export function SettingsModal({ open, onClose }: Props) {
         })
         .catch(() => {});
     }
-  }, [open, fetchScenarios, fetchIndexes]);
+  }, [open, fetchScenarios, fetchIndexes, fetchSavedScenarios, activePromptSet, setActivePromptSet]);
 
   if (!open) return null;
 
@@ -217,9 +231,18 @@ export function SettingsModal({ open, onClose }: Props) {
   const runbookIndexes = indexes.filter(i => i.type === 'runbooks');
   const ticketIndexes = indexes.filter(i => i.type === 'tickets');
 
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-neutral-bg2 border border-white/10 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
+    <>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={handleBackdropClick}
+      onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
+    >
+      <div className="bg-neutral-bg2 border border-white/10 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl" role="dialog" aria-modal="true">
         {/* Header with tabs */}
         <div className="border-b border-white/10">
           <div className="flex items-center justify-between px-6 pt-4 pb-0">
@@ -232,7 +255,7 @@ export function SettingsModal({ open, onClose }: Props) {
             </button>
           </div>
           <div className="flex px-6 mt-3 gap-1">
-            {(['datasources', 'upload'] as Tab[]).map((t) => (
+            {(['scenarios', 'datasources', 'upload'] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -242,7 +265,7 @@ export function SettingsModal({ open, onClose }: Props) {
                     : 'text-text-muted hover:text-text-secondary'
                 }`}
               >
-                {t === 'datasources' ? 'Data Sources' : 'Upload'}
+                {t === 'scenarios' ? 'Scenarios' : t === 'datasources' ? 'Data Sources' : 'Upload'}
               </button>
             ))}
           </div>
@@ -250,9 +273,200 @@ export function SettingsModal({ open, onClose }: Props) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+          {/* ── Scenarios Tab ──────────────────────────────────── */}
+          {tab === 'scenarios' && (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider">
+                  Saved Scenarios
+                </h3>
+                <button
+                  onClick={() => setAddModalOpen(true)}
+                  className="text-xs bg-brand/20 text-brand hover:bg-brand/30 px-3 py-1 rounded-md transition-colors"
+                >
+                  + New Scenario
+                </button>
+              </div>
+
+              {savedLoading ? (
+                <p className="text-text-muted text-sm">Loading...</p>
+              ) : savedScenarios.length === 0 ? (
+                <div className="border border-dashed border-white/10 rounded-lg p-6 text-center">
+                  <p className="text-sm text-text-muted">No scenarios yet</p>
+                  <p className="text-xs text-text-muted mt-1">
+                    Click "+ New Scenario" to create your first scenario data pack.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {savedScenarios.map((sc) => {
+                    const isActive = activeScenario === sc.id;
+                    return (
+                      <div
+                        key={sc.id}
+                        onClick={() => { if (!isActive) selectScenario(sc.id); }}
+                        className={`p-4 rounded-lg border transition-colors cursor-pointer ${
+                          isActive
+                            ? 'border-status-success/40 bg-status-success/5'
+                            : 'border-white/10 bg-neutral-bg1 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className={`h-3 w-3 rounded-full border-2 flex items-center justify-center ${
+                              isActive ? 'border-status-success' : 'border-white/30'
+                            }`}>
+                              {isActive && <span className="h-1.5 w-1.5 rounded-full bg-status-success" />}
+                            </span>
+                            <div>
+                              <span className="text-sm font-medium text-text-primary">
+                                {sc.display_name || sc.id}
+                              </span>
+                              {isActive && (
+                                <span className="ml-2 text-[10px] bg-status-success/20 text-status-success px-1.5 py-0.5 rounded">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="relative">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirm(deleteConfirm === sc.id ? null : sc.id);
+                              }}
+                              className="text-text-muted hover:text-text-primary text-sm px-1"
+                            >
+                              ⋮
+                            </button>
+                            {deleteConfirm === sc.id && (
+                              <div className="absolute right-0 top-6 bg-neutral-bg2 border border-white/10 rounded-lg shadow-xl p-3 z-10 min-w-[180px]">
+                                <p className="text-xs text-text-muted mb-2">Delete "{sc.id}"?</p>
+                                <p className="text-[10px] text-text-muted mb-3">
+                                  This removes the record only. Azure resources will remain.
+                                </p>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setDeleteConfirm(null); }}
+                                    className="text-[10px] px-2 py-1 bg-white/10 rounded hover:bg-white/15 text-text-primary"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      await deleteSavedScenario(sc.id);
+                                      if (activeScenario === sc.id) setActiveScenario(null);
+                                      setDeleteConfirm(null);
+                                    }}
+                                    className="text-[10px] px-2 py-1 bg-status-error/80 rounded hover:bg-status-error text-white"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {sc.description && (
+                          <p className="text-xs text-text-muted mt-1 ml-6">{sc.description}</p>
+                        )}
+                        <div className="flex gap-3 mt-2 ml-6 text-[10px] text-text-muted">
+                          {sc.upload_status?.graph?.status === 'complete' && (
+                            <span>{String((sc.upload_status.graph as Record<string,unknown>)?.vertices ?? '?')} vertices</span>
+                          )}
+                          {sc.upload_status?.prompts?.status === 'complete' && (
+                            <span>{String((sc.upload_status.prompts as Record<string,unknown>)?.prompts_stored ?? '?')} prompts</span>
+                          )}
+                          <span>Updated {new Date(sc.updated_at).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
           {/* ── Data Sources Tab ──────────────────────────────────── */}
           {tab === 'datasources' && (
             <>
+              {/* Scenario-derived read-only bindings */}
+              {activeScenario ? (
+                <>
+                  <div className="bg-neutral-bg1 rounded-lg border border-status-success/20 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-text-primary">
+                        Active Scenario: {activeScenario}
+                      </span>
+                      <button
+                        onClick={() => setActiveScenario(null)}
+                        className="text-[10px] text-brand hover:text-brand/80"
+                      >
+                        Switch to Custom mode
+                      </button>
+                    </div>
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">GraphExplorer</span>
+                        <span className="text-text-secondary">{activeGraph}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">Telemetry</span>
+                        <span className="text-text-secondary">
+                          {activeGraph.includes('-') ? `${activeGraph.substring(0, activeGraph.lastIndexOf('-'))}-telemetry` : 'telemetry'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">RunbookKB</span>
+                        <span className="text-text-secondary">{activeRunbooksIndex}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">Tickets</span>
+                        <span className="text-text-secondary">{activeTicketsIndex}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">Prompts</span>
+                        <span className="text-text-secondary">{activePromptSet || '(none)'}</span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-text-muted">
+                      All bindings auto-derived from scenario name.
+                    </p>
+                  </div>
+
+                  {/* Re-provision button */}
+                  <div className="flex gap-3">
+                    <ActionButton
+                      label="Re-provision Agents"
+                      icon="🤖"
+                      description={`Rebind agents to ${activeScenario} data sources`}
+                      onClick={async () => {
+                        const res = await fetch('/api/config/apply', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            graph: activeGraph,
+                            runbooks_index: activeRunbooksIndex,
+                            tickets_index: activeTicketsIndex,
+                            prompt_scenario: activePromptSet || undefined,
+                          }),
+                        });
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        let lastMsg = '';
+                        await consumeSSE(res, {
+                          onProgress: (d) => { lastMsg = d.detail; },
+                          onError: (d) => { throw new Error(d.error); },
+                        });
+                        return lastMsg || 'Agents provisioned';
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                /* Custom mode — full dropdowns */
+                <>
               <p className="text-xs text-text-muted">
                 Each agent reads from an independent data source. Graph switching
                 is instant. Search index changes take ~30s (agents re-provision).
@@ -414,35 +628,17 @@ export function SettingsModal({ open, onClose }: Props) {
                       }),
                     });
                     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                    // Read SSE stream for progress
-                    const reader = res.body?.getReader();
-                    const decoder = new TextDecoder();
                     let lastMsg = '';
-                    if (reader) {
-                      let buf = '';
-                      while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        buf += decoder.decode(value, { stream: true });
-                        const lines = buf.split('\n');
-                        buf = lines.pop() || '';
-                        for (const line of lines) {
-                          if (line.startsWith('data: ')) {
-                            try {
-                              const d = JSON.parse(line.slice(6));
-                              if (d.detail) lastMsg = d.detail;
-                              if (d.error) throw new Error(d.error);
-                            } catch (e) {
-                              if (e instanceof Error && e.message !== 'Unexpected') throw e;
-                            }
-                          }
-                        }
-                      }
-                    }
+                    await consumeSSE(res, {
+                      onProgress: (d) => { lastMsg = d.detail; },
+                      onError: (d) => { throw new Error(d.error); },
+                    });
                     return lastMsg || 'Agents provisioned';
                   }}
                 />
               </div>
+            </>
+              )}
             </>
           )}
 
@@ -536,5 +732,13 @@ export function SettingsModal({ open, onClose }: Props) {
         </div>
       </div>
     </div>
+    <AddScenarioModal
+      open={addModalOpen}
+      onClose={() => setAddModalOpen(false)}
+      onSaved={() => fetchSavedScenarios()}
+      existingNames={savedScenarios.map(s => s.id)}
+      saveScenarioMeta={saveScenario}
+    />
+    </>
   );
 }
