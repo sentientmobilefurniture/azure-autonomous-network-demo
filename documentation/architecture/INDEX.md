@@ -1,9 +1,12 @@
 # Architecture — AI Incident Investigator
 
-> **Last updated:** 2026-02-16 — reflects V8 data management plane +
-> scenario management (SCENARIOHANDLING.md) + V8 codebase simplification
-> refactor (V8REFACTOR.md) + V9.5 frontend fixes (v95fixes.md) + V10
-> interaction history sidebar.
+> **Last updated:** 2026-02-17 — reflects V10 config-driven architecture
+> (V10generalflow.md phases 0-13), including: config-driven N-agent
+> provisioning from `scenario.yaml`, `DocumentStore` Protocol + registry,
+> `GraphBackend` registry, OpenAPI spec templates, `_normalize_manifest()`
+> v1→v2 backward compatibility, config store + validator, resource graph
+> API, frontend `EmptyState` + `ResourceVisualizer`, and all prior work
+> (V8 refactor, scenario management, V9.5 fixes, V10 interaction history).
 >
 > This document has been split into focused sections for targeted referencing.
 > See the individual files in [`architecture/`](architecture/) below.

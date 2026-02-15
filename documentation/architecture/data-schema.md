@@ -31,26 +31,23 @@ scenarios/{scenario-name}/
             └── language_mock.md
 ```
 
-## `scenario.yaml` Schema
+## `scenario.yaml` Schema (v2.0)
 
-> **NOTE:** The schema below is an **illustrative composite example** showing all
-> possible fields. Actual scenario files may differ in field values. For instance,
-> the real `telco-noc` scenario uses `partition_key: /SourceNodeType` (not `/alert_id`),
-> `id_field: AlertId` (Pascal case), and `telemetry_baselines` as descriptive strings
-> (e.g., `normal: \"2–15 ms\"`) rather than structured objects. The general structure
-> and field names are stable; the values are scenario-specific.
+> **NOTE:** The schema below is based on the actual `telco-noc/scenario.yaml`.
+> Field values are scenario-specific; the structure and field names are stable.
+> A `_normalize_manifest()` function in `router_ingest.py` converts v1.0
+> format (with `cosmos:` + `search_indexes:` list) to v2.0 format on the fly.
 
 ```yaml
 name: telco-noc                     # Used to derive graph/database names
 display_name: "Telecom NOC"
 description: "..."
-version: "1.0"
+version: "2.0"
 domain: telecommunications
 
 use_cases:                          # Human-readable scenario use cases (displayed in Scenario Info panel)
   - "Monitor fibre degradation in metro rings"
   - "Investigate MPLS path failures"
-  - "Correlate BGP flaps with physical layer events"
 
 example_questions:                  # Clickable example prompts (injected into alert input)
   - "What is the root cause of the fibre cut?"
@@ -65,49 +62,126 @@ paths:
   prompts: data/prompts
   default_alert: data/prompts/alert_storm.md
 
-cosmos:
-  gremlin:
-    database: networkgraph           # Shared (not scenario-prefixed)
-    graph: topology                  # Suffixed: "{name}-topology"
-  nosql:
-    database: telemetry              # Suffixed: "{name}-telemetry"
-    containers:
-      - name: AlertStream
-        partition_key: /alert_id
-        csv_file: AlertStream.csv
-        id_field: alert_id
-        numeric_fields: [severity]
-      - name: LinkTelemetry
-        partition_key: /link_id
-        csv_file: LinkTelemetry.csv
-        id_field: telemetry_id
-        numeric_fields: [utilization_pct, latency_ms, packet_loss_pct, ...]
+# ---------------------------------------------------------------------------
+# Data sources — defines all Azure resources this scenario needs
+# ---------------------------------------------------------------------------
 
-search_indexes:
-  - name: runbooks-index             # Suffixed: "{name}-runbooks-index"
-    container: runbooks
-    source: data/knowledge/runbooks
-  - name: tickets-index
-    container: tickets
-    source: data/knowledge/tickets
+data_sources:
+  graph:
+    connector: "cosmosdb-gremlin"       # Backend connector type
+    config:
+      database: "networkgraph"          # Shared (not scenario-prefixed)
+      graph: "telco-noc-topology"       # Scenario-prefixed graph name
+      partition_key: "/partitionKey"
+    schema_file: "graph_schema.yaml"
+
+  telemetry:
+    connector: "cosmosdb-nosql"
+    config:
+      database: "telemetry"             # Shared DB (pre-created by Bicep)
+      container_prefix: "telco-noc"     # Prefix for per-scenario containers
+      containers:
+        - name: AlertStream
+          partition_key: /SourceNodeType
+          csv_file: AlertStream.csv
+          id_field: AlertId
+          numeric_fields: [OpticalPowerDbm, BitErrorRate, CPUUtilPct, PacketLossPct]
+        - name: LinkTelemetry
+          partition_key: /LinkId
+          csv_file: LinkTelemetry.csv
+          id_field: null
+          numeric_fields: [UtilizationPct, OpticalPowerDbm, BitErrorRate, LatencyMs]
+
+  search_indexes:                       # Dict (not list!) keyed by logical name
+    runbooks:
+      index_name: "telco-noc-runbooks-index"
+      source: "data/knowledge/runbooks"
+      blob_container: "runbooks"
+    tickets:
+      index_name: "telco-noc-tickets-index"
+      source: "data/knowledge/tickets"
+      blob_container: "tickets"
+
+# ---------------------------------------------------------------------------
+# Agents — defines the complete agent topology for this scenario
+# ---------------------------------------------------------------------------
+
+agents:
+  - name: "GraphExplorerAgent"
+    role: "graph_explorer"
+    model: "gpt-4.1"
+    instructions_file: "prompts/graph_explorer/"   # Directory → composed prompt
+    compose_with_connector: true                    # Append connector-specific schema
+    tools:
+      - type: "openapi"
+        spec_template: "graph"                     # → openapi/templates/graph.yaml
+        keep_path: "/query/graph"                  # Filter spec to this path only
+
+  - name: "TelemetryAgent"
+    role: "telemetry"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_telemetry_agent_v2.md"
+    tools:
+      - type: "openapi"
+        spec_template: "telemetry"                 # → openapi/templates/telemetry.yaml
+        keep_path: "/query/telemetry"
+
+  - name: "RunbookKBAgent"
+    role: "runbook"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_runbook_kb_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "runbooks"                      # → data_sources.search_indexes["runbooks"]
+
+  - name: "HistoricalTicketAgent"
+    role: "ticket"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_historical_ticket_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "tickets"
+
+  - name: "Orchestrator"
+    role: "orchestrator"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_orchestrator_agent.md"
+    is_orchestrator: true
+    connected_agents:                              # References other agents by name
+      - "GraphExplorerAgent"
+      - "TelemetryAgent"
+      - "RunbookKBAgent"
+      - "HistoricalTicketAgent"
 
 graph_styles:
   node_types:
-    CoreRouter: {color: "#E74C3C", size: 12, icon: router}
-    AggSwitch: {color: "#3498DB", size: 10, icon: switch}
+    CoreRouter: {color: "#38BDF8", size: 28, icon: router}
+    AggSwitch: {color: "#FB923C", size: 22, icon: switch}
     # ...
 
 telemetry_baselines:
   link_telemetry:
-    - metric: utilization_pct
-      normal: {min: 10, max: 55}
-      degraded: {min: 56, max: 80}
-      down: {min: 81, max: 100}
+    - metric: LatencyMs
+      normal: "2–15 ms"
+      degraded: "> 50 ms"
+      down: "9999 ms"
   alert_stream:
-    - metric: severity
-      normal: {value: 1}
-      anomalous: {min: 3, max: 5}
+    - metric: PacketLossPct
+      normal: "< 1%"
+      anomalous: "> 2%"
 ```
+
+### Key Differences: v1.0 → v2.0
+
+| Aspect | v1.0 (legacy) | v2.0 (current) |
+|--------|---------------|----------------|
+| Graph config | `cosmos.gremlin.database`, `cosmos.gremlin.graph` | `data_sources.graph.config.database`, `.graph` |
+| Telemetry config | `cosmos.nosql.database`, `cosmos.nosql.containers[]` | `data_sources.telemetry.config.database`, `.container_prefix`, `.containers[]` |
+| Search indexes | `search_indexes:` (list of objects) | `data_sources.search_indexes:` (dict keyed by logical name) |
+| Agent definitions | Not in manifest — hardcoded in provisioner | `agents:` section with full topology |
+| Connector type | Implicit (always cosmosdb) | Explicit `connector:` field per data source |
+| Telemetry DB | Per-scenario DB (`{name}-telemetry`) | Shared `telemetry` DB with per-scenario container prefix |
+| Prompts DB | Per-scenario DB (`{name}-prompts`) | Shared `prompts` DB with per-scenario container |
 
 ## `graph_schema.yaml` Format
 

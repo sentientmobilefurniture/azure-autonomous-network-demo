@@ -109,19 +109,26 @@ Also broken: FastAPI path parameters — an ID containing `/` is interpreted as 
 
 ## 12. Per-Scenario Cosmos Databases — Naming Convention
 
-All scenario data follows a per-scenario naming pattern. Do NOT use a shared database for prompts:
+Scenario data uses a mix of shared databases with per-scenario containers/graphs,
+and dedicated databases. The V10 config-driven architecture reads these from
+`scenario.yaml` `data_sources:` section rather than deriving them by convention:
 
-| Data Type | Database Name | Container | Partition Key |
-|-----------|--------------|-----------|---------------|
-| Graph | `networkgraph` (shared) | `{scenario}-topology` | N/A (graph) |
-| Telemetry | `{scenario}-telemetry` | `AlertStream`, `LinkTelemetry` | `/EntityId` |
-| Prompts | `{scenario}-prompts` | `prompts` | `/agent` |
-| Scenario Registry | `scenarios` (shared) | `scenarios` | `/id` |
-| Interaction History | `interactions` (shared) | `interactions` | `/scenario` |
+| Data Type | Database Name | Container/Graph | Partition Key | Source |
+|-----------|--------------|-----------------|---------------|--------|
+| Graph | `networkgraph` (shared) | `{scenario}-topology` | N/A (graph) | `data_sources.graph.config` |
+| Telemetry | `telemetry` (shared) | `{scenario}-AlertStream`, `{scenario}-LinkTelemetry` | per container | `data_sources.telemetry.config` |
+| Prompts | `prompts` (shared) | `{scenario}` | `/agent` | Derived from scenario name |
+| Scenario Registry | `scenarios` (shared) | `scenarios` | `/id` | Hardcoded |
+| Scenario Config | `scenarios` (shared) | `configs` | `/scenario_name` | `config_store.py` |
+| Interaction History | `interactions` (shared) | `interactions` | `/scenario` | Hardcoded |
 
-To discover which scenarios have prompts, list all databases via ARM and filter names ending in `-prompts`. Strip the suffix to get the scenario name.
+> **V10 change**: Telemetry moved from per-scenario databases (`{scenario}-telemetry`)
+> to a shared `telemetry` database with per-scenario container prefixes. Prompts
+> similarly moved to a shared `prompts` database. This reduces ARM creation overhead
+> and simplifies cleanup.
 
-To discover saved scenarios, query `scenarios/scenarios` with cross-partition query.
+To discover which scenarios have data, query `scenarios/scenarios` with cross-partition query
+or use `GET /api/config/resources` for a resource graph visualization.
 
 ## 13. ARM Creation Calls Block the Event Loop — Split Read vs Write
 
@@ -152,9 +159,10 @@ This returns everything in a single request. Also set `timeout=30` (not 10) for 
 
 ## 15. OpenAPI Tools MUST Include X-Graph Header for Per-Scenario Routing
 
-When agents call `/query/graph` or `/query/telemetry` via `OpenApiTool`, Foundry's server-side HTTP client sends the request. If the OpenAPI spec doesn't define an `X-Graph` header parameter, the agent can't send it. The graph-query-api falls back to the default graph from `COSMOS_GREMLIN_GRAPH` env var (typically just `topology`), not the scenario-specific graph. Queries return empty results.
+When agents call `/query/graph` or `/query/telemetry` via `OpenApiTool`, Foundry's server-side HTTP client sends the request. If the OpenAPI spec doesn't define an `X-Graph` header parameter, the agent can't send it. The graph-query-api falls back to the default graph from env vars, not the scenario-specific graph. Queries return empty results.
 
-**Fix:** Add `X-Graph` header to the OpenAPI spec with a single-value `enum` substituted at provisioning:
+**V10 approach — OpenAPI templates:** Instead of static spec files, V10 uses template
+files at `openapi/templates/{graph,telemetry}.yaml` with placeholders:
 ```yaml
 parameters:
   - name: X-Graph
@@ -165,11 +173,14 @@ parameters:
       enum: ["{graph_name}"]  # Replaced at provisioning time — single-value enum CONSTRAINS the LLM
 ```
 
+The provisioner reads the template, replaces `{graph_name}`, `{base_url}`,
+`{query_language_description}`, etc. with actual values from `scenario.yaml`,
+and passes the filled spec to `OpenApiTool`.
+
+Legacy static specs (`openapi/cosmosdb.yaml`, `openapi/mock.yaml`) still exist for
+backward compatibility with non-config-driven provisioning.
+
 **CRITICAL — Use `enum`, NOT `default`:** LLM agents ignore `default` values (they're advisory hints). The LLM will see a parameter named `X-Graph`, infer it needs a graph name, and choose a plausible but wrong value like `"topology"`. A single-value `enum` constrains the LLM to exactly one valid value — it has no choice but to send the correct graph name. This applies to ANY OpenAPI parameter consumed by an LLM agent that MUST have a specific value (routing headers, API keys, fixed config values).
-
-The provisioner replaces `{graph_name}` with the actual graph name (e.g., `telco-noc-topology`) via `raw.replace("{graph_name}", graph_name)`.
-
-**Implication:** Agents are provisioned for a **specific** scenario. If the user switches scenarios, they must re-provision agents to rebind the tool to the new graph name.
 
 ## 16. Container App Env Vars vs azure_config.env — Two Parallel Config Paths
 

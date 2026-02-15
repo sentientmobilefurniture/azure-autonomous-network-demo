@@ -51,19 +51,55 @@ async def upload_type(file: UploadFile, scenario_name: str | None = Query(defaul
 
 | Endpoint | `scenario_name` param | Override behavior |
 |----------|----------------------|-------------------|
-| `POST /query/upload/graph` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name; forces `-topology` suffix |
-| `POST /query/upload/telemetry` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name; forces `-telemetry` suffix |
+| `POST /query/upload/graph` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name; rewrites all resource names via `_rewrite_manifest_prefix()` |
+| `POST /query/upload/telemetry` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name; rewrites all resource names via `_rewrite_manifest_prefix()` |
 | `POST /query/upload/runbooks` | `scenario_name: str \| None = Query(default=None)` + legacy `scenario: str = "default"` | `scenario_name` takes priority over `scenario.yaml` over legacy `scenario` param |
 | `POST /query/upload/tickets` | `scenario_name: str \| None = Query(default=None)` + legacy `scenario: str = "default"` | Same as runbooks |
 | `POST /query/upload/prompts` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name |
 
-**Critical naming coupling when `scenario_name` is used:** When the override is
-provided, upload endpoints **ignore** the custom `cosmos.nosql.database` and
-`cosmos.gremlin.graph` values from `scenario.yaml` and force hardcoded suffixes
-(`-topology`, `-telemetry`). This guarantees naming consistency with the query-time
-derivation in `config.py` (`graph_name.rsplit("-", 1)[0] + "-telemetry"`). Without
-this enforcement, custom suffixes in `scenario.yaml` would create databases that
-the query layer can't find.
+**Manifest prefix rewriting when `scenario_name` is used:** When the override is
+provided and differs from the manifest's `name`, both `upload_graph` and
+`upload_telemetry` call `_rewrite_manifest_prefix(manifest, scenario_name)` which
+rewrites all resource names in the parsed manifest to use the new name:
+
+- **Graph:** `telco-noc-topology` → `telco-noc2-topology` (prefix replacement)
+- **Telemetry prefix:** `telco-noc` → `telco-noc2` (container_prefix field)
+- **Search indexes:** `telco-noc-runbooks-index` → `telco-noc2-runbooks-index`
+- **Manifest name:** Updated to `scenario_name` value
+
+The rewritten manifest is also what gets persisted to `config_store` (if agents
+section is present), so query-time config lookups return consistent resource names.
+Without this rewriting, the graph would use config values (e.g., `telco-noc-topology`)
+while telemetry containers would use the override prefix (`telco-noc2-AlertStream`),
+causing query-time lookup failures when `get_scenario_context()` derives the
+telemetry prefix from the graph name.
+
+## Manifest Normalization (`_normalize_manifest()`)
+
+`scenario.yaml` supports two formats. `_normalize_manifest()` converts v1.0→v2.0:
+
+| v1.0 (legacy) | v2.0 (current) |
+|---|---|
+| `cosmos.gremlin.database`, `cosmos.gremlin.graph` | `data_sources.graph.config.database`, `.graph` |
+| `cosmos.nosql.database`, `cosmos.nosql.containers[]` | `data_sources.telemetry.config.database`, `.containers[]` |
+| `search_indexes[]` (list of objects) | `data_sources.search_indexes` (dict keyed by container name) |
+
+If `data_sources` already exists, returns the manifest as-is. Old-format graph names
+that lack the scenario prefix are auto-prefixed (e.g., `topology` → `telco-noc-topology`).
+
+## Manifest Prefix Rewriting (`_rewrite_manifest_prefix()`)
+
+When the user provides a `scenario_name` override that differs from the manifest's
+`name` field, `_rewrite_manifest_prefix(manifest, new_name)` rewrites all resource
+names in the manifest so that graph, telemetry, search, and saved config all share
+a consistent prefix. This is called by both `upload_graph` and `upload_telemetry`
+before any resources are created or configs are saved.
+
+The function:
+1. Updates `manifest["name"]` to the new name
+2. Rewrites `data_sources.graph.config.graph` (e.g., `telco-noc-topology` → `telco-noc2-topology`)
+3. Rewrites `data_sources.telemetry.config.container_prefix`
+4. Rewrites `data_sources.search_indexes.*.index_name` (prefix replacement)
 
 ## Tarball Extraction
 
@@ -110,7 +146,9 @@ Frontend → X-Graph: telco-noc-topology → graph-query-api reads header
   → get_backend_for_context(ctx) → cached CosmosDBGremlinBackend per graph
 ```
 
-Telemetry database derivation: `graph_name.rsplit("-", 1)[0]` → strip last `-*` segment → append `-telemetry`. Falls back to `COSMOS_NOSQL_DATABASE` env var if graph name has no hyphens.
+Telemetry database: shared `telemetry` database. Container prefix derived from graph name:
+`graph_name.rsplit("-", 1)[0]` → strip last `-*` segment → use as container prefix.
+Falls back to `COSMOS_NOSQL_DATABASE` env var if graph name has no hyphens.
 
 ## Prompt Upload — GraphExplorer Composition
 
@@ -121,8 +159,13 @@ The GraphExplorer agent prompt is special — it's **composed from 3 files**:
 
 Joined with `\n\n---\n\n` separator.
 
-Other agent prompts map 1:1 via `PROMPT_AGENT_MAP`:
+Other agent prompts map 1:1 via `PROMPT_AGENT_MAP` (legacy hardcoded lookup) or
+via `_build_prompt_agent_map_from_config()` (config-driven — maps `agents[].instructions_file`
+basename to `agents[].role`). Config-driven mapping takes priority when `agents:`
+section exists in the scenario config. Legacy map is kept for backward compatibility:
 ```python
+# Legacy hardcoded prompt-to-agent mapping (backward compatibility).
+# Config-driven scenarios use the agents[].instructions_file field instead.
 PROMPT_AGENT_MAP = {
     "foundry_orchestrator_agent.md": "orchestrator",
     "orchestrator.md": "orchestrator",
@@ -137,28 +180,34 @@ PROMPT_AGENT_MAP = {
 }
 ```
 
-**Note**: `graph_explorer` is NOT in `PROMPT_AGENT_MAP` — it's handled separately
-by composing from the `graph_explorer/` subdirectory in the upload logic.
-
 ## Agent Provisioning
 
 Agents are provisioned via `POST /api/config/apply` which:
 1. Receives `{graph, runbooks_index, tickets_index, prompt_scenario}` from frontend
 2. Calls `GET http://127.0.0.1:8100/query/prompts?scenario={prefix}&include_content=true` (localhost loopback via `urllib.request`, timeout 30s) to fetch prompts
-3. Falls back to minimal placeholder prompts if Cosmos has no prompts for that scenario:
-   - `orchestrator: "You are an investigation orchestrator."`
-   - `graph_explorer: "You are a graph explorer agent."`
-   - `telemetry: "You are a telemetry analysis agent."`
-   - `runbook: "You are a runbook knowledge base agent."`
-   - `ticket: "You are a historical ticket search agent."`
+3. Falls back to minimal placeholder prompts if Cosmos has no prompts for that scenario
 4. Imports `AgentProvisioner` from `scripts/agent_provisioner.py` via `sys.path` manipulation
-5. Calls `provisioner.provision_all()` with `force=True` (deletes existing agents first)
-6. Stores result in memory (`_current_config` protected by `threading.Lock()`) + writes `agent_ids.json`
-7. Streams SSE progress events back to frontend
+5. **Config-driven path (preferred):** If scenario config in Cosmos has an `agents:` section,
+   calls `provisioner.provision_from_config(config, ...)` which:
+   - Phase 1: Creates sub-agents (non-orchestrators) with tools built from config
+   - Phase 2: Creates orchestrators with `ConnectedAgentTool` referencing created sub-agents
+   - Tool building: `openapi` type → loads template YAML from `openapi/templates/`, injects
+     connector-specific vars ({base_url}, {graph_name}, {query_language_description}, etc.);
+     `azure_ai_search` type → resolves `index_key` from `data_sources.search_indexes`
+6. **Legacy fallback:** If no `agents:` section, calls `provisioner.provision_all()`
+   (hardcoded 5-agent: GraphExplorer, Telemetry, RunbookKB, HistoricalTicket, Orchestrator)
+7. Stores result in memory (`_current_config` protected by `threading.Lock()`) + writes `agent_ids.json`
+8. Streams SSE progress events back to frontend
 
 ## AgentProvisioner — What It Creates
 
-Creates 5 agents in order:
+**Config-driven mode** (`provision_from_config()`): Creates N agents as defined in
+`scenario.yaml`'s `agents:` section. Each agent specifies its `name`, `model`, `role`,
+`tools[]`, and optionally `connected_agents[]` (for orchestrators). The provisioner
+reads OpenAPI spec templates from `openapi/templates/{spec_template}.yaml` and injects
+connector-specific variables (`CONNECTOR_OPENAPI_VARS` per backend type: cosmosdb, mock, fabric).
+
+**Legacy mode** (`provision_all()`): Creates 5 hardcoded agents:
 
 | # | Agent | Tool Type | Tool Config |
 |---|-------|-----------|-------------|
@@ -168,13 +217,13 @@ Creates 5 agents in order:
 | 4 | HistoricalTicketAgent | `AzureAISearchTool` | Same pattern as RunbookKB |
 | 5 | Orchestrator | `ConnectedAgentTool` (×4) | References all 4 sub-agents by ID |
 
-**OpenAPI spec loading**: Reads from `graph-query-api/openapi/{cosmosdb|mock}.yaml`.
-The spec contains a literal `{base_url}` placeholder in the `servers` section:
-```yaml
-servers:
-  - url: "{base_url}"
-```
-Replaced at runtime via string replace with `GRAPH_QUERY_API_URI` (Container App public URL).
+**OpenAPI spec templates** (`openapi/templates/`): Templates use placeholders like
+`{base_url}`, `{graph_name}`, `{query_language_description}`, `{telemetry_database}`,
+`{container_prefix}`. At provisioning time, the provisioner does `raw.replace()`
+to inject the actual values for the current scenario + graph backend combination.
+
+**Legacy OpenAPI spec loading**: Falls back to `graph-query-api/openapi/{cosmosdb|mock}.yaml`
+when not using config-driven provisioning.
 
 **Search connection ID format**:
 ```
@@ -205,6 +254,7 @@ User pastes alert → POST /api/alert {text: "..."}
       → Creates thread + run via azure-ai-agents SDK
       → SSEEventHandler bridges sync callbacks → async queue → SSE stream
       → Orchestrator delegates to sub-agents via ConnectedAgentTool:
+          (agents are defined by scenario.yaml config — example for telco-noc:)
           ├─ GraphExplorerAgent → OpenApiTool → /query/graph (X-Graph header)
           ├─ TelemetryAgent → OpenApiTool → /query/telemetry (X-Graph header)
           ├─ RunbookKBAgent → AzureAISearchTool → {scenario}-runbooks-index

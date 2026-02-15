@@ -6,40 +6,53 @@
 <React.StrictMode>
   <ScenarioProvider>                    ← Global context (scenario + provisioning state + graph styles)
     <App>                               ← useInvestigation() + useInteractions() hooks
+      │                                    Startup overlay: AnimatePresence while !scenarioReady
       ├── <Header>                      ← Fixed 48px top bar
       │   ├── <ScenarioChip>            ← Flyout dropdown: scenario switching + "+ New Scenario"
       │   ├── <HealthDot label="API">   ← Polls /health every 15s
-      │   ├── Dynamic agent status      ← "5 Agents ✓" / "Provisioning..." / "Not configured"
-      │   └── <SettingsModal>           ← useScenarios(), useScenarioContext()
-      ├── <ProvisioningBanner>          ← Non-blocking 28px banner during agent provisioning
-      ├── <TabBar>                      ← "▸ Investigate" | "ℹ Scenario Info" tabs
+      │   ├── Dynamic agent status      ← "5 Agents ✓" / "Provisioning..." / "Error"
+      │   │                                (needs-provisioning falls through to default green dot)
+      │   ├── <SettingsModal>           ← useScenarios(), useScenarioContext()
+      │   └── <ProvisioningBanner>      ← Rendered inside Header; handles provisioning + needs-provisioning
+      ├── <TabBar>                      ← "▸ Investigate" | "ℹ Scenario Info" | "🔗 Resources" tabs
       │
       ├── [activeTab === 'investigate']
-      │   ├── <MetricsBar>                  ← Vertically resizable panel (default 30%)
-      │   │   ├── <GraphTopologyViewer>     ← useTopology(), owns overlay state
-      │   │   │   ├── <GraphToolbar>        ← +nodeColorOverride + onSetColor props → useNodeColor()
-      │   │   │   │   └── <ColorWheelPopover>  ← Opens on color dot click (HSL wheel + hex + presets)
-      │   │   │   ├── <GraphCanvas>         ← useNodeColor() + scenario-driven sizes
-      │   │   │   ├── <GraphTooltip>        ← +nodeColorOverride prop → useNodeColor()
-      │   │   │   └── <GraphContextMenu>    ← Right-click menu (uses shared COLOR_PALETTE)
-      │   │   └── <TabbedLogStream>             ← Tabs: "API" (/api/logs) + "Graph API" (/query/logs)
-      │   │       └── <LogStream> (×2)          ← Both kept mounted for SSE continuity
-      │   ├── <InvestigationPanel>          ← Sources example questions from useScenarios()
-      │   │   ├── <AlertInput>              ← Textarea + submit button + example question chips
-      │   │   ├── <AgentTimeline>
-      │   │   │   ├── <StepCard> (×n)
-      │   │   │   └── <ThinkingDots>
-      │   │   └── <ErrorBanner>
-      │   ├── <DiagnosisPanel>              ← ReactMarkdown rendering
-      │   ├── <InteractionSidebar>          ← Collapsible right sidebar: saved investigation history
-      │   │                                    useInteractions() for CRUD; auto-saves on completion;
-      │   │                                    click to replay past investigation
-      │   └── <AddScenarioModal>            ← Opened from ScenarioChip or SettingsModal
+      │   ├── [!activeScenario]
+      │   │   └── <EmptyState>              ← First-run onboarding: 4-step guide (upload → select → provision → investigate)
+      │   ├── [activeScenario]
+      │   │   ├── <MetricsBar>                  ← Vertically resizable panel (default 30%)
+      │   │   │   ├── <GraphTopologyViewer>     ← useTopology(), owns overlay state
+      │   │   │   │   ├── <GraphToolbar>        ← +nodeColorOverride + onSetColor props → useNodeColor()
+      │   │   │   │   │   └── <ColorWheelPopover>  ← Opens on color dot click (HSL wheel + hex + presets)
+      │   │   │   │   ├── <GraphCanvas>         ← useNodeColor() + scenario-driven sizes
+      │   │   │   │   ├── <GraphTooltip>        ← +nodeColorOverride prop → useNodeColor()
+      │   │   │   │   └── <GraphContextMenu>    ← Right-click menu (uses shared COLOR_PALETTE)
+      │   │   │   └── <TabbedLogStream>             ← Tabs: "API" (/api/logs) + "Graph API" (/query/logs)
+      │   │   │       └── <LogStream> (×2)          ← Both kept mounted for SSE continuity
+      │   │   ├── <InvestigationPanel>          ← Sources example questions from useScenarios()
+      │   │   │   ├── <AlertInput>              ← Textarea + submit button + example question chips
+      │   │   │   ├── <AgentTimeline>
+      │   │   │   │   ├── <StepCard> (×n)
+      │   │   │   │   └── <ThinkingDots>
+      │   │   │   └── <ErrorBanner>
+      │   │   ├── <DiagnosisPanel>              ← ReactMarkdown rendering
+      │   │   ├── <InteractionSidebar>          ← Collapsible right sidebar: saved investigation history
+      │   │   │                                    useInteractions() for CRUD; auto-saves on completion;
+      │   │   │                                    click to replay past investigation
+      │   │   └── <AddScenarioModal>            ← Opened from ScenarioChip or SettingsModal
       │
-      └── [activeTab === 'info']
-          └── <ScenarioInfoPanel>           ← Fetches savedScenarios on mount; shows description, use cases, example questions
-              └── onClick(question) → setAlert(q), switch to 'investigate' tab
+      ├── [activeTab === 'info']
+      │   └── <ScenarioInfoPanel>           ← Fetches savedScenarios on mount; shows description, use cases, example questions
+      │       └── onClick(question) → setAlert(q), switch to 'investigate' tab
+      │
+      └── [activeTab === 'resources']
+          └── <ResourceVisualizer>          ← Full-width resource/agent topology graph
+              ├── <ResourceToolbar>         ← Type-filter chips, search, pause/play, zoom-to-fit, node/edge counts
+              ├── <ResourceCanvas>          ← react-force-graph-2d with custom shapes (circle, diamond, round-rect, hexagon)
+              └── <ResourceTooltip>         ← Animated tooltip on node/edge hover
 ```
+
+**Tab system:** `type AppTab = 'investigate' | 'info' | 'resources'`.
 
 Layout uses `react-resizable-panels` with vertical orientation: MetricsBar (30%) | InvestigationPanel + DiagnosisPanel + InteractionSidebar (70% side-by-side).
 
@@ -49,6 +62,7 @@ Layout uses `react-resizable-panels` with vertical orientation: MetricsBar (30%)
 // Discriminated union for provisioning status tracking
 type ProvisioningStatus =
   | { state: 'idle' }
+  | { state: 'needs-provisioning'; scenarioName: string }  // NEW — agents not yet created
   | { state: 'provisioning'; step: string; scenarioName: string }
   | { state: 'done'; scenarioName: string }
   | { state: 'error'; error: string; scenarioName: string };
@@ -59,10 +73,11 @@ interface ScenarioState {
   activeRunbooksIndex: string;      // default: "runbooks-index"
   activeTicketsIndex: string;       // default: "tickets-index"
   activePromptSet: string;          // Prompt scenario name (default: "")
-  provisioningStatus: ProvisioningStatus; // Agent provisioning state
+  provisioningStatus: ProvisioningStatus; // Agent provisioning state (5 states)
+  scenarioReady: boolean;           // NEW — false during startup validation of persisted scenario
   scenarioNodeColors: Record<string, string>;  // Graph style: node label → hex color
   scenarioNodeSizes: Record<string, number>;   // Graph style: node label → size
-  setActiveScenario(name: string | null): void; // Auto-derives all bindings when non-null
+  setActiveScenario(name: string | null, scenario?: SavedScenario): void; // Optional saved scenario for exact resource names
   setActiveGraph(g: string): void;
   setActiveRunbooksIndex(i: string): void;
   setActiveTicketsIndex(i: string): void;
@@ -73,12 +88,20 @@ interface ScenarioState {
 }
 ```
 
-**Auto-derivation logic** — when `setActiveScenario(name)` is called with non-null:
-- `activeGraph = "{name}-topology"`
-- `activeRunbooksIndex = "{name}-runbooks-index"`
-- `activeTicketsIndex = "{name}-tickets-index"`
-- `activePromptSet = "{name}"`
+**Auto-derivation logic** — when `setActiveScenario(name, scenario?)` is called:
+- If `scenario?.resources` provided: uses exact resource names from saved scenario
+- Otherwise: derives `activeGraph = "{name}-topology"`, `activeRunbooksIndex = "{name}-runbooks-index"`, etc.
 - When called with `null` (custom mode): existing individual bindings are left as-is
+
+**`scenarioReady`** — on mount, validates the persisted `activeScenario` against Cosmos
+(with 5s timeout). App shows an `AnimatePresence` overlay until ready. This prevents
+rendering stale scenario state before validation completes.
+
+**`needs-provisioning` flow** — detected by `ProvisioningBanner` (not ScenarioContext):
+1. On `activeScenario` change, banner fetches `GET /api/agents`
+2. If `agents.length === 0`, sets `provisioningStatus` to `{ state: 'needs-provisioning', scenarioName }`
+3. Banner shows amber ⚠ bar with "Provision Now" button
+4. Clicking button triggers `POST /api/config/apply` SSE flow → `provisioning` → `done`
 
 **localStorage persistence**: `activeScenario` is persisted to and restored from
 `localStorage` on mount. On page refresh, all bindings are re-derived from the
@@ -133,6 +156,8 @@ interface SavedScenario {
     runbooks_index: string;       // "cloud-outage-runbooks-index"
     tickets_index: string;        // "cloud-outage-tickets-index"
     prompts_database: string;     // "cloud-outage-prompts"
+    telemetry_container_prefix?: string;  // NEW — per-scenario container prefix
+    prompts_container?: string;           // NEW — per-scenario prompts container
   };
   upload_status: Record<string, {
     status: string;
@@ -161,6 +186,33 @@ interface ScenarioUploadSlot {
   pct: number;
   result: Record<string, unknown> | null;
   error: string | null;
+}
+
+// --- Resource graph types (V10) ---
+type ResourceNodeType =
+  | 'agent' | 'orchestrator' | 'tool'            // Agent layer
+  | 'datasource' | 'search-index'                // Data layer
+  | 'foundry' | 'storage' | 'cosmos-account'     // Infrastructure layer
+  | 'search-service' | 'container-app'
+  | 'blob-container' | 'cosmos-database';
+
+interface ResourceNode {
+  id: string;
+  label: string;
+  type: ResourceNodeType;
+  meta?: Record<string, string>;
+}
+
+type ResourceEdgeType =
+  | 'delegates_to' | 'uses_tool' | 'queries'     // Agent flow
+  | 'stores_in' | 'hosted_on' | 'indexes_from'   // Infrastructure
+  | 'runs_on' | 'contains';
+
+interface ResourceEdge {
+  source: string;
+  target: string;
+  type: ResourceEdgeType;
+  label: string;
 }
 ```
 
@@ -215,6 +267,7 @@ interface SearchIndex {
 | `useScenarios()` | `{scenarios, indexes, savedScenarios, loading, error, fetchScenarios, fetchIndexes, fetchSavedScenarios, saveScenario, deleteSavedScenario, selectScenario}` | `fetchScenarios()` → GET `/query/scenarios`; `fetchIndexes()` → GET `/query/indexes` (failure non-fatal); `fetchSavedScenarios()` → GET `/query/scenarios/saved`; `selectScenario(name)` → auto-provisions agents via `consumeSSE` + updates `provisioningStatus` + pushes `graph_styles` into context |
 | `useInteractions()` | `{interactions, loading, fetchInteractions, saveInteraction, deleteInteraction}` | `fetchInteractions()` → GET `/query/interactions?scenario=X&limit=50`; auto-fetches on mount and `activeScenario` change; `saveInteraction()` called automatically when investigation completes (running→false with finalMessage); `deleteInteraction()` → DELETE `/query/interactions/{id}` |
 | `useNodeColor(nodeColorOverride)` | `(label: string) => string` | Centralised color resolution hook — 4-tier fallback: `nodeColorOverride → scenarioNodeColors → NODE_COLORS → autoColor`. Uses a 12-color auto-palette with stable string hash for unknown labels |
+| `useResourceGraph()` | `{nodes, edges, loading, error}` | **NEW (V10)** — fetches `GET /api/config/resources`; re-fetches on `activeScenario` change and when `provisioningStatus.state === 'done'`; returns typed `ResourceNode[]` + `ResourceEdge[]` for the resource visualizer |
 
 **`selectScenario(name)` flow** (in `useScenarios`):
 1. Calls `setActiveScenario(name)` → auto-derives all bindings
@@ -246,7 +299,9 @@ interface SearchIndex {
 | `/query/upload/runbooks` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
 | `/query/upload/tickets` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
 | `/query/upload/prompts` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
-| `/api/config/apply` | POST | `Content-Type: application/json` | "Provision Agents" button or `selectScenario()` auto-provision | `SettingsModal` / `useScenarios` |
+| `/api/config/apply` | POST | `Content-Type: application/json` | "Provision Agents" button, `selectScenario()` auto-provision, or ProvisioningBanner "Provision Now" | `SettingsModal` / `useScenarios` / `ProvisioningBanner` |
+| `/api/config/resources` | GET | — | Resources tab mount, `activeScenario` change, provisioning done | `useResourceGraph` |
+| `/api/agents` | GET | — | `activeScenario` change (checks if agents provisioned) | `ProvisioningBanner` |
 | `/query/interactions` | GET | — | On mount, `activeScenario` change | `useInteractions` |
 | `/query/interactions` | POST | `Content-Type: application/json` | Auto-save when investigation completes | `useInteractions` |
 | `/query/interactions/{id}` | DELETE | — | Delete from InteractionSidebar | `useInteractions` |
@@ -319,6 +374,22 @@ so color changes from both the toolbar color wheel popover and the right-click c
 flow to the same `setNodeColorOverride` state setter. `GraphCanvas` also receives
 `nodeColorOverride` and calls `useNodeColor()` directly.
 
+## Resource Visualizer Architecture (V10)
+
+`ResourceVisualizer` renders a force-directed graph of the scenario's agent/tool/data-source
+topology, sourced from `GET /api/config/resources`. Self-contained — takes no props.
+
+| Component | Role |
+|-----------|------|
+| `ResourceVisualizer` | Top-level container. Uses `useResourceGraph()` for data, `ResizeObserver` for container sizing. Manages pause/freeze, tooltip state, type/search filtering. Renders loading spinner, error overlay, and empty-state overlay as conditional overlays. |
+| `ResourceCanvas` | `forwardRef` wrapper around `react-force-graph-2d`. Custom canvas rendering with 4 shape types per `ResourceNodeType`: **circle** (agent, orchestrator), **diamond** (tool), **round-rect** (datasource, search-index), **hexagon** (infrastructure types). Layered y-force groups nodes by type tier. Exposes `zoomToFit()` + `setFrozen()` via `ResourceCanvasHandle`. |
+| `ResourceToolbar` | Filter chips by node type (using `RESOURCE_TYPE_LABELS`), search input, node/edge counts badge, pause/play toggle, zoom-to-fit button. |
+| `ResourceTooltip` | Fixed-position animated tooltip. Node hover: shows type badge + meta key/value pairs. Edge hover: shows label, source→target, edge type. Uses `framer-motion`. |
+| `resourceConstants.ts` | Central design tokens: `RESOURCE_NODE_COLORS` (12 types), `RESOURCE_NODE_SIZES`, `RESOURCE_EDGE_COLORS` (8 types), `RESOURCE_EDGE_DASH` (dash patterns), `RESOURCE_TYPE_LABELS` (human-readable labels for filter chips). |
+
+Files live in `src/components/resource/` subdirectory, mirroring the `GraphTopologyViewer`
+pattern but for infrastructure topology rather than network topology.
+
 ## Frontend Patterns & Gotchas
 
 1. **AbortController pattern**: Every async hook stores an `AbortController` ref, aborts prior requests, ignores `AbortError` in catch blocks.
@@ -357,7 +428,7 @@ flow to the same `setNodeColorOverride` state setter. `GraphCanvas` also receive
 
 15. **AddScenarioModal auto-slot detection**: `detectSlot(filename)` parses the last hyphen-separated segment before `.tar.gz` to match file to upload slot. E.g., `cloud-outage-graph.tar.gz` → slot `graph`, scenarioName `cloud-outage`. Auto-fills scenario name input if empty. Multi-file drop assigns all matching files in one gesture. On graph upload completion, captures `scenario_metadata` (display_name, description, use_cases, example_questions, graph_styles, domain) from the SSE response and stores it in a `scenarioMetadataRef`; these metadata fields are forwarded to `saveScenario()` when the user clicks Save.
 
-16. **ProvisioningBanner lifecycle**: Appears during provisioning, shows current step from SSE stream, auto-dismisses 3s after completion with green flash. On error, banner turns red and stays until manually dismissed. Workspace remains interactive during provisioning — only "Submit Alert" is disabled.
+16. **ProvisioningBanner lifecycle**: Appears during provisioning **and** `needs-provisioning` state. Rendered inside `<Header>` (not as a sibling). During provisioning: shows current step from SSE stream, auto-dismisses 3s after completion with green flash. On error: banner turns red and stays until manually dismissed. On `needs-provisioning`: amber banner with ⚠ icon and "Provision Now" button → clicking triggers `POST /api/config/apply` SSE flow. Detection: on `activeScenario` change, fetches `GET /api/agents`; if `agents.length === 0`, transitions to `needs-provisioning`. Workspace remains interactive during provisioning — only "Submit Alert" is disabled.
 
 17. **ScenarioChip flyout dropdown**: Shows saved scenarios + "(Custom)" option. Selecting triggers `selectScenario()` which auto-provisions. Small spinner inside chip during provisioning. "+ New Scenario" link at bottom opens AddScenarioModal.
 

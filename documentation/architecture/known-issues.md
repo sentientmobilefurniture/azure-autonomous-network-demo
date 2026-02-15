@@ -27,7 +27,7 @@ Automated local mode starts API (:8000) and frontend (:5173) but NOT graph-query
 - `GRAPH_QUERY_API_URI` must point to the Container App's public URL (set in `azure_config.env` by postprovision.sh as `APP_URI`)
 - Without it, GraphExplorer and Telemetry agents are created WITHOUT tools
 - `agent_provisioner.py` is at `/app/scripts/` in the container; `config.py` adds both `PROJECT_ROOT/scripts` and `PROJECT_ROOT/../scripts` to sys.path
-- OpenAPI specs at `/app/graph-query-api/openapi/{cosmosdb|mock}.yaml`
+- **V10**: Config-driven provisioning uses `openapi/templates/{graph,telemetry}.yaml` with placeholder injection; legacy provisioning falls back to `openapi/{cosmosdb|mock}.yaml`
 
 ## Graph Listing Can Be Slow
 `GET /query/scenarios` tries ARM listing first (~5-10s for `CosmosDBManagementClient` discovery), falls back to Gremlin key-auth count query on default graph.
@@ -65,15 +65,20 @@ to the `POST /query/scenarios/save` path and adding `ensure_created=False` for r
 (same pattern as prompts — see Critical Pattern #13).
 
 ## Telemetry Database Derivation Coupling
-The telemetry database name is derived in **two different places** with **two different
-algorithms** that must produce the same result:
-1. **Upload time** (`router_ingest.py`): `f"{scenario_name}-{manifest_suffix}"`
-2. **Query time** (`config.py`): `graph_name.rsplit("-", 1)[0] + "-telemetry"`
+~~The telemetry database name is derived in two different places with two different
+algorithms that must produce the same result~~ — **Resolved in V10.** Telemetry now
+uses a shared `telemetry` database with per-scenario container prefixes (from
+`data_sources.telemetry.config.container_prefix` in `scenario.yaml`). The old
+convention-based derivation (`{scenario}-telemetry`) is superseded by config-driven
+values when a v2.0 manifest is available; `_normalize_manifest()` handles backward
+compatibility for v1.0 manifests.
 
-These agree **only when** the suffix values in `scenario.yaml` are the defaults
-(`topology`, `telemetry`). When `scenario_name` override is provided, upload
-endpoints now force hardcoded suffixes to maintain consistency. See SCENARIOHANDLING.md
-"Telemetry Database Derivation Coupling" section for full analysis.
+~~**Scenario name override prefix mismatch:** When using `scenario_name` query param
+to override the manifest name (e.g., uploading `telco-noc` scenario as `telco-noc2`),
+the graph name came from the config (`telco-noc-topology`) but the telemetry prefix
+used the override (`telco-noc2`), causing query-time lookup failures~~ — **Resolved.**
+`_rewrite_manifest_prefix()` now rewrites all resource names (graph, telemetry prefix,
+search indexes) in the parsed manifest when the override differs from the manifest name.
 
 ## CORS Configuration
 ~~CORS `allow_credentials` mismatch~~ — **Resolved in V8 refactor.** Both services
@@ -99,7 +104,9 @@ separately instead. The unused import should be removed or the shutdown should u
 `close_all_backends()`.
 
 ## Template Has Vars Not Consumed at Runtime
-`azure_config.env.template` defines `RUNBOOKS_INDEX_NAME`, `TICKETS_INDEX_NAME`,
+~~`azure_config.env.template` defines `RUNBOOKS_INDEX_NAME`, `TICKETS_INDEX_NAME`,
 `RUNBOOKS_CONTAINER_NAME`, `TICKETS_CONTAINER_NAME`, `DEFAULT_SCENARIO`, and
-`LOADED_SCENARIOS` — none of these are read by the API or graph-query-api at runtime.
-They were used by deprecated CLI scripts. They are harmless but misleading.
+`LOADED_SCENARIOS`~~ — **Resolved in V10.** All 7 vestigial variables (`COSMOS_GREMLIN_GRAPH`,
+`RUNBOOKS_INDEX_NAME`, `TICKETS_INDEX_NAME`, `RUNBOOKS_CONTAINER_NAME`,
+`TICKETS_CONTAINER_NAME`, `DEFAULT_SCENARIO`, `LOADED_SCENARIOS`) have been removed
+from `azure_config.env.template`. These values are now config-driven from `scenario.yaml`.

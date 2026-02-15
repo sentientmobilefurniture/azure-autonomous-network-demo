@@ -22,7 +22,7 @@
 | Cosmos policy override | Check `az cosmosdb show --query publicNetworkAccess`; use private endpoints |
 | VNet connectivity issues | Check private endpoint status + DNS resolution from within VNet |
 | Prompts listing slow | Use `?scenario=X` filter to avoid iterating all databases |
-| Agent queries return empty results | OpenAPI spec `X-Graph` header using `default` instead of `enum`. Check `openapi/cosmosdb.yaml`, use single-value `enum` |
+| Agent queries return empty results | OpenAPI spec `X-Graph` header using `default` instead of `enum`. Check `openapi/templates/graph.yaml` (V10) or legacy `openapi/cosmosdb.yaml`, use single-value `enum` |
 | Topology viewer crashes on label filter | f-string bug in `cosmosdb.py` `get_topology()` edge query. Add `f` prefix. |
 | Agents get placeholder prompts | `_get_prompts_container` ensure_created=True on reads blocks event loop; check timeout |
 | Config var not reaching container | Add to `infra/main.bicep` `env:[]`, NOT to `azure_config.env` in Dockerfile |
@@ -52,3 +52,9 @@
 | Scenario info tab empty | Check `activeScenario` set in context; verify saved scenario has `use_cases` / `example_questions` populated |
 | Example question not injecting into chat | Check `onSelectQuestion` callback in `ScenarioInfoPanel` → `App.tsx`; verify `setAlert` + tab switch logic |
 | Scenario metadata not saved | Check `scenarioMetadataRef` in `AddScenarioModal.tsx`; verify graph upload `onComplete` captures `data.scenario_metadata` |
+| Config-driven provisioning fails | Check `config_store.py` can read from `scenarios/configs`; verify `scenario.yaml` has `agents:` section; check `config_validator.py` validation errors |
+| Resource visualizer empty | Check `GET /api/config/resources` returns data; verify `activeScenario` is set and scenario config exists in `scenarios/configs` |
+| `needs-provisioning` banner not showing | `ProvisioningBanner` checks `GET /api/agents`; if endpoint fails or returns non-empty array, banner won't show |
+| Legacy provisioning used instead of config-driven | Ensure `scenario.yaml` has `agents:` section; `_build_prompt_agent_map_from_config()` falls back to `PROMPT_AGENT_MAP` if no agents in config |
+| v1.0 scenario.yaml not working | `_normalize_manifest()` should auto-convert; check `router_ingest.py` line ~52 for normalization logic |
+| Telemetry containers not found after V10 upgrade | V10 uses shared `telemetry` DB with `{scenario}-ContainerName` pattern; old data in per-scenario DBs needs migration |

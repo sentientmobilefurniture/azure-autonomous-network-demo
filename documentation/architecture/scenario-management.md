@@ -6,22 +6,43 @@
 ## Overview
 
 Scenarios are first-class objects in the system. A **scenario** bundles together:
-- A Gremlin graph (`{name}-topology`)
-- Telemetry databases (`{name}-telemetry`)
-- Runbook search indexes (`{name}-runbooks-index`)
-- Ticket search indexes (`{name}-tickets-index`)
-- Prompts (`{name}-prompts`)
+- A `scenario.yaml` manifest (v2.0 format) defining all resources and agents
+- A Gremlin graph (`{name}-topology` — from `data_sources.graph.config.graph`)
+- Telemetry containers (`{name}-*` prefix — from `data_sources.telemetry.config.container_prefix`)
+- Runbook search indexes (`{name}-runbooks-index` — from `data_sources.search_indexes.runbooks.index_name`)
+- Ticket search indexes (`{name}-tickets-index` — from `data_sources.search_indexes.tickets.index_name`)
+- Prompts database/container (`prompts` / `{name}` — from scenario config)
+- Agent definitions (N agents with roles, tools, instructions — from `agents:` section)
 - A metadata record in Cosmos NoSQL (`scenarios/scenarios`)
+- A config record in Cosmos NoSQL (`scenarios/configs`) — for `config_store.py`
 
 Previously, users had to manually upload 5 tarballs, select each data source from
 individual dropdowns, and provision agents — 6+ manual steps with no "scenario"
 concept. Now users can create, save, switch, and delete complete scenarios from the UI.
 
+### Scenario Name Override & Manifest Rewriting
+
+Users can name a scenario anything when uploading (e.g., `telco-noc2`) even if the
+`scenario.yaml` manifest says `name: telco-noc`. When a `scenario_name` override is
+provided and differs from the manifest's `name`, `_rewrite_manifest_prefix()` in
+`router_ingest.py` rewrites all resource names in the manifest to use the new name:
+
+| Resource | Before (manifest says `telco-noc`) | After override to `telco-noc2` |
+|----------|-----------------------------------|--------------------------------|
+| Graph | `telco-noc-topology` | `telco-noc2-topology` |
+| Telemetry containers | `telco-noc-AlertStream` | `telco-noc2-AlertStream` |
+| Search indexes | `telco-noc-runbooks-index` | `telco-noc2-runbooks-index` |
+| Saved config (config_store) | `name: telco-noc` | `name: telco-noc2` |
+
+This ensures query-time prefix derivation (`graph_name.rsplit("-", 1)[0]`) in
+`get_scenario_context()` produces a prefix that matches the telemetry containers.
+
 ## User Flow
 
 1. **Create:** Click "+New Scenario" → name + 5 file slots → Save → sequential upload → metadata saved
-2. **Switch:** Click scenario in Header chip dropdown → auto-binds all data sources → auto-provisions agents
+2. **Switch:** Click scenario in Header chip dropdown → auto-binds all data sources → auto-provisions agents (config-driven N agents from `scenario.yaml agents:` section, or legacy 5-agent fallback)
 3. **Delete:** ⋮ menu on scenario card → confirmation → deletes metadata only (data preserved)
+4. **Needs-provisioning:** If agents are not provisioned for the active scenario, ProvisioningBanner shows amber bar with "Provision Now" button
 
 ## Architecture
 
@@ -57,8 +78,8 @@ concept. Now users can create, save, switch, and delete complete scenarios from 
 | `frontend/src/utils/sseStream.ts` | **New** (~142 lines) | Shared `consumeSSE()` + `uploadWithSSE()` utilities |
 | `frontend/src/components/AddScenarioModal.tsx` | **New** (~682 lines) | Multi-slot file upload with auto-detect; captures `scenario_metadata` from graph upload onComplete |
 | `frontend/src/components/ScenarioChip.tsx` | **New** (~153 lines) | Header scenario selector chip + flyout |
-| `frontend/src/components/ProvisioningBanner.tsx` | **New** (~101 lines) | Non-blocking provisioning feedback banner |
-| `frontend/src/components/TabBar.tsx` | **New** (~31 lines) | Investigate / Scenario Info tab bar |
+| `frontend/src/components/ProvisioningBanner.tsx` | **New** (~101 lines) | Non-blocking provisioning feedback banner; handles `needs-provisioning` state with amber ⚠ + "Provision Now" button |
+| `frontend/src/components/TabBar.tsx` | **New** (~31 lines) | Investigate / Scenario Info / Resources tab bar |
 | `frontend/src/components/ScenarioInfoPanel.tsx` | **New** (~95 lines) | Scenario detail: description, use cases, clickable example questions. Fetches `savedScenarios` on mount (V9.5 fix) |
 | `frontend/src/hooks/useNodeColor.ts` | **New** (~42 lines) | Centralised node color resolution hook with 4-tier fallback + auto-palette |
 | `frontend/src/context/ScenarioContext.tsx` | **Modified** (~174 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage, `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles` |
@@ -86,6 +107,26 @@ concept. Now users can create, save, switch, and delete complete scenarios from 
 | `frontend/src/components/InteractionSidebar.tsx` | **New** (~154 lines) | Collapsible right sidebar showing saved investigations. Relative timestamps, scenario badges, query previews. Click to replay; hover-reveal delete |
 | `frontend/src/App.tsx` | **Modified** (~209 lines) | Added `useInteractions()`, `InteractionSidebar` rendering, auto-save on investigation completion, `viewingInteraction` + `sidebarCollapsed` state |
 
+**V10 config-driven files:**
+
+| File | Type | Purpose |
+|------|------|---------|
+| `graph-query-api/config_store.py` | **New** (~62 lines) | Reads/writes scenario config to Cosmos `scenarios/configs` (PK `/scenario_name`) |
+| `graph-query-api/config_validator.py` | **New** (~104 lines) | Validates `agents:` section — required fields, unique names, at most 1 orchestrator, valid tool types |
+| `graph-query-api/adapters/cosmos_config.py` | **New** (~30 lines) | Isolates Cosmos-specific env vars; `CosmosGremlinConfig` + `CosmosNoSqlConfig` |
+| `graph-query-api/stores/__init__.py` | **New** | `DocumentStore` Protocol + registry (`_STORE_REGISTRY`, `get_store()`) |
+| `graph-query-api/stores/cosmos_nosql.py` | **New** | `CosmosDocumentStore` implementation; auto-registered as `"cosmosdb-nosql"` |
+| `graph-query-api/stores/mock_store.py` | **New** | `MockDocumentStore` for testing; auto-registered as `"mock"` |
+| `graph-query-api/openapi/templates/graph.yaml` | **New** | Template OpenAPI spec with `{base_url}`, `{graph_name}`, `{query_language_description}` placeholders |
+| `graph-query-api/openapi/templates/telemetry.yaml` | **New** | Template OpenAPI spec with `{base_url}`, `{database}`, `{container_prefix}` placeholders |
+| `frontend/src/components/EmptyState.tsx` | **New** | First-run onboarding: 4-step guide shown when no scenario is active |
+| `frontend/src/components/ResourceVisualizer.tsx` | **New** | Resource/agent topology graph tab; uses `useResourceGraph()` |
+| `frontend/src/hooks/useResourceGraph.ts` | **New** | Fetches `GET /api/config/resources`; returns typed `ResourceNode[]` + `ResourceEdge[]` |
+| `frontend/src/components/resource/ResourceCanvas.tsx` | **New** | `react-force-graph-2d` with 4 custom shapes (circle, diamond, round-rect, hexagon) |
+| `frontend/src/components/resource/ResourceToolbar.tsx` | **New** | Type-filter chips, search, pause/play, zoom-to-fit |
+| `frontend/src/components/resource/ResourceTooltip.tsx` | **New** | Animated tooltip on node/edge hover |
+| `frontend/src/components/resource/resourceConstants.ts` | **New** | Design tokens: colors, sizes, dash patterns, labels for 12 node types + 8 edge types |
+
 **V8 refactor files (from V8REFACTOR.md):**
 
 | File | Type | Purpose |
@@ -109,9 +150,19 @@ concept. Now users can create, save, switch, and delete complete scenarios from 
 |----------|-------|
 | Account | Same NoSQL account (`{name}-nosql`) |
 | Database | `scenarios` |
-| Container | `scenarios` |
+| Container | `scenarios` (metadata) |
 | Partition Key | `/id` (scenario name) |
 | Throughput | Default (minimal — low volume) |
+
+**V10 addition — Config Store:**
+
+| Property | Value |
+|----------|-------|
+| Account | Same NoSQL account |
+| Database | `scenarios` |
+| Container | `configs` |
+| Partition Key | `/scenario_name` |
+| Purpose | Stores parsed `scenario.yaml` as JSON for `config_store.py` reads |
 
 The database + container are created on first use (same ARM two-phase pattern).
 No new env vars required — uses existing `COSMOS_NOSQL_ENDPOINT`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`.

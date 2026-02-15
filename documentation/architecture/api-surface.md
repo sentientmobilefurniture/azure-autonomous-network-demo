@@ -6,8 +6,9 @@
 |--------|------|----------|-------------|
 | POST | `/api/alert` | SSE stream | Submit alert text → orchestrator investigation |
 | GET | `/api/agents` | JSON | List provisioned agents (from `agent_ids.json` or stubs) |
-| POST | `/api/config/apply` | SSE stream | Re-provision 5 agents with new bindings |
+| POST | `/api/config/apply` | SSE stream | Re-provision agents (config-driven from scenario.yaml, or legacy 5-agent fallback) |
 | GET | `/api/config/current` | JSON | Current active configuration state |
+| GET | `/api/config/resources` | JSON | Resource graph for visualization (agents → tools → data sources → infra) |
 | GET | `/api/logs` | SSE stream | Real-time log broadcast (fan-out to all clients) |
 | GET | `/health` | JSON `{"status": "ok", "service": "autonomous-network-noc-api"}` | Health check |
 
@@ -27,6 +28,7 @@
 | POST | `/query/upload/runbooks` | SSE stream | Upload runbooks tarball → Blob + AI Search |
 | POST | `/query/upload/tickets` | SSE stream | Upload tickets tarball → Blob + AI Search |
 | POST | `/query/upload/prompts` | SSE stream | Upload prompts tarball → Cosmos NoSQL |
+| GET | `/query/scenario/config` | JSON | Fetch parsed scenario config from config store |
 | GET | `/health` | JSON `{"status":"ok", "service":"graph-query-api", "version":"0.5.0", "graph_backend":"cosmosdb"}` | Health check (includes version + backend type) |
 | GET | `/query/prompts` | JSON | List prompts (filter: `?agent=X&scenario=Y`) |
 | GET | `/query/prompts/scenarios` | JSON | List distinct scenario names with prompt counts |

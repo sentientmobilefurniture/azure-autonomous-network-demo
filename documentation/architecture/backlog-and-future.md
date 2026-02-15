@@ -15,6 +15,17 @@
 | 7 | **Scenario-driven graph node colors** — `graph_styles.node_types` in `scenario.yaml` defines per-label colors and sizes; flow: scenario.yaml → graph upload → Cosmos → frontend context → graph rendering | ✅ Done (minorQOL) | New `useNodeColor` hook centralises 4-tier color fallback; `ScenarioContext` extended with `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles`; `GraphCanvas`, `GraphToolbar`, `GraphTooltip` updated |
 | 8 | **Scenario Info tab** — tab bar in App.tsx switches between "Investigate" and "Scenario Info" views; info panel shows description, use cases, clickable example questions | ✅ Done (minorQOL) | New `TabBar` + `ScenarioInfoPanel` components; `App.tsx` gains `activeTab` state + conditional rendering; clicking example question injects into alert input + switches to investigate tab |
 | 9 | **Scenario metadata in data packs** — `use_cases`, `example_questions`, `graph_styles`, `domain` fields in `scenario.yaml`; extracted during graph upload and persisted with scenario save | ✅ Done (minorQOL) | `ScenarioSaveRequest` model extended; `router_ingest.py` extracts `scenario_metadata` from manifest; `AddScenarioModal` captures metadata from upload onComplete + forwards to save; `SavedScenario` type extended |
+| 10 | **Config-driven N-agent provisioning** — `agents:` section in `scenario.yaml v2.0` defines agent topology; `provision_from_config()` replaces hardcoded 5-agent provisioning | ✅ Done (V10) | `config_store.py`, `config_validator.py`, `agent_provisioner.py` `provision_from_config()`. Legacy `provision_all()` retained as fallback |
+| 11 | **DocumentStore Protocol** — registry-based store abstraction for Cosmos NoSQL operations | ✅ Done (V10) | `stores/__init__.py` Protocol + registry, `stores/cosmos_nosql.py`, `stores/mock_store.py` |
+| 12 | **GraphBackend `ingest()` method** — graph backends support data ingestion via Protocol | ✅ Done (V10) | `backends/__init__.py` updated with `ingest()` in Protocol |
+| 13 | **OpenAPI template specs** — `openapi/templates/{graph,telemetry}.yaml` with placeholder injection at provisioning | ✅ Done (V10) | Replaces static spec files for config-driven provisioning; legacy specs retained for backward compat |
+| 14 | **Manifest normalization** — `_normalize_manifest()` auto-converts v1.0 to v2.0 `scenario.yaml` format | ✅ Done (V10) | `router_ingest.py`; handles `cosmos:` → `data_sources:`, `search_indexes:` list → dict |
+| 15 | **Resource graph API** — `GET /api/config/resources` builds visual resource graph from scenario config | ✅ Done (V10) | `_build_resource_graph()` in `config.py`; returns typed `ResourceNode[]` + `ResourceEdge[]` |
+| 16 | **Resource Visualizer tab** — `react-force-graph-2d` visualization of agent/tool/data-source topology | ✅ Done (V10) | `ResourceVisualizer.tsx`, `useResourceGraph.ts`, `resource/` subdir (4 files) |
+| 17 | **EmptyState first-run guard** — Shows onboarding guide when no scenario active | ✅ Done (V10) | `EmptyState.tsx` in Investigate tab when `!activeScenario` |
+| 18 | **Cosmos adapter isolation** — `adapters/cosmos_config.py` isolates Cosmos-specific env vars | ✅ Done (V10) | `CosmosGremlinConfig` + `CosmosNoSqlConfig` dataclasses |
+| 19 | **Shared telemetry/prompts databases** — moved from per-scenario DBs to shared DBs with container prefixes | ✅ Done (V10) | `telemetry` (shared DB, `{scenario}-ContainerName` pattern), `prompts` (shared DB, `{scenario}` container) |
+| 20 | **Deploy cleanup** — removed 7 vestigial env vars, `COSMOS_GREMLIN_GRAPH` from Bicep | ✅ Done (V10) | `azure_config.env.template`, `infra/main.bicep` cleaned up |
 
 ## Fabric Integration (Future)
 
@@ -73,6 +84,7 @@ but are NOT in the template and NOT consumed by any runtime code.
 | `documentation/SCENARIOHANDLING.md` | Scenario management feature spec — UX design, backend schema, implementation phases, deviations |
 | `documentation/V8REFACTOR.md` | V8 codebase simplification & refactor — dead code removal, SSE/Cosmos helper extraction, credential centralisation, frontend componentisation, CORS unification (~1,826 lines removed) |
 | `documentation/minorQOL.md` | Minor QOL improvements — scenario-driven graph colors, scenario info tab, metadata persistence, data generators. 4 phases, all complete |
+| `documentation/V10generalflow.md` | V10 config-driven architecture spec — 14 phases (0-13): config-driven N-agent provisioning, DocumentStore Protocol, GraphBackend registry, OpenAPI templates, config store/validator, resource graph API, frontend genericization, telco-noc migration, deploy cleanup. All phases complete |
 | `documentation/azure_deployment_lessons.md` | Detailed Azure deployment lessons (Private Endpoints, Policy, VNet, Bicep patterns) |
 | `documentation/CUSTOM_SKILLS.md` | Custom skills documentation (neo4j, cosmosdb gremlin, etc.) |
 | `documentation/v11customizableagentworkflows.md` | V11 customizable agent workflows (placeholder — currently empty) |

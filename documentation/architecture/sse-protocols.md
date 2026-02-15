@@ -33,7 +33,7 @@ Uses raw `ReadableStream` parsing of `data:` lines (not named events).
 
 | Payload Shape | Meaning |
 |---------------|---------|
-| `{step: string, detail: string, pct: number}` | Progress update (0-100%) |
+| `{step: string, detail: string, pct: number, category?: string}` | Progress update (0-100%). `category` identifies the upload type (e.g. `"graph"`, `"telemetry"`) |
 | `{graph: string, ...}` or `{database: string, ...}` or `{index: string, ...}` | Completion result |
 | `{error: string}` | Error (pct = -1 internally) |
 
@@ -52,8 +52,13 @@ Same raw `ReadableStream` pattern as uploads.
 | Event | Payload | Meaning |
 |-------|---------|---------|
 | `progress` | `{step: string, detail: string}` | Step progress |
-| `complete` | `{step: "done", detail: string, result: {...}}` | All 5 agents created |
+| `complete` | `{step: "done", detail: string, result: {...}}` | All agents created (config-driven N agents, or legacy 5-agent fallback) |
 | `error` | `{step: "error", detail: string}` | Provisioning failed |
+
+**`needs-provisioning` flow** (frontend-only, no SSE):
+When a scenario is activated, `ProvisioningBanner` fetches `GET /api/agents`.
+If `agents.length === 0`, banner shows amber ⚠ with "Provision Now" button.
+Clicking the button initiates the SSE flow above.
 
 ## Log Stream SSE (`GET /api/logs`)
 

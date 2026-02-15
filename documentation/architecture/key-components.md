@@ -5,44 +5,49 @@
 **Request logging middleware** (in `main.py`): Logs every incoming request with `▶`/`◀` markers. For POST/PUT/PATCH, logs body (first 1000 bytes). Logs response status and elapsed time in ms. Warns on 4xx/5xx.
 
 ```python
-# --- Backend selector ---
-class GraphBackendType(str, Enum):
-    COSMOSDB = "cosmosdb"
-    MOCK = "mock"
-
-GRAPH_BACKEND = GraphBackendType(os.getenv("GRAPH_BACKEND", "cosmosdb").lower())
+# --- Backend selector (plain string, not enum) ---
+GRAPH_BACKEND: str = os.getenv("GRAPH_BACKEND", "cosmosdb").lower()
 
 # --- Shared credential (lazy-init, cached singleton) ---
 _credential = None
 def get_credential() -> DefaultAzureCredential:
     # Returns cached DefaultAzureCredential instance.
-    # IMPORTANT (doc-only note — NOT in code comments): Do NOT use this in
-    # asyncio.to_thread() sync functions. Create a fresh DefaultAzureCredential()
-    # inside the thread function instead — the shared instance may have an
-    # incompatible transport if initialized in the async context.
 
 # --- Per-request context (FastAPI dependency) ---
 @dataclass
 class ScenarioContext:
-    graph_name: str              # e.g. "telco-noc-topology"
-    gremlin_database: str        # "networkgraph" (shared across all scenarios)
-    telemetry_database: str      # "telco-noc-telemetry" (derived from graph_name)
-    backend_type: GraphBackendType
+    graph_name: str                  # e.g. "telco-noc-topology"
+    graph_database: str              # "networkgraph" (shared across all scenarios)
+    telemetry_database: str          # "telemetry" (shared DB, pre-created by Bicep)
+    telemetry_container_prefix: str  # "telco-noc" (used to prefix container names)
+    prompts_database: str            # "prompts" (shared DB, pre-created by Bicep)
+    prompts_container: str           # "telco-noc" (per-scenario container name)
+    backend_type: str
 
 def get_scenario_context(
     x_graph: str | None = Header(default=None, alias="X-Graph")
 ) -> ScenarioContext:
     # Falls back to COSMOS_GREMLIN_GRAPH env var if no header
-    # Derivation: "cloud-outage-topology" → rsplit("-", 1)[0] → "cloud-outage" → "-telemetry"
-    # "topology" (no hyphens) → falls back to COSMOS_NOSQL_DATABASE env var
+    # Derivation: "cloud-outage-topology" → rsplit("-", 1)[0] → "cloud-outage"
+    # Uses "cloud-outage" as telemetry container prefix and prompts container name
+    # "topology" (no hyphens) → uses full graph_name as prefix
+    #
+    # IMPORTANT: This derivation assumes the graph name prefix matches the
+    # telemetry container prefix. The _rewrite_manifest_prefix() function in
+    # router_ingest.py guarantees this by rewriting all resource names when
+    # the user overrides the scenario name at upload time.
 
 # --- Startup validation ---
-BACKEND_REQUIRED_VARS = {
-    GraphBackendType.COSMOSDB: ("COSMOS_GREMLIN_ENDPOINT", "COSMOS_GREMLIN_PRIMARY_KEY"),
-    GraphBackendType.MOCK: (),
+BACKEND_REQUIRED_VARS: dict[str, tuple[str, ...]] = {
+    "cosmosdb": ("COSMOS_GREMLIN_ENDPOINT", "COSMOS_GREMLIN_PRIMARY_KEY"),
+    "mock": (),
 }
 TELEMETRY_REQUIRED_VARS = ("COSMOS_NOSQL_ENDPOINT", "COSMOS_NOSQL_DATABASE")
 ```
+
+**Cosmos-specific env vars** are isolated in `adapters/cosmos_config.py`. `config.py`
+re-exports only `COSMOS_GREMLIN_DATABASE` and `COSMOS_GREMLIN_GRAPH` for the
+`get_scenario_context()` fallback path.
 
 ## `graph-query-api/cosmos_helpers.py` — Centralised Cosmos Client & Container Init
 
@@ -103,7 +108,79 @@ def sse_upload_response(
 
 All 5 upload endpoints in `router_ingest.py` use this pattern.
 
-## `graph-query-api/backends/` — Per-Graph Client Cache
+## `graph-query-api/adapters/cosmos_config.py` — Cosmos-Specific Config
+
+All Cosmos-specific environment variable reads are isolated here (not in `config.py`):
+```python
+COSMOS_NOSQL_ENDPOINT = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
+COSMOS_NOSQL_DATABASE = os.getenv("COSMOS_NOSQL_DATABASE", "telemetry")
+COSMOS_GREMLIN_ENDPOINT = os.getenv("COSMOS_GREMLIN_ENDPOINT", "")
+COSMOS_GREMLIN_PRIMARY_KEY = os.getenv("COSMOS_GREMLIN_PRIMARY_KEY", "")
+COSMOS_GREMLIN_DATABASE = os.getenv("COSMOS_GREMLIN_DATABASE", "networkgraph")
+COSMOS_GREMLIN_GRAPH = os.getenv("COSMOS_GREMLIN_GRAPH", "topology")
+```
+
+This adapter pattern allows future backends (e.g., Fabric) to have their own
+config adapters without polluting the shared `config.py`.
+
+## `graph-query-api/stores/` — DocumentStore Protocol + Registry
+
+```python
+# --- Protocol (all document stores must implement) ---
+@runtime_checkable
+class DocumentStore(Protocol):
+    def list(self, query: str | None = None, ...) -> list[dict]: ...
+    def get(self, doc_id: str, partition_key: str) -> dict: ...
+    def upsert(self, document: dict) -> dict: ...
+    def delete(self, doc_id: str, partition_key: str) -> None: ...
+
+# --- Registry ---
+_document_store_registry: dict[str, type] = {}
+def register_document_store(name: str, cls: type) -> None: ...
+def get_document_store(
+    db_name: str, container_name: str, partition_key_path: str,
+    *, backend_type: str | None = None, ensure_created: bool = False
+) -> DocumentStore: ...
+```
+
+**Auto-registration**: `CosmosDocumentStore` is registered as `"cosmosdb-nosql"` at
+module import time. The factory function `get_document_store()` looks up the backend
+type in the registry and delegates to the appropriate implementation.
+
+## `graph-query-api/config_store.py` — Scenario Config Store
+
+Stores parsed `scenario.yaml` content (including the `agents:` section) in Cosmos
+NoSQL (`scenarios/configs` container, PK `/scenario_name`):
+
+```python
+def fetch_scenario_config(scenario_name: str) -> dict:
+    """Read config from Cosmos; raises ValueError if missing."""
+
+def save_scenario_config(scenario_name: str, config: dict) -> None:
+    """Upsert {id, scenario_name, config, updated_at} document."""
+```
+
+Uses `stores.get_document_store("scenarios", "configs", "/scenario_name", ensure_created=True)`.
+The `configs` container is created on first use (not provisioned in Bicep).
+
+## `graph-query-api/config_validator.py` — Config Validation
+
+Validates the `agents:` section of `scenario.yaml`:
+
+```python
+class ConfigValidationError(Exception):
+    errors: list[str]
+
+def validate_scenario_config(config: dict) -> None:
+    # - Required fields per agent: {name, model}
+    # - Unique agent names
+    # - At most 1 orchestrator (is_orchestrator: true)
+    # - connected_agents reference existing agent names
+    # - Tool types must be "openapi" or "azure_ai_search"
+    # - openapi tools require spec_template; search tools require index_key
+```
+
+## `graph-query-api/backends/` — GraphBackend Protocol + Registry
 
 ```python
 # --- Protocol (all backends must implement) ---
@@ -111,25 +188,31 @@ class GraphBackend(Protocol):
     async def execute_query(self, query: str, **kwargs) -> dict:
         """Returns {columns: [{name, type}], data: [dict]}"""
     async def get_topology(self, query=None, vertex_labels=None) -> dict:
-        """Returns {nodes: [{id, label, properties}], edges: [{id, source, target, label, properties}]}"""
+        """Returns {nodes: [{id, label, properties}], edges: [{...}]}"""
+    async def ingest(self, graph_name: str, vertices: list, edges: list, on_progress=None) -> dict:
+        """Ingest graph data (addV/addE). Returns {vertices, edges} counts."""
     def close(self) -> None: ...
+
+# --- Registry ---
+_backend_registry: dict[str, type[GraphBackend]] = {}
+def register_backend(name: str, cls: type[GraphBackend]) -> None: ...
 
 # --- Cache ---
 _backend_cache: dict[str, GraphBackend] = {}  # Protected by threading.Lock
 # Cache key format: "{backend_type}:{graph_name}" (e.g., "cosmosdb:telco-noc-topology")
-# Mock backend: shared singleton with key "__mock__"
 
 def get_backend_for_context(ctx: ScenarioContext) -> GraphBackend:
-    # Thread-safe cached lookup/create
+    # Thread-safe cached lookup/create (dispatches on ctx.backend_type)
 
-def get_backend_for_graph(graph_name: str, backend_type: GraphBackendType) -> GraphBackend:
+def get_backend_for_graph(graph_name: str, backend_type: str) -> GraphBackend:
     # Direct cache lookup/create (used by upload endpoints)
 
 async def close_all_backends():
-    # Called during app lifespan shutdown — iterates and closes all cached backends
-    # Uses inspect.isawaitable() to dynamically check if backend.close() returns
-    # an awaitable and awaits it if so.
+    # Called during app lifespan shutdown
 ```
+
+**Auto-registration**: `"cosmosdb"` → `CosmosDBGremlinBackend`, `"mock"` → `MockGraphBackend`
+are registered at module import time.
 
 **graph-query-api has its own SSE log system** (separate from the API's `logs.py`):
 - Custom `_SSELogHandler` installed in `main.py`, filters only `graph-query-api.*` loggers
@@ -194,13 +277,21 @@ in the V8 refactor). Also imports `close_cosmos_client` for shutdown cleanup.
 
 ## `graph-query-api/router_ingest.py` — Upload + Listing Endpoints
 
-**IMPORTANT CODE ORGANIZATION (post-V8 refactor, ~871 lines):**
-- Lines ~1-30: imports (includes `SSEProgress`, `sse_upload_response` from `sse_helpers`, `get_cosmos_client` from `cosmos_helpers`)
-- Lines ~30-100: helpers (`_gremlin_client`, `_gremlin_submit`, `_read_csv`, `_ensure_gremlin_graph`, `_extract_tar`, `_resolve_scenario_name`)
-- Lines ~100-200: listing endpoints (`GET /query/scenarios`, `DELETE /query/scenario/{name}`, `GET /query/indexes`)
+**IMPORTANT CODE ORGANIZATION (post-V10, ~1005 lines):**
+- Lines ~1-50: imports (includes `SSEProgress`, `sse_upload_response` from `sse_helpers`, `get_cosmos_client` from `cosmos_helpers`)
+- Lines ~52-120: `_normalize_manifest()` + helpers (`_gremlin_client`, `_gremlin_submit`, `_read_csv`, `_ensure_gremlin_graph`, `_extract_tar`, `_resolve_scenario_name`)
+- Lines ~120-200: listing endpoints (`GET /query/scenarios`, `DELETE /query/scenario/{name}`, `GET /query/indexes`)
 - Lines ~200-560: per-type upload endpoints (`upload_graph`, `upload_telemetry`)
-- Lines ~560-700: shared `_upload_knowledge_files()` helper + `upload_runbooks`/`upload_tickets` endpoints
-- Lines ~700-871: `upload_prompts` endpoint
+- Lines ~560-730: shared `_upload_knowledge_files()` helper + `upload_runbooks`/`upload_tickets` endpoints
+- Lines ~730-1005: `PROMPT_AGENT_MAP` (legacy) + `_build_prompt_agent_map_from_config()` + `upload_prompts` endpoint
+
+**`_normalize_manifest()`** converts v1.0 scenario.yaml format (with `cosmos:` and
+`search_indexes:` list) to v2.0 format (with `data_sources:` dict). If `data_sources`
+already exists, returns as-is. Called by `upload_graph` and `upload_telemetry`.
+
+**`_build_prompt_agent_map_from_config()`** builds a filename → agent_role mapping
+from the scenario config's `agents:` section (`agents[].instructions_file` → `agents[].role`).
+Falls back to the hardcoded `PROMPT_AGENT_MAP` when no config agents are available.
 
 **Scenario metadata extraction** (added in minorQOL): During graph upload, after parsing
 `scenario.yaml`, the handler extracts `scenario_metadata` dict containing `display_name`,
@@ -403,7 +494,7 @@ Also handles `azure_ai_search` type (sets `agent_name = "AzureAISearch"`).
 
 **Thread-safe queue bridge**: `_put(event, data)` uses `asyncio.run_coroutine_threadsafe(queue.put(...), loop)`.
 
-## `api/app/routers/config.py` — Agent Provisioning Endpoint
+## `api/app/routers/config.py` — Agent Provisioning Endpoint (~460 lines)
 
 **sys.path manipulation**: Adds both `PROJECT_ROOT/scripts` and `PROJECT_ROOT/../scripts` to handle local dev vs container paths. Uses `sys.path.insert(0, ...)` — checks which exists first and adds only that one.
 
@@ -415,15 +506,20 @@ with different relative paths — both resolve to the same `azure_config.env`.
 2. Cosmos lookup via `urllib.request` to `http://127.0.0.1:8100/query/prompts?scenario={prompt_scenario}` (localhost loopback to graph-query-api)
 3. Fallback defaults: `{"orchestrator": "You are an investigation orchestrator.", ...}`
 
-**Search connection ID construction** (constant: `AI_SEARCH_CONNECTION_NAME = "aisearch-connection"`):
-```python
-search_conn_id = (
-    f"/subscriptions/{sub_id}/resourceGroups/{rg}"
-    f"/providers/Microsoft.CognitiveServices"
-    f"/accounts/{foundry}/projects/{project_name}"
-    f"/connections/aisearch-connection"
-)
-```
+**Config-driven provisioning flow** (in `POST /api/config/apply`):
+1. Fetch scenario config from config store (via `GET http://127.0.0.1:8100/query/scenario/config?scenario={prefix}`)
+2. If config has `agents:` section → call `provisioner.provision_from_config(config, ...)`
+3. Otherwise → call `provisioner.provision_all()` (legacy hardcoded 5 agents)
+4. Config-driven mode uses `cleanup_by_names(names)` instead of `cleanup_existing()`
+   to delete only the agents defined in the current config
+
+**Resource graph endpoint** (`GET /api/config/resources`):
+`_build_resource_graph()` builds a 4-layer node/edge graph for frontend visualization:
+- Layer 1: Agents (from scenario config or default 5)
+- Layer 2: Tools (OpenAPI, AzureAISearch per agent)
+- Layer 3: Data sources (graphs, search indexes)
+- Layer 4: Infrastructure (Cosmos endpoints, AI Search, Storage from env vars)
+Returns `{nodes: [{id, label, type, ...}], edges: [{source, target, label}]}`
 
 ## `api/app/routers/logs.py` — Log Broadcasting
 

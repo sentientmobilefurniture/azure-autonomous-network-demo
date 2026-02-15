@@ -17,6 +17,7 @@ All data + agent operations happen through the UI.
 **Flags**: `--skip-infra`, `--skip-local`, `--env NAME`, `--location LOC`, `--yes`
 
 **Dead flags** (parse but do nothing, steps removed): `--skip-index`, `--skip-data`, `--skip-agents`.
+> These flags exist for backward compatibility but are no-ops.
 
 **Default location**: `swedencentral`.
 
@@ -39,7 +40,9 @@ mention all 3 services.
 - **Derives Gremlin endpoint** from account name: `{account}.gremlin.cosmos.azure.com`
 - **Queries separate NoSQL account** (`{account}-nosql`) for NoSQL endpoint
 - Contains a dead `upload_with_retry` function (6 attempts, 30s wait) — defined but never called
-- `DEFAULT_SCENARIO` and `LOADED_SCENARIOS` vars ARE defined in `azure_config.env.template` (with defaults `telco-noc`) and synced in preprovision.sh, but are not consumed by any runtime code — they are vestigial from the pre-V8 CLI-based data loading workflow
+
+**V10 cleanup**: `DEFAULT_SCENARIO` and `LOADED_SCENARIOS` have been removed from
+`azure_config.env.template`. They are no longer defined or synced by preprovision.sh.
 
 **Config bidirectional flow**:
 ```

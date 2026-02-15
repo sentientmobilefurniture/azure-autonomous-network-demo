@@ -1,7 +1,1 @@
-1. Codebase visualizer to show the full code structure 
-2. Hey maybe turn that codebase visualizer into a convenient app that reads githubs lmao? Maybe it could even export an interactive html that can be interacted with and visualized? And use to understand in detail what a codebase is doing and why? Could have a programmatic element and an LLM element, with fallbacks
-3. I'm think you give a url, it clones or otherwise grabs the content with the file structure. Then it does the graph creation according to a particular skill (Language specific) and then rationalizes everything into a cohesive and coherent schema. 
-4. And it should be deployed on azure container apps and exposed to public via a URL 
-5. And it should save nothing and delete what it has just seen upon session close unless user exports the interactive html or some such 
-6. And the graph itself tells you how the codebase interacts. Individual functions grouped into classes, all grouped into files, files into folders. Linked to components and services etc... And underlying infrastructure and services and saas, and params and environmental things to be accounted for. 
-7. And so there is a UI with a url you pass in a box, and then you click visualize, and you get a loading screen. Go grab a covfefe or some such becuase it will take a while. and then the graph instantiates and displayed. Can be saved out. Then it gets deleted when you are finished. 
+1. if you upload a file and identical scenario exists - Option to use existing or just overwrite. With granularity and scuh

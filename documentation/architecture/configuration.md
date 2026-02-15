@@ -14,9 +14,8 @@ All config lives in `azure_config.env`. Key variables:
 | `COSMOS_GREMLIN_ENDPOINT` | postprovision | Gremlin WSS connection |
 | `COSMOS_GREMLIN_PRIMARY_KEY` | postprovision (`az cosmosdb keys list`) | Gremlin key auth |
 | `COSMOS_GREMLIN_DATABASE` | Bicep (default: networkgraph) | Gremlin db (shared across scenarios) |
-| `COSMOS_GREMLIN_GRAPH` | Bicep (default: topology) | Fallback graph if no X-Graph header |
 | `COSMOS_NOSQL_ENDPOINT` | postprovision (from `{account}-nosql`) | Telemetry + prompts |
-| `COSMOS_NOSQL_DATABASE` | Bicep (default: telemetry) | Fallback telemetry db |
+| `COSMOS_NOSQL_DATABASE` | Bicep (default: telemetry) | Shared telemetry db |
 | `AI_SEARCH_NAME` | Bicep | Search indexer, index listing |
 | `STORAGE_ACCOUNT_NAME` | Bicep | Blob upload |
 | `APP_URI` / `GRAPH_QUERY_API_URI` | postprovision | Agent OpenAPI tool base URL |
@@ -25,14 +24,24 @@ All config lives in `azure_config.env`. Key variables:
 | `CORS_ORIGINS` | Bicep (default: *) / user (local: http://localhost:5173) | CORS allowed origins (unified in V8 refactor — both services use `allow_credentials=True`) |
 | `AGENT_IDS_PATH` | Bicep (default: /app/scripts/agent_ids.json) | Path to provisioned agent IDs |
 | `CONTAINER_APP_HOSTNAME` | runtime (auto-set by Azure) | Fallback for `GRAPH_QUERY_API_URI` |
-| `DEFAULT_SCENARIO` | user (default: telco-noc) | Vestigial — in template but not consumed by runtime |
-| `LOADED_SCENARIOS` | user (default: telco-noc) | Vestigial — in template but not consumed by runtime |
-| `RUNBOOKS_INDEX_NAME` | user (default: runbooks-index) | In template but not consumed by graph-query-api runtime |
-| `TICKETS_INDEX_NAME` | user (default: tickets-index) | In template but not consumed by graph-query-api runtime |
-| `RUNBOOKS_CONTAINER_NAME` | user (default: runbooks) | In template but not consumed by graph-query-api runtime |
-| `TICKETS_CONTAINER_NAME` | user (default: tickets) | In template but not consumed by graph-query-api runtime |
 | `AI_FOUNDRY_ENDPOINT` | postprovision | AI Foundry hub endpoint (separate from PROJECT_ENDPOINT) |
 | `GRAPH_QUERY_API_PRINCIPAL_ID` | postprovision | Managed identity principal for RBAC |
+
+### Removed Variables (V10)
+
+The following variables were present in earlier versions but have been removed
+from `azure_config.env.template`. They are no longer needed because graph name,
+index names, and scenario loading are now config-driven from `scenario.yaml`:
+
+| Variable | Previously | Reason Removed |
+|----------|-----------|----------------|
+| `COSMOS_GREMLIN_GRAPH` | Bicep (default: topology) | Graph name comes from `data_sources.graph.config.graph` in scenario.yaml |
+| `DEFAULT_SCENARIO` | user (default: telco-noc) | Scenarios loaded via UI, not CLI |
+| `LOADED_SCENARIOS` | user (default: telco-noc) | Scenarios loaded via UI, not CLI |
+| `RUNBOOKS_INDEX_NAME` | user (default: runbooks-index) | Index name comes from `data_sources.search_indexes.runbooks.index_name` in scenario.yaml |
+| `TICKETS_INDEX_NAME` | user (default: tickets-index) | Index name comes from `data_sources.search_indexes.tickets.index_name` in scenario.yaml |
+| `RUNBOOKS_CONTAINER_NAME` | user (default: runbooks) | Blob container comes from `data_sources.search_indexes.runbooks.blob_container` in scenario.yaml |
+| `TICKETS_CONTAINER_NAME` | user (default: tickets) | Blob container comes from `data_sources.search_indexes.tickets.blob_container` in scenario.yaml |
 
 ## Local Development
 

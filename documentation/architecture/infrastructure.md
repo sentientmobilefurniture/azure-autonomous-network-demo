@@ -38,12 +38,16 @@
 PROJECT_ENDPOINT, AI_FOUNDRY_PROJECT_NAME, MODEL_DEPLOYMENT_NAME=gpt-4.1,
 CORS_ORIGINS=*, AGENT_IDS_PATH=/app/scripts/agent_ids.json, GRAPH_BACKEND,
 COSMOS_GREMLIN_ENDPOINT, COSMOS_GREMLIN_DATABASE=networkgraph,
-COSMOS_GREMLIN_GRAPH=topology, COSMOS_GREMLIN_PRIMARY_KEY (secret ref),
+COSMOS_GREMLIN_PRIMARY_KEY (secret ref),
 COSMOS_NOSQL_ENDPOINT, COSMOS_NOSQL_DATABASE,
 AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP,
 AI_SEARCH_NAME, STORAGE_ACCOUNT_NAME, AI_FOUNDRY_NAME,
 EMBEDDING_MODEL=text-embedding-3-small, EMBEDDING_DIMENSIONS=1536
 ```
+
+> **V10 change**: `COSMOS_GREMLIN_GRAPH` removed — graph name is now derived
+> at runtime from `scenario.yaml` (`data_sources.graph.config.graph`), not
+> hardcoded in infrastructure.
 
 **Bicep outputs** (consumed by `postprovision.sh`):
 `AZURE_RESOURCE_GROUP`, `APP_URI`, `APP_PRINCIPAL_ID`, `GRAPH_QUERY_API_URI` (= `APP_URI`), `COSMOS_GREMLIN_ENDPOINT`, `COSMOS_NOSQL_ENDPOINT`, etc.
@@ -103,7 +107,7 @@ FROM python:3.11-slim
 
 # graph-query-api at /app/graph-query-api
 #   uv sync --frozen --no-dev --no-install-project
-#   Copies: *.py, backends/, openapi/
+#   Copies: *.py, adapters/, backends/, openapi/, services/, stores/
 
 # api at /app/api
 #   uv sync --frozen --no-dev --no-install-project
@@ -128,8 +132,14 @@ FROM python:3.11-slim
 │   ├── app/                # FastAPI app package
 │   └── .venv/              # uv-managed virtualenv
 ├── graph-query-api/        # Query service
-│   ├── backends/
-│   ├── openapi/
+│   ├── adapters/           # V10: cosmos_config.py
+│   ├── backends/           # GraphBackend Protocol + implementations
+│   ├── openapi/            # Static specs + templates/ subdirectory
+│   │   ├── cosmosdb.yaml   # Legacy static spec
+│   │   ├── mock.yaml       # Legacy static spec
+│   │   └── templates/      # V10: graph.yaml, telemetry.yaml (injected at runtime)
+│   ├── services/           # V10: blob_uploader.py
+│   ├── stores/             # V10: DocumentStore Protocol + implementations
 │   └── .venv/
 ├── scripts/                # Shared scripts
 │   ├── agent_provisioner.py

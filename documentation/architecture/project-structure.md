@@ -1,4 +1,4 @@
-# Project Structure (as of 2026-02-16)
+# Project Structure (as of 2026-02-17)
 
 ```
 .
@@ -14,38 +14,54 @@
 │   ├── pyproject.toml          # Deps: fastapi, uvicorn, python-dotenv, sse-starlette,
 │   │                           #       azure-identity, azure-ai-projects, azure-ai-agents, pyyaml
 │   └── app/
-│       ├── main.py             # Mounts 4 routers + /health + CORS (54 lines)
-│       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE, 500 lines)
+│       ├── main.py             # Mounts 4 routers + /health + CORS (~54 lines)
+│       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE, ~500 lines)
 │       └── routers/
-│           ├── alert.py        # POST /api/alert → SSE investigation stream (91 lines)
-│           ├── agents.py       # GET /api/agents → agent list from agent_ids.json (29 lines)
+│           ├── alert.py        # POST /api/alert → SSE investigation stream (~91 lines)
+│           ├── agents.py       # GET /api/agents → agent list from agent_ids.json (~29 lines)
 │           ├── config.py       # POST /api/config/apply → SSE provisioning stream
-│           │                   # GET /api/config/current → current config state (264 lines)
-│           └── logs.py         # GET /api/logs → SSE log broadcast (128 lines)
+│           │                   # GET /api/config/current → current config state
+│           │                   # GET /api/config/resources → resource graph for visualisation (~460 lines)
+│           └── logs.py         # GET /api/logs → SSE log broadcast (~128 lines)
 │
 ├── graph-query-api/            # Data management + query microservice (:8100)
 │   ├── pyproject.toml          # Deps: fastapi, gremlinpython, azure-cosmos,
 │   │                           #       azure-mgmt-cosmosdb, azure-storage-blob,
 │   │                           #       azure-search-documents, sse-starlette, pyyaml
-│   ├── config.py               # ScenarioContext, X-Graph header, env vars, credential
+│   ├── config.py               # ScenarioContext, X-Graph header, env vars, credential (~117 lines)
+│   ├── config_store.py         # Config store — read/write scenario config to Cosmos (~62 lines)
+│   ├── config_validator.py     # Config validator — validates agents section of scenario.yaml (~104 lines)
 │   ├── cosmos_helpers.py       # Centralised Cosmos client/container init + caching (~132 lines)
 │   ├── main.py                 # Mounts 7 routers + /health + /query/logs (SSE) + request logging middleware
 │   ├── models.py               # Pydantic request/response models
 │   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin)
 │   ├── router_telemetry.py     # POST /query/telemetry (per-scenario NoSQL)
 │   ├── router_topology.py      # POST /query/topology (graph visualization)
-│   ├── router_ingest.py        # Upload endpoints + scenario/index listing (~871 lines)
+│   ├── router_ingest.py        # Upload endpoints + scenario/index listing + _normalize_manifest() (~1005 lines)
 │   ├── router_prompts.py       # Prompts CRUD in Cosmos (~288 lines)
 │   ├── router_scenarios.py     # Scenario metadata CRUD in Cosmos (~220 lines)
 │   ├── router_interactions.py  # Interaction history CRUD (~146 lines)
 │   ├── sse_helpers.py          # SSE upload lifecycle helper (~86 lines)
 │   ├── search_indexer.py       # AI Search indexer pipeline creation
+│   ├── adapters/               # Backend-specific config adapters
+│   │   ├── __init__.py
+│   │   └── cosmos_config.py    # All Cosmos-specific env var reads (endpoints, keys, database names)
+│   ├── stores/                 # DocumentStore Protocol + implementations
+│   │   ├── __init__.py         # DocumentStore Protocol (runtime_checkable) + registry + factory
+│   │   ├── cosmos_nosql.py     # CosmosDocumentStore — Cosmos NoSQL implementation
+│   │   └── mock_store.py       # MockDocumentStore — in-memory implementation for tests
+│   ├── services/               # Backend-agnostic services
+│   │   ├── __init__.py
+│   │   └── blob_uploader.py    # Blob upload service (extracted from router_ingest.py)
 │   ├── openapi/
-│   │   ├── cosmosdb.yaml       # OpenAPI spec for live mode (has {base_url} placeholder)
-│   │   └── mock.yaml           # OpenAPI spec for mock mode
+│   │   ├── cosmosdb.yaml       # Legacy per-backend spec (backward compat)
+│   │   ├── mock.yaml           # Legacy per-backend spec (backward compat)
+│   │   └── templates/          # Config-driven OpenAPI spec templates
+│   │       ├── graph.yaml      # Template with {base_url}, {graph_name}, {query_language_description}
+│   │       └── telemetry.yaml  # Template with {base_url}, {telemetry_database}, {container_prefix}
 │   └── backends/
-│       ├── __init__.py         # GraphBackend Protocol + per-graph cache + factory
-│       ├── cosmosdb.py         # CosmosDBGremlinBackend (303 lines, retry logic)
+│       ├── __init__.py         # GraphBackend Protocol + per-graph cache + registry + factory
+│       ├── cosmosdb.py         # CosmosDBGremlinBackend (~303 lines, retry logic, ingest())
 │       └── mock.py             # Static topology (offline demos)
 │
 ├── frontend/                   # React/Vite dashboard
@@ -57,7 +73,7 @@
 │       ├── main.tsx            # Wraps App in ScenarioProvider
 │       ├── App.tsx             # Tab bar + 3-zone layout + interaction sidebar (~209 lines)
 │       ├── types/index.ts      # Shared TypeScript interfaces (StepEvent, SavedScenario, etc., ~77 lines)
-│       ├── styles/globals.css  # CSS variables, dark theme, Tailwind imports (159 lines)
+│       ├── styles/globals.css  # CSS variables, dark theme, Tailwind imports (~159 lines)
 │       ├── context/
 │       │   └── ScenarioContext.tsx  # Full scenario state: activeScenario, bindings,
 │       │                           # provisioningStatus, localStorage persistence,
@@ -68,7 +84,8 @@
 │       │   ├── useScenarios.ts      # Graph/index discovery + saved scenario CRUD +
 │       │   │                        # selectScenario with auto-provisioning (~192 lines)
 │       │   ├── useInteractions.ts   # Interaction history CRUD (fetch/save/delete, ~63 lines)
-│       │   └── useNodeColor.ts      # Centralised node color resolution hook (~42 lines)
+│       │   ├── useNodeColor.ts      # Centralised node color resolution hook (~42 lines)
+│       │   └── useResourceGraph.ts  # Fetch resource graph from /api/config/resources
 │       ├── utils/
 │       │   └── sseStream.ts         # Shared consumeSSE() + uploadWithSSE() utilities (~142 lines)
 │       └── components/
@@ -78,6 +95,7 @@
 │           ├── TabBar.tsx            # Investigate / Scenario Info tab bar (~31 lines)
 │           ├── ScenarioInfoPanel.tsx # Scenario detail view: use cases + example questions (~95 lines)
 │           ├── AddScenarioModal.tsx  # Scenario creation: name + 5 slot file upload + auto-detect (~682 lines)
+│           ├── EmptyState.tsx       # Empty state placeholder (no scenario selected)
 │           ├── HealthDot.tsx        # Polls /health every 15s (~40 lines)
 │           ├── SettingsModal.tsx     # 3 tabs: Scenarios + Data Sources + Upload (~673 lines)
 │           ├── ActionButton.tsx      # Extracted reusable action button with status state machine (~52 lines)
@@ -95,6 +113,12 @@
 │           ├── ThinkingDots.tsx     # Animated thinking indicator (~31 lines)
 │           ├── ErrorBanner.tsx      # Error display (~51 lines)
 │           ├── LogStream.tsx        # SSE log viewer (EventSource → /api/logs, ~127 lines)
+│           ├── ResourceVisualizer.tsx # Resource graph visualization (agents → tools → data → infra)
+│           ├── resource/            # Resource graph sub-components
+│           │   ├── ResourceCanvas.tsx
+│           │   ├── ResourceToolbar.tsx
+│           │   ├── ResourceTooltip.tsx
+│           │   └── resourceConstants.ts
 │           └── graph/
 │               ├── GraphCanvas.tsx      # ForceGraph2D wrapper (forwardRef, canvas rendering, ~184 lines)
 │               ├── GraphToolbar.tsx     # Label filters, search, zoom controls, color dot → popover (~137 lines)
@@ -106,11 +130,11 @@
 ├── data/
 │   ├── generate_all.sh         # Generate + package all scenarios as 5 per-type tarballs
 │   └── scenarios/
-│       └── telco-noc/          # scenario.yaml, graph_schema.yaml, scripts/, data/
+│       └── telco-noc/          # scenario.yaml (v2.0), graph_schema.yaml, scripts/, data/
 │                               # (only scenario with local data packs; others need generation)
 │
 ├── scripts/
-│   ├── agent_provisioner.py    # AgentProvisioner class (importable, 281 lines)
+│   ├── agent_provisioner.py    # AgentProvisioner class — config-driven + legacy provisioning (~565 lines)
 │   ├── provision_agents.py     # Thin CLI wrapper for agent provisioning (~178 lines)
 │   ├── agent_ids.json          # Output of provisioning (agent IDs) — read by orchestrator
 │   └── testing_scripts/        # CLI test tools

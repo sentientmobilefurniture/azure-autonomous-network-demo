@@ -105,6 +105,43 @@ def _normalize_manifest(manifest: dict) -> dict:
     return manifest
 
 
+def _rewrite_manifest_prefix(manifest: dict, new_name: str) -> dict:
+    """Rewrite all resource names in the manifest to use *new_name*.
+
+    Called when the user overrides the scenario name so that graph, telemetry,
+    and search resources all share a consistent prefix. Without this, the
+    graph might be ``telco-noc-topology`` while telemetry containers are
+    ``telco-noc2-AlertStream`` — causing query-time lookup failures.
+    """
+    old_name = manifest.get("name", "")
+    manifest["name"] = new_name
+
+    ds = manifest.get("data_sources", {})
+
+    # ── graph ──
+    graph_cfg = ds.get("graph", {}).get("config", {})
+    old_graph = graph_cfg.get("graph", "")
+    if old_graph:
+        # Replace the old prefix: "telco-noc-topology" → "telco-noc2-topology"
+        if old_name and old_graph.startswith(old_name):
+            graph_cfg["graph"] = f"{new_name}{old_graph[len(old_name):]}"
+        else:
+            graph_cfg["graph"] = f"{new_name}-topology"
+
+    # ── telemetry ──
+    tel_cfg = ds.get("telemetry", {}).get("config", {})
+    if "container_prefix" in tel_cfg:
+        tel_cfg["container_prefix"] = new_name
+
+    # ── search indexes ──
+    for _key, idx_cfg in ds.get("search_indexes", {}).items():
+        old_idx = idx_cfg.get("index_name", "")
+        if old_name and old_idx.startswith(old_name):
+            idx_cfg["index_name"] = f"{new_name}{old_idx[len(old_name):]}"
+
+    return manifest
+
+
 # ---------------------------------------------------------------------------
 # Gremlin helpers (extracted from provision_cosmos_gremlin.py)
 # ---------------------------------------------------------------------------
@@ -432,6 +469,13 @@ async def upload_graph(
             schema = yaml.safe_load((scenario_dir / "graph_schema.yaml").read_text())
             sc_name = scenario_name or manifest["name"]
 
+            # If user overrode the scenario name, rewrite resource names
+            # in the manifest so graph, telemetry, and search all use the
+            # same prefix — prevents graph="telco-noc-topology" vs
+            # telemetry containers "telco-noc2-AlertStream" mismatches.
+            if scenario_name and scenario_name != manifest.get("name"):
+                manifest = _rewrite_manifest_prefix(manifest, scenario_name)
+
             # Persist full config if agents section present (Phase 8)
             if "agents" in manifest:
                 from config_store import save_scenario_config
@@ -531,6 +575,10 @@ async def upload_telemetry(
             manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
             manifest = _normalize_manifest(manifest)
             sc_name = scenario_name or manifest["name"]
+
+            # If user overrode the scenario name, rewrite resource names
+            if scenario_name and scenario_name != manifest.get("name"):
+                manifest = _rewrite_manifest_prefix(manifest, scenario_name)
 
             # Persist full config if agents section present (Phase 8)
             if "agents" in manifest:
