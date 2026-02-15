@@ -1,7 +1,7 @@
 # Codebase Simplification & Refactor — Implementation Plan
 
 > **Created:** 2026-02-15
-> **Last audited:** 2026-02-15
+> **Last audited:** 2026-02-15 ✅ (all claims verified against source; 9 corrections applied)
 > **Status:** ⬜ Not Started
 > **Goal:** Reduce codebase complexity by ~1,826 lines (~13.8%) through
 > dead code removal, pattern deduplication, and structural consolidation —
@@ -61,6 +61,7 @@
 - [File Change Inventory](#file-change-inventory)
 - [Edge Cases & Validation](#edge-cases--validation)
 - [Migration & Backwards Compatibility](#migration--backwards-compatibility)
+- [Audit Findings](#audit-findings)
 
 ---
 
@@ -217,7 +218,7 @@ Phase 4 (Frontend componentisation) ── independent
 
 ### Current State
 
-**`router_ingest.py`** (1,384 lines) contains ~483 lines of dead code (lines ~162–644): the original monolithic `upload_scenario()` endpoint and its `_ingest_scenario()` helper. This code is entirely commented out with `#` prefixes, interspersed with blank lines. It was superseded by the 5 per-type upload endpoints (`upload/graph`, `upload/telemetry`, `upload/runbooks`, `upload/tickets`, `upload/prompts`), which are the only active code paths.
+**`router_ingest.py`** (1,384 lines) contains ~483 lines of dead code (lines ~165–644): the original monolithic `upload_scenario()` endpoint and its `_ingest_scenario()` helper. This code is entirely commented out with `#` prefixes, interspersed with blank lines. It was superseded by the 5 per-type upload endpoints (`upload/graph`, `upload/telemetry`, `upload/runbooks`, `upload/tickets`, `upload/prompts`), which are the only active code paths.
 
 **`scenario_loader.py`** (195 lines) defines a `ScenarioLoader` class. Grep confirms it is **only referenced within its own file** — no other file imports or uses it. This is confirmed dead code.
 
@@ -235,7 +236,7 @@ Phase 4 (Frontend componentisation) ── independent
 
 #### `graph-query-api/router_ingest.py` — Delete commented-out block
 
-Delete lines ~162–644 (the entire dead monolithic code block — 401 `#`-prefixed lines + 82 blank lines).
+Delete lines ~165–644 (the entire dead monolithic code block — 401 `#`-prefixed lines + 82 blank lines).
 
 > **⚠️ Implementation note:** The active `list_scenarios()` endpoint starts at line 647. Verify that no code below line 644 references anything in the dead block.
 
@@ -269,11 +270,11 @@ async def stream_logs(): ...
 ### Current State
 
 Each of the 5 upload endpoints in `router_ingest.py` contains an identical 18-line SSE dispatch scaffold:
-- `upload/graph` at ~line 800
+- `upload/graph` at ~line 783
 - `upload/telemetry` at ~line 910
-- `upload/runbooks` at ~line 1018
-- `upload/tickets` at ~line 1120
-- `upload/prompts` at ~line 1249
+- `upload/runbooks` at ~line 1019
+- `upload/tickets` at ~line 1121
+- `upload/prompts` at ~line 1237
 
 The scaffold includes: `asyncio.Queue` creation → `emit()` helper → `async run()` with try/except/finally → `create_task` → while-loop yielding events → `EventSourceResponse`.
 
@@ -408,23 +409,36 @@ A new `graph-query-api/cosmos_helpers.py` module (~40–50 lines):
 # cosmos_helpers.py
 from __future__ import annotations
 import logging, os
-from functools import lru_cache
 from azure.cosmos import CosmosClient, ContainerProxy
 from config import get_credential, COSMOS_NOSQL_ENDPOINT
 
 logger = logging.getLogger("graph-query-api.cosmos")
 
-@lru_cache(maxsize=1)
+# ⚠️ AUDIT: Use manual singleton pattern (matching config.py), NOT @lru_cache.
+# lru_cache retains references indefinitely with no invalidation — if a
+# credential expires or a transient error corrupts the client, there's no way
+# to force recreation without cache_clear(). Manual singletons allow simple
+# reset (set _x = None) and match the existing codebase convention.
+
+_cosmos_client: CosmosClient | None = None
+
 def get_cosmos_client() -> CosmosClient:
     """Cached data-plane CosmosClient singleton."""
-    return CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
+    global _cosmos_client
+    if _cosmos_client is None:
+        _cosmos_client = CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
+    return _cosmos_client
 
-@lru_cache(maxsize=1)
+_mgmt_client = None
+
 def get_mgmt_client():
     """Cached ARM CosmosDBManagementClient singleton."""
-    from azure.mgmt.cosmosdb import CosmosDBManagementClient
-    sub_id = os.environ["AZURE_SUBSCRIPTION_ID"]
-    return CosmosDBManagementClient(get_credential(), sub_id)
+    global _mgmt_client
+    if _mgmt_client is None:
+        from azure.mgmt.cosmosdb import CosmosDBManagementClient
+        sub_id = os.environ["AZURE_SUBSCRIPTION_ID"]
+        _mgmt_client = CosmosDBManagementClient(get_credential(), sub_id)
+    return _mgmt_client
 
 _container_cache: dict[tuple[str, str], ContainerProxy] = {}
 
@@ -473,7 +487,15 @@ def _get_scenarios_container():
 
 > **⚠️ Implementation note:** `router_ingest.py`'s `_ensure_nosql_containers()` takes a **list** of container configs (e.g., telemetry creates multiple containers at once). This function has a distinct signature — it can either use `get_or_create_container()` in a loop or remain as-is, calling `get_mgmt_client()` from the helper.
 
-**Savings:** ~120 lines across the 3 routers, replaced by ~50-line shared module.
+> **⚠️ AUDIT — Gremlin management client:** `_ensure_gremlin_graph()` in `router_ingest.py` (line 128) also creates its own `CosmosDBManagementClient` for Gremlin DB/graph ARM calls. While the Gremlin creation logic must stay in `router_ingest.py` (different ARM methods: `begin_create_update_gremlin_database/graph` vs SQL), it should call `cosmos_helpers.get_mgmt_client()` instead of creating its own management client instance.
+
+> **⚠️ AUDIT — Existing `CosmosClient` singleton in `router_telemetry.py`:** `router_telemetry.py` already maintains its own `_cosmos_client` singleton (with `threading.Lock`), independent of the three `_get_*_container()` functions in other routers. After creating `cosmos_helpers.get_cosmos_client()`, the codebase would have **two** `CosmosClient` singletons unless `router_telemetry.py` is also migrated. Either:
+> 1. Migrate `router_telemetry.py` to use `cosmos_helpers.get_cosmos_client()` (recommended — full consolidation), or
+> 2. Explicitly accept the duplication and document it.
+>
+> **Decision:** Migrate `router_telemetry.py` to use the shared singleton. Add it to the Phase 2 file change inventory.
+
+**Savings:** ~120 lines across the 3 routers (+ `router_telemetry.py` if migrated), replaced by ~50-line shared module.
 
 ---
 
@@ -636,6 +658,14 @@ await uploadWithSSE(url, formData, {
 });
 ```
 
+> **⚠️ CRITICAL — `uploadWithSSE` form field compatibility:** `uploadWithSSE(endpoint, file, handlers, params?, signal?)` takes a `File` object, but `UploadBox` currently builds its own `FormData` with a `scenario` form field:
+> ```tsx
+> const formData = new FormData();
+> formData.append("file", file);
+> formData.append("scenario", scenarioName);
+> ```
+> **Before implementing this refactor**, verify that `uploadWithSSE`'s `params` argument appends the `scenario` field as a form field (not a query param). If `params` is appended as query parameters, you must extend `uploadWithSSE` to accept extra `FormData` entries. **If the `scenario` field is missing from the form body, the backend will return 422** — this is a breaking change that would be invisible until runtime.
+
 **Savings:** ~30–40 lines; eliminates a bug surface.
 
 #### Extract `ActionButton` to `components/ActionButton.tsx`
@@ -675,9 +705,9 @@ Within `graph-query-api/`:
   - `router_interactions.py` line 70: `_DC()` alias
 - `search_indexer.py` line 16: imports `DefaultAzureCredential` but never uses it (dead import)
 - Each `_get_*_container()` plus `_list_prompt_scenarios()` creates its own `CosmosDBManagementClient` — 7 instantiations total
-- Each call to `_get_prompts_container()` for a new scenario creates a new `CosmosClient`
+- `_get_prompts_container()` creates a new `CosmosClient` per unique scenario (cached per scenario name in a `_containers: dict`, so not per-call — but still N clients instead of 1 singleton)
 
-**Problem:** Wasted credential probe time per duplicate instantiation; inconsistent patterns; unnecessary resource overhead.
+**Problem:** Wasted credential probe time per duplicate instantiation; inconsistent patterns; unnecessary resource overhead (N `CosmosClient` instances for prompts instead of 1 shared singleton).
 
 ### Target State
 
@@ -697,23 +727,31 @@ Within `graph-query-api/`:
 ### Current State
 
 1. **Bare `except: pass`** in `router_ingest.py` at lines 983, 1077, 1178:
-   ```python
-   try: blob_svc.create_container(container_name)
-   except: pass
-   ```
-   These swallow all exceptions including `KeyboardInterrupt` and `SystemExit`.
+   - **Line 983** (inside `upload_telemetry`): swallows `float()` conversion errors for numeric fields:
+     ```python
+     try: row[nf] = float(row[nf])
+     except: pass
+     ```
+   - **Lines 1077, 1178** (inside `upload_runbooks` and `upload_tickets`): swallow blob `create_container()` errors:
+     ```python
+     try: blob_svc.create_container(container_name)
+     except: pass
+     ```
+   All three swallow all exceptions including `KeyboardInterrupt` and `SystemExit`.
 
 2. **Duplicate section header** in `router_telemetry.py` — lines 119 and 124 both contain `# Endpoint`.
 
 3. **Deferred import** in `router_telemetry.py` — line 75: `import time as _time` inside function body with a TODO comment.
 
-4. **Uncached `agent_ids.json` reads** in `api/app/orchestrator.py` — `_load_orchestrator_id()` (line 83) and `_load_agent_names()` (line 87) read + parse JSON on every `/api/alert` request. The file only changes on agent re-provisioning (rare).
+4. **Uncached `agent_ids.json` reads** in `api/app/orchestrator.py` — `_load_orchestrator_id()` (line 72) and `_load_agent_names()` (line 77) read + parse JSON on every `/api/alert` request. The file only changes on agent re-provisioning (rare).
 
 5. **CORS default inconsistency** — `api/app/main.py` defaults to `"http://localhost:5173"` with `allow_credentials=True`; `graph-query-api/main.py` defaults to `"http://localhost:5173,http://localhost:3000"` without `allow_credentials`.
 
 ### Target State
 
-1. Replace `except: pass` with `except Exception: logger.debug("Container already exists")` (3 locations).
+1. Replace bare `except: pass` with narrowed exception handling (3 locations):
+   - **Line 983:** `except (ValueError, TypeError): pass` — intentional skip for non-numeric fields; no log needed.
+   - **Lines 1077, 1178:** `except Exception: logger.debug("Blob container '%s' may already exist", container_name)` — blob container creation.
 2. Remove duplicate `# Endpoint` header (1 line).
 3. Move `import time` to module level in `router_telemetry.py`.
 4. Cache `agent_ids.json` at module level with a simple reload mechanism:
@@ -771,12 +809,14 @@ A small shared library parameterised by logger filter and SSE format. Both servi
 
 > Independent — no prerequisites. **Prerequisite for Phase 2.**
 
+> **⚠️ Note:** Fixing bare `except: pass` (Item 8) is included here for convenience since the same files are already being touched, but it is technically a low-risk *behavior* change (narrowing exception scope), not zero-risk dead code removal. Exercise normal caution and test the affected upload endpoints.
+
 **Files to modify:**
-- `graph-query-api/router_ingest.py` — Delete ~483 lines of commented-out dead code (lines ~162–644)
+- `graph-query-api/router_ingest.py` — Delete ~483 lines of commented-out dead code (lines ~165–644)
 - `graph-query-api/main.py` — Remove shadowed `/api/logs` endpoint (~8 lines)
-- `graph-query-api/router_ingest.py` — Replace 3× bare `except: pass` with `except Exception` + logging (lines 983, 1077, 1178)
+- `graph-query-api/router_ingest.py` — Replace 3× bare `except: pass` with narrowed exception handling (lines 983, 1077, 1178)
 - `graph-query-api/search_indexer.py` — Remove unused `DefaultAzureCredential` import (line 16)
-- `graph-query-api/router_telemetry.py` — Remove duplicate `# Endpoint` header; move `import time` to module level ,
+- `graph-query-api/router_telemetry.py` — Remove duplicate `# Endpoint` header; move `import time` to module level
 
 **Files to delete:**
 - `scripts/scenario_loader.py` (195 lines of verified dead code)
@@ -869,10 +909,10 @@ A small shared library parameterised by logger filter and SSE format. Both servi
 | `graph-query-api/sse_helpers.py` | **CREATE** | 2 | SSE upload lifecycle helper (~45 lines) |
 | `graph-query-api/cosmos_helpers.py` | **CREATE** | 2 | Cosmos container init + caching (~50 lines) |
 | `frontend/src/components/ActionButton.tsx` | **CREATE** | 4 | Extracted reusable button (~50 lines) |
-| `graph-query-api/router_ingest.py` | MODIFY | 1, 2 | Phase 1: delete ~483 dead lines + fix bare excepts. Phase 2: use `sse_upload_response()`, merge runbooks/tickets, use shared credential |
+| `graph-query-api/router_ingest.py` | MODIFY | 1, 2 | Phase 1: delete ~483 dead lines (lines ~165–644) + fix bare excepts. Phase 2: use `sse_upload_response()`, merge runbooks/tickets, use shared credential |
 | `graph-query-api/main.py` | MODIFY | 1, 5 | Phase 1: remove shadowed `/api/logs`. Phase 5: unify CORS |
 | `graph-query-api/search_indexer.py` | MODIFY | 1 | Remove unused `DefaultAzureCredential` import |
-| `graph-query-api/router_telemetry.py` | MODIFY | 1 | Remove duplicate header; move `import time` to module level |
+| `graph-query-api/router_telemetry.py` | MODIFY | 1, 2 | Phase 1: Remove duplicate header; move `import time` to module level. Phase 2: migrate to `cosmos_helpers.get_cosmos_client()` singleton |
 | `graph-query-api/config.py` | MODIFY | 2 | Add cached `CosmosClient` and `CosmosDBManagementClient` singletons |
 | `graph-query-api/router_prompts.py` | MODIFY | 2 | Use `cosmos_helpers`; remove `_DC` imports |
 | `graph-query-api/router_scenarios.py` | MODIFY | 2 | Use `cosmos_helpers`; remove `_DC` imports |
@@ -928,6 +968,8 @@ A small shared library parameterised by logger filter and SSE format. Both servi
 
 **Missing env vars:** If `COSMOS_NOSQL_ENDPOINT`, `AZURE_SUBSCRIPTION_ID`, or `AZURE_RESOURCE_GROUP` are unset, the helper should raise `HTTPException(503)` with a descriptive message.
 
+**Existing `CosmosClient` in `router_telemetry.py`:** `router_telemetry.py` has its own `_cosmos_client` singleton with `threading.Lock`. After `cosmos_helpers.py` is created, migrate `router_telemetry.py` to use `cosmos_helpers.get_cosmos_client()` to avoid dual singletons.
+
 ### Script Consolidation (Item 5)
 
 **OpenAPI path filter bug:** The exact-match filter in `provision_agents.py` (`k == keep_path`) could miss paths that are prefixes of the desired path. Standardising on `startswith` is more robust but must be verified against the actual OpenAPI spec to ensure it doesn't over-include paths.
@@ -939,6 +981,8 @@ A small shared library parameterised by logger filter and SSE format. Both servi
 **`UploadBox` SSE migration:** The current manual SSE parsing in `UploadBox` may handle edge cases differently than `sseStream.ts`. Test that multiline `data:` fields, reconnection events, and partial chunks all work correctly with `uploadWithSSE`.
 
 **`ActionButton` extraction:** Verify that all style classes and props are preserved. The component may use closure variables from `SettingsModal` that need to be converted to props.
+
+**`uploadWithSSE` form field compatibility:** `uploadWithSSE` takes a `File` object, but `UploadBox` currently builds `FormData` with a `scenario` field. Verify that `uploadWithSSE` passes extra form fields correctly, or extend it to accept additional `FormData` entries. If the `scenario` field is dropped, the backend returns 422.
 
 ---
 
@@ -977,6 +1021,22 @@ Each phase is a simple code revert (no data format changes). If any phase introd
 3. No data cleanup needed
 
 No feature flags are required — the changes preserve identical external behavior.
+
+---
+
+## Audit Findings
+
+The following issues were identified during a line-by-line audit on 2026-02-15. All factual claims in the plan were verified against source code. Corrections have been applied inline throughout the document; this section serves as a consolidated reference.
+
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| A-1 | **Medium** | Bare except at L983 is a `float()` conversion (not blob creation as originally described). Plan's fix description would produce misleading log messages. | **Fixed in Item 8:** differentiated the three locations — L983 uses `except (ValueError, TypeError): pass`; L1077/L1178 use `except Exception` with correct log message. |
+| A-2 | **High** | `@lru_cache` proposed for `get_cosmos_client()`/`get_mgmt_client()` in `cosmos_helpers.py` has no invalidation mechanism. Expired credentials or transient errors would be permanently cached with no reset path. Mismatches existing `config.py` convention. | **Fixed in Item 3:** replaced `@lru_cache` with manual singleton pattern (global variable + None check) matching `config.py`'s established convention. |
+| A-3 | **Low** | SSE endpoint line numbers were approximate. | **Fixed** — line numbers updated to match source. Implementers should still identify scaffolds by structure, not line number, as the numbers shift after Phase 1 dead code removal. |
+| A-4 | **Medium** | `router_telemetry.py` already maintains its own `_cosmos_client` singleton (with `threading.Lock`), not covered by `cosmos_helpers.py`. After Item 3, the codebase would have two `CosmosClient` singletons. | **Fixed in Items 3/File Inventory:** added `router_telemetry.py` to Phase 2 scope; migrate it to `cosmos_helpers.get_cosmos_client()`. |
+| A-5 | **Medium** | `_ensure_gremlin_graph()` in `router_ingest.py` creates its own `CosmosDBManagementClient` — not mentioned for consolidation. | **Fixed in Item 3:** added note that `_ensure_gremlin_graph()` should use `cosmos_helpers.get_mgmt_client()` even though Gremlin creation logic stays in `router_ingest.py`. |
+| A-6 | **Low** | Plan claims "each call to `_get_prompts_container()` for a new scenario creates a new `CosmosClient`". Actually, the container is cached per scenario in a `_containers: dict` — it's N clients per N unique scenarios, not per call. | **Fixed in Item 7:** corrected description to note per-scenario caching, clarifying the real issue is N singletons vs 1 shared singleton. |
+| A-7 | **Low** | `uploadWithSSE` takes `(endpoint, file, handlers)` but `UploadBox` currently builds `FormData` with an extra `scenario` field. If `uploadWithSSE` only appends `file`, the backend returns 422. | **Fixed in Item 6 + Edge Cases:** added implementation note to verify/extend `uploadWithSSE` to pass extra form fields. |
 
 ---
 
