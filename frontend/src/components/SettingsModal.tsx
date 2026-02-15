@@ -191,11 +191,23 @@ export function SettingsModal({ open, onClose }: Props) {
   } = useScenarioContext();
 
   const [tab, setTab] = useState<Tab>('datasources');
+  const [promptScenarios, setPromptScenarios] = useState<{scenario: string; prompt_count: number}[]>([]);
+  const [activePromptSet, setActivePromptSet] = useState('');
 
   useEffect(() => {
     if (open) {
       fetchScenarios();
       fetchIndexes();
+      // Fetch available prompt sets
+      fetch('/query/prompts/scenarios')
+        .then(r => r.json())
+        .then(d => {
+          setPromptScenarios(d.prompt_scenarios || []);
+          if (!activePromptSet && d.prompt_scenarios?.length) {
+            setActivePromptSet(d.prompt_scenarios[0].scenario);
+          }
+        })
+        .catch(() => {});
     }
   }, [open, fetchScenarios, fetchIndexes]);
 
@@ -337,6 +349,34 @@ export function SettingsModal({ open, onClose }: Props) {
                 </div>
               </div>
 
+              {/* Prompt Set selection */}
+              <div className="bg-neutral-bg1 rounded-lg border border-white/5 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-pink-400" />
+                  <span className="text-sm font-medium text-text-primary">Prompt Set</span>
+                </div>
+                <div>
+                  <label className="text-xs text-text-muted block mb-1">Agent Prompts (from Cosmos)</label>
+                  <select
+                    value={activePromptSet}
+                    onChange={(e) => setActivePromptSet(e.target.value)}
+                    className="w-full bg-neutral-bg2 border border-white/10 rounded px-3 py-1.5 text-sm text-text-primary"
+                  >
+                    {promptScenarios.length === 0 && (
+                      <option value="">No prompts uploaded yet</option>
+                    )}
+                    {promptScenarios.map((ps) => (
+                      <option key={ps.scenario} value={ps.scenario}>
+                        {ps.scenario} ({ps.prompt_count} prompts)
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-text-muted mt-1">
+                    Upload prompts via the Upload tab, then select the set here
+                  </p>
+                </div>
+              </div>
+
               {error && <p className="text-xs text-status-error">{error}</p>}
 
               {/* Action buttons */}
@@ -370,6 +410,7 @@ export function SettingsModal({ open, onClose }: Props) {
                         graph: activeGraph,
                         runbooks_index: activeRunbooksIndex,
                         tickets_index: activeTicketsIndex,
+                        prompt_scenario: activePromptSet || undefined,
                       }),
                     });
                     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -467,6 +508,13 @@ export function SettingsModal({ open, onClose }: Props) {
                   endpoint="/query/upload/tickets"
                   accept=".tar.gz,.tgz"
                   onComplete={() => fetchIndexes()}
+                />
+                <UploadBox
+                  label="Prompts"
+                  icon="📝"
+                  hint=".md prompt files → Cosmos DB"
+                  endpoint="/query/upload/prompts"
+                  accept=".tar.gz,.tgz"
                 />
               </div>
 

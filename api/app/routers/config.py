@@ -78,7 +78,8 @@ class ConfigApplyRequest(BaseModel):
     graph: str = "topology"
     runbooks_index: str = "runbooks-index"
     tickets_index: str = "tickets-index"
-    prompts: dict[str, str] | None = None  # agent_name → prompt_id or content
+    prompt_scenario: str | None = None     # scenario name to load prompts from Cosmos
+    prompts: dict[str, str] | None = None  # agent_name → prompt content (overrides prompt_scenario)
 
 
 # ---------------------------------------------------------------------------
@@ -126,19 +127,50 @@ async def apply_config(req: ConfigApplyRequest):
                     project_endpoint=project_endpoint,
                 )
 
-                # Resolve prompts
+                # Resolve prompts — fetch from Cosmos if available
                 prompts = req.prompts or {}
                 if not prompts:
-                    # If no prompts provided, try to fetch from Cosmos
-                    # For now, use empty defaults — agents will work with minimal prompts
-                    prompts = {
-                        "orchestrator": "You are an investigation orchestrator.",
-                        "graph_explorer": "You are a graph explorer agent.",
-                        "telemetry": "You are a telemetry analysis agent.",
-                        "runbook": "You are a runbook knowledge base agent.",
-                        "ticket": "You are a historical ticket search agent.",
-                    }
-                    on_progress("prompts", "Using default prompts (no Cosmos prompts specified)")
+                    # Determine which scenario's prompts to use
+                    scenario_prefix = req.prompt_scenario or (
+                        req.graph.rsplit("-", 1)[0] if "-" in req.graph else "telco-noc"
+                    )
+                    on_progress("prompts", f"Fetching prompts for '{scenario_prefix}' from Cosmos...")
+                    try:
+                        import urllib.request
+                        import json as _json
+                        # Call the graph-query-api prompts endpoint (same container, localhost)
+                        prompts_url = "http://127.0.0.1:8100/query/prompts"
+                        prompts_req = urllib.request.Request(prompts_url)
+                        with urllib.request.urlopen(prompts_req, timeout=10) as resp:
+                            prompts_data = _json.loads(resp.read())
+
+                        for p in prompts_data.get("prompts", []):
+                            if p.get("scenario") == scenario_prefix and p.get("is_active"):
+                                agent_name = p.get("agent", "")
+                                if agent_name and agent_name not in prompts:
+                                    # Fetch full content
+                                    detail_url = f"http://127.0.0.1:8100/query/prompts/{p['id']}?agent={agent_name}"
+                                    with urllib.request.urlopen(detail_url, timeout=10) as dresp:
+                                        detail = _json.loads(dresp.read())
+                                        if detail.get("content"):
+                                            prompts[agent_name] = detail["content"]
+                                            on_progress("prompts", f"Loaded {agent_name} prompt ({len(detail['content'])} chars)")
+
+                    except Exception as e:
+                        on_progress("prompts", f"Could not fetch from Cosmos: {e}")
+
+                # Fall back to minimal defaults for any missing agents
+                defaults = {
+                    "orchestrator": "You are an investigation orchestrator.",
+                    "graph_explorer": "You are a graph explorer agent.",
+                    "telemetry": "You are a telemetry analysis agent.",
+                    "runbook": "You are a runbook knowledge base agent.",
+                    "ticket": "You are a historical ticket search agent.",
+                }
+                for agent, default_prompt in defaults.items():
+                    if agent not in prompts:
+                        prompts[agent] = default_prompt
+                        on_progress("prompts", f"Using default prompt for {agent} (no Cosmos prompt found)")
 
                 # Build search connection ID
                 sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")

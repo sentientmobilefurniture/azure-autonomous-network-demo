@@ -1169,3 +1169,160 @@ async def upload_tickets(file: UploadFile = File(...), scenario: str = "default"
         await task
 
     return EventSourceResponse(stream())
+
+
+# Prompt filename → agent name mapping
+PROMPT_AGENT_MAP = {
+    "foundry_orchestrator_agent.md": "orchestrator",
+    "orchestrator.md": "orchestrator",
+    "foundry_telemetry_agent_v2.md": "telemetry",
+    "telemetry_agent.md": "telemetry",
+    "foundry_runbook_kb_agent.md": "runbook",
+    "runbook_agent.md": "runbook",
+    "foundry_historical_ticket_agent.md": "ticket",
+    "ticket_agent.md": "ticket",
+    "alert_storm.md": "default_alert",
+    "default_alert.md": "default_alert",
+}
+
+
+@router.post("/upload/prompts", summary="Upload prompts to Cosmos DB")
+async def upload_prompts(file: UploadFile = File(...)):
+    """Upload a tarball of .md prompt files. Stores in Cosmos platform-config.prompts."""
+    if not file.filename or not (file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")):
+        raise HTTPException(400, "File must be a .tar.gz archive")
+
+    content = await file.read()
+    logger.info("Prompts upload: %s (%d bytes)", file.filename, len(content))
+
+    async def stream():
+        progress: asyncio.Queue = asyncio.Queue()
+        def emit(step, detail, pct):
+            progress.put_nowait({"step": step, "detail": detail, "pct": pct})
+
+        async def run():
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmppath = Path(tmpdir)
+                    with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+                        tar.extractall(tmppath, filter="data")
+
+                    sc_name = "default"
+                    for root, dirs, files in os.walk(tmppath):
+                        if "scenario.yaml" in files:
+                            m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
+                            sc_name = m.get("name", "default")
+                            break
+
+                    # Find all .md files
+                    all_md = list(tmppath.rglob("*.md"))
+                    if not all_md:
+                        emit("error", "No .md prompt files found in archive", -1)
+                        progress.put_nowait(None)
+                        return
+
+                    emit("prompts", f"Found {len(all_md)} .md files for scenario '{sc_name}'", 10)
+
+                    if not COSMOS_NOSQL_ENDPOINT:
+                        emit("error", "COSMOS_NOSQL_ENDPOINT not configured", -1)
+                        progress.put_nowait(None)
+                        return
+
+                    def _store():
+                        from router_prompts import _get_prompts_container
+                        container = _get_prompts_container()
+                        stored = []
+
+                        # Find prompts dir (parent of graph_explorer/ or where prompt .md files live)
+                        prompts_dir = None
+                        for md in all_md:
+                            if md.name in PROMPT_AGENT_MAP:
+                                prompts_dir = md.parent
+                                break
+                        if not prompts_dir:
+                            prompts_dir = all_md[0].parent
+
+                        # Store individual prompts
+                        for md_file in all_md:
+                            if md_file.parent.name == "graph_explorer":
+                                continue  # handled separately below
+                            agent = PROMPT_AGENT_MAP.get(md_file.name)
+                            if not agent:
+                                continue
+                            txt = md_file.read_text()
+                            existing = list(container.query_items(
+                                query="SELECT c.version FROM c WHERE c.agent = @a AND c.scenario = @s AND c.name = @n ORDER BY c.version DESC",
+                                parameters=[{"name": "@a", "value": agent}, {"name": "@s", "value": sc_name}, {"name": "@n", "value": md_file.stem}],
+                                enable_cross_partition_query=False,
+                            ))
+                            nv = (existing[0]["version"] + 1) if existing else 1
+                            did = f"{sc_name}/{md_file.stem}/v{nv}"
+                            container.upsert_item({
+                                "id": did, "agent": agent, "scenario": sc_name,
+                                "name": md_file.stem, "version": nv, "content": txt,
+                                "description": f"Uploaded from {sc_name}-prompts.tar.gz",
+                                "tags": [sc_name, agent], "is_active": True, "deleted": False,
+                                "created_at": datetime.now(timezone.utc).isoformat(), "created_by": "ui-upload",
+                            })
+                            stored.append(did)
+                            emit("prompts", f"Stored {agent}: {md_file.name} (v{nv})", 20 + len(stored) * 8)
+
+                        # Compose GraphExplorer from graph_explorer/ subdirectory
+                        ge_dir = prompts_dir / "graph_explorer"
+                        if not ge_dir.exists():
+                            # Try finding it anywhere
+                            for d in tmppath.rglob("graph_explorer"):
+                                if d.is_dir():
+                                    ge_dir = d
+                                    break
+                        if ge_dir.exists():
+                            parts = []
+                            for pn in ["core_instructions.md", "core_schema.md", "language_gremlin.md"]:
+                                pf = ge_dir / pn
+                                if pf.exists():
+                                    parts.append(pf.read_text())
+                            if parts:
+                                composed = "\n\n---\n\n".join(parts)
+                                existing = list(container.query_items(
+                                    query="SELECT c.version FROM c WHERE c.agent = 'graph_explorer' AND c.scenario = @s AND c.name = 'graph_explorer' ORDER BY c.version DESC",
+                                    parameters=[{"name": "@s", "value": sc_name}],
+                                    enable_cross_partition_query=False,
+                                ))
+                                nv = (existing[0]["version"] + 1) if existing else 1
+                                did = f"{sc_name}/graph_explorer/v{nv}"
+                                container.upsert_item({
+                                    "id": did, "agent": "graph_explorer", "scenario": sc_name,
+                                    "name": "graph_explorer", "version": nv, "content": composed,
+                                    "description": f"Composed from graph_explorer/ ({sc_name})",
+                                    "tags": [sc_name, "graph_explorer", "composed"],
+                                    "is_active": True, "deleted": False,
+                                    "created_at": datetime.now(timezone.utc).isoformat(), "created_by": "ui-upload",
+                                })
+                                stored.append(did)
+                                emit("prompts", f"Stored graph_explorer (composed, v{nv})", 90)
+
+                        return stored
+
+                    stored = await asyncio.to_thread(_store)
+                    emit("done", f"Stored {len(stored)} prompts for '{sc_name}'", 100)
+                    progress.put_nowait({"_result": {"scenario": sc_name, "prompts_stored": len(stored), "ids": stored}})
+            except Exception as e:
+                logger.exception("Prompts upload failed")
+                progress.put_nowait({"step": "error", "detail": str(e), "pct": -1})
+            finally:
+                progress.put_nowait(None)
+
+        task = asyncio.create_task(run())
+        while True:
+            ev = await progress.get()
+            if ev is None:
+                break
+            if "_result" in ev:
+                yield {"event": "complete", "data": json.dumps(ev["_result"])}
+            elif ev.get("step") == "error":
+                yield {"event": "error", "data": json.dumps({"error": ev["detail"]})}
+            else:
+                yield {"event": "progress", "data": json.dumps(ev)}
+        await task
+
+    return EventSourceResponse(stream())

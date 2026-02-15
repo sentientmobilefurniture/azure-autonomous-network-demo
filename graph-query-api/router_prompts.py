@@ -14,6 +14,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -47,12 +48,38 @@ def _get_prompts_container():
     if not COSMOS_NOSQL_ENDPOINT:
         raise HTTPException(503, "COSMOS_NOSQL_ENDPOINT not configured")
 
+    # Create database + container via ARM (management plane) first
+    # Data-plane RBAC doesn't cover database creation
+    account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
+    sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
+    rg = os.getenv("AZURE_RESOURCE_GROUP", "")
+
+    if sub_id and rg:
+        try:
+            from azure.mgmt.cosmosdb import CosmosDBManagementClient
+            from azure.identity import DefaultAzureCredential as _DC
+            mgmt = CosmosDBManagementClient(_DC(), sub_id)
+            try:
+                mgmt.sql_resources.begin_create_update_sql_database(
+                    rg, account_name, PLATFORM_DB,
+                    {"resource": {"id": PLATFORM_DB}},
+                ).result()
+            except Exception:
+                pass  # already exists
+            try:
+                mgmt.sql_resources.begin_create_update_sql_container(
+                    rg, account_name, PLATFORM_DB, PROMPTS_CONTAINER,
+                    {"resource": {"id": PROMPTS_CONTAINER, "partitionKey": {"paths": ["/agent"], "kind": "Hash"}}},
+                ).result()
+            except Exception:
+                pass  # already exists
+        except Exception as e:
+            logger.warning("ARM prompts container creation failed: %s", e)
+
+    # Now use data-plane client for reads/writes
     client = CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
-    db = client.create_database_if_not_exists(PLATFORM_DB)
-    _container = db.create_container_if_not_exists(
-        id=PROMPTS_CONTAINER,
-        partition_key=PartitionKey(path="/agent"),
-    )
+    db = client.get_database_client(PLATFORM_DB)
+    _container = db.get_container_client(PROMPTS_CONTAINER)
     logger.info("Prompts container ready: %s/%s", PLATFORM_DB, PROMPTS_CONTAINER)
     return _container
 
@@ -104,6 +131,36 @@ async def list_prompts(
 
     items = list(container.query_items(query=query, parameters=params, enable_cross_partition_query=True))
     return {"prompts": items}
+
+
+@router.get("/prompts/scenarios", summary="List available prompt sets")
+async def list_prompt_scenarios():
+    """List distinct scenario names that have prompts stored in Cosmos."""
+    try:
+        container = _get_prompts_container()
+
+        def _list():
+            query = "SELECT DISTINCT c.scenario FROM c WHERE c.deleted != true"
+            items = list(container.query_items(query=query, enable_cross_partition_query=True))
+            scenarios = sorted(set(item["scenario"] for item in items if item.get("scenario")))
+
+            # For each scenario, count how many agent prompts it has
+            result = []
+            for sc in scenarios:
+                count_q = "SELECT VALUE COUNT(1) FROM c WHERE c.scenario = @s AND c.is_active = true AND c.deleted != true"
+                counts = list(container.query_items(
+                    query=count_q,
+                    parameters=[{"name": "@s", "value": sc}],
+                    enable_cross_partition_query=True,
+                ))
+                result.append({"scenario": sc, "prompt_count": counts[0] if counts else 0})
+            return result
+
+        scenarios = await asyncio.to_thread(_list)
+        return {"prompt_scenarios": scenarios}
+    except Exception as e:
+        logger.warning("Failed to list prompt scenarios: %s", e)
+        return {"prompt_scenarios": [], "error": str(e)}
 
 
 @router.get("/prompts/{prompt_id}", summary="Get a prompt")

@@ -81,6 +81,13 @@ for SCENARIO in "${TARGETS[@]}"; do
     echo -e "  ${GREEN}✓${NC} $SCENARIO-tickets.tar.gz ($(du -h "$SCENARIOS_DIR/$SCENARIO-tickets.tar.gz" | cut -f1))"
   fi
 
+  # Prompts: scenario.yaml + data/prompts/
+  if [ -d "$SCENARIO_DIR/data/prompts" ]; then
+    tar czf "$SCENARIOS_DIR/$SCENARIO-prompts.tar.gz" -C "$SCENARIOS_DIR" \
+      "$SCENARIO/scenario.yaml" "$SCENARIO/data/prompts" 2>/dev/null
+    echo -e "  ${GREEN}✓${NC} $SCENARIO-prompts.tar.gz ($(du -h "$SCENARIOS_DIR/$SCENARIO-prompts.tar.gz" | cut -f1))"
+  fi
+
   echo ""
 done
 
@@ -89,7 +96,7 @@ echo ""
 echo "Upload tarballs via the UI Settings page (⚙ → Upload tab):"
 for SCENARIO in "${TARGETS[@]}"; do
   echo "  $SCENARIO:"
-  for TYPE in graph telemetry runbooks tickets; do
+  for TYPE in graph telemetry runbooks tickets prompts; do
     T="$SCENARIOS_DIR/$SCENARIO-$TYPE.tar.gz"
     [ -f "$T" ] && echo "    $(basename "$T")"
   done
