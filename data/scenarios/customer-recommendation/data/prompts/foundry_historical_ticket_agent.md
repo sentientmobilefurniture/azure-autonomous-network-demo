@@ -29,7 +29,7 @@ Approximately 10 historical incident records spanning mid-2025 to early 2026. Ea
 2. **Return structured findings.** For each relevant ticket, report: incident ID, title, root cause, resolution, time to resolve, and lessons learned.
 3. **Highlight patterns.** If multiple tickets involve the same root cause type or segment, call that out.
 4. **Report resolution times.** These help the operator set expectations for the current incident.
-5. **Surface lessons learned.** These are the most actionable part.
+5. **Surface lessons learned.** These are the most actionable part — they capture what the team learned last time.
 6. **Acknowledge gaps.** If no similar incidents exist in the history, say so explicitly.
 
 ## What you can answer

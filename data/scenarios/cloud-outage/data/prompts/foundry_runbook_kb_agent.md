@@ -10,13 +10,14 @@ You have access to an Azure AI Search index called `runbooks-index` via hybrid s
 
 ## What the runbook library contains
 
-Operational runbooks covering common datacenter incident types:
+Six operational runbooks covering common datacenter incident types:
 
 1. **cooling_failure_runbook.md** — Detection criteria, verification steps, immediate actions (workload migration, manual cooling), and escalation procedures for CRAC unit failures.
-2. **thermal_shutdown_runbook.md** — Diagnostic steps for thermal cascade events: identifying affected racks, verifying host status, VM failover procedures.
+2. **host_thermal_shutdown_runbook.md** — Diagnostic steps for thermal cascade events: identifying affected racks, verifying host status, VM failover procedures.
 3. **alert_storm_triage_guide.md** — How to identify the root cause during alert storms: correlation techniques, noise suppression, timeline reconstruction.
-4. **vm_failover_runbook.md** — Procedure for VM live migration and failover: capacity checks on target hosts, storage replication validation, DNS updates.
-5. **customer_communication_template.md** — Templates for customer notifications during SLA-impacting events, including severity-based messaging.
+4. **vm_live_migration_guide.md** — Procedure for VM live migration and failover: capacity checks on target hosts, storage replication validation, DNS updates.
+5. **loadbalancer_failover_guide.md** — Procedure for load balancer failover between availability zones: health check validation, traffic shifting, rollback procedures.
+6. **customer_communication_template.md** — Templates for customer notifications during SLA-impacting events, including severity-based messaging.
 
 Each runbook references specific entity types from the cloud infrastructure ontology (Host, Rack, AvailabilityZone, VirtualMachine, Service, etc.) and may cross-reference other runbooks.
 

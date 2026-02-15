@@ -1,11 +1,16 @@
 # QOL Improvements — Implementation Plan
 
 > **Created:** 2026-02-15
-> **Last audited:** 2026-02-15
+> **Last audited:** 2026-02-15 (including UX audit)
 > **Status:** ⬜ Not Started
 > **Goal:** Six quality-of-life improvements to speed up loading, improve observability,
 > enhance graph interaction, track investigation history, and eliminate runtime ARM
 > delays by pre-creating core databases at infrastructure provisioning time.
+>
+> **UX audit scope:** User experience, interaction design, visual polish, and intuitive feel.
+> Cross-referenced the implementation plan against the live frontend codebase
+> (App.tsx, MetricsBar, AddScenarioModal, GraphCanvas, InvestigationPanel, DiagnosisPanel,
+> Header, styles, animation patterns) to identify gaps and propose improvements.
 
 ---
 
@@ -24,8 +29,8 @@
 
 | Phase | Status | Scope |
 |-------|--------|-------|
-| **Phase 1:** Pre-create Core DBs in Bicep | ⬜ Not started | `cosmos-gremlin.bicep`, `router_scenarios.py`, `router_prompts.py`, `router_ingest.py` |
-| **Phase 2:** Per-Scenario Containers (Shared DBs) | ⬜ Not started | `router_ingest.py`, `router_prompts.py`, `router_scenarios.py`, `config.py`, `types/index.ts` |
+| **Phase 1:** Pre-create Core DBs in Bicep | ⬜ Not started | `cosmos-gremlin.bicep` |
+| **Phase 2:** Per-Scenario Containers (Shared DBs) | ⬜ Not started | `router_ingest.py`, `router_prompts.py`, `router_telemetry.py`, `router_scenarios.py`, `config.py`, `types/index.ts` |
 | **Phase 3:** Upload Timer | ⬜ Not started | `AddScenarioModal.tsx` |
 | **Phase 4:** Graph API Log Stream in MetricsBar | ⬜ Not started | `MetricsBar.tsx`, `main.py` (graph-query-api) |
 | **Phase 5:** Graph Pause/Unpause on Mouseover | ⬜ Not started | `GraphCanvas.tsx`, `GraphTopologyViewer.tsx` |
@@ -44,6 +49,8 @@
 - [Item 6: Pre-Create Core DBs in Bicep](#item-6-pre-create-core-dbs-in-bicep)
 - [Implementation Phases](#implementation-phases)
 - [File Change Inventory](#file-change-inventory)
+- [Cross-Cutting UX Gaps](#cross-cutting-ux-gaps)
+- [UX Priority Matrix](#ux-priority-matrix)
 - [Edge Cases & Validation](#edge-cases--validation)
 - [Migration & Backwards Compatibility](#migration--backwards-compatibility)
 
@@ -73,6 +80,26 @@ Phase 5 (Graph Pause)  │    (independent)
 Phases 1 and 2 are coupled: the Bicep changes create the databases that the shared-DB
 refactor relies on. Phases 3, 4, and 5 are fully independent and can be done in any order.
 Phase 6 (interaction sidebar) depends on Phase 1 (the `interactions` database must exist).
+
+### UX Audit — Key Findings
+
+The implementation plan is architecturally thorough and well-phased. The following
+UX gaps were identified by cross-referencing each feature against its user-facing
+behavior — micro-interactions, feedback loops, visual cues, and edge-case behaviors
+that determine whether a feature feels polished or rough:
+
+| Area | Finding | Severity |
+|------|---------|----------|
+| Upload Timer | Good foundation but missing ETA, per-step timing, and completion celebration | Medium |
+| Log Stream 3-Panel | 3 equal panels will crowd the 36% right side; needs tabs or smart layout | High |
+| Graph Pause | Mouse-leave resume is too abrupt; needs visual indicator and manual override | Medium |
+| Interaction Sidebar | Missing search, empty state guidance, loading skeleton, and keyboard nav | Medium |
+| Global | No toast/notification system for transient feedback | Medium |
+| Global | Investigation/Diagnosis horizontal split is not resizable (hard `w-1/2`) | Low |
+| Global | No keyboard accessibility for graph interactions | Low |
+| Global | Final diagnosis appears all-at-once instead of streaming | Medium |
+
+UX enhancements are integrated into each item below. See also [Cross-Cutting UX Gaps](#cross-cutting-ux-gaps) and [UX Priority Matrix](#ux-priority-matrix) at the end.
 
 ---
 
@@ -141,7 +168,10 @@ def get_scenario_context(
 ) -> ScenarioContext:
     graph_name = x_graph or COSMOS_GREMLIN_GRAPH
     # Derive scenario prefix: "cloud-outage-topology" → "cloud-outage"
-    prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else ""
+    # IMPORTANT: graph names MUST follow the "{scenario}-topology" convention.
+    # If no hyphen exists, fall back to the full graph_name to avoid empty
+    # prefixes which would produce invalid container names (e.g., "-AlertStream").
+    prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
 
     return ScenarioContext(
         graph_name=graph_name,
@@ -183,6 +213,13 @@ The `_ensure_nosql_db_and_containers()` function should be refactored into two p
 - `_ensure_nosql_db(db_name)` — creates database if not exists (kept for backwards compat,
   but skipped when targeting the shared `telemetry` DB which already exists)
 - `_ensure_nosql_containers(db_name, containers, emit)` — creates containers only
+
+> **⚠️ Implementation note:** `_ensure_nosql_db_and_containers` is currently a **nested
+> function** defined inside `upload_telemetry`'s `run()` coroutine (~line 915), not a
+> module-level function. The refactoring must first **extract it** from the closure into
+> a module-level helper (or two helpers) before splitting. The nested function closes
+> over `cosmos_mgmt_client` and the NoSQL account name — those must be passed as
+> parameters to the extracted functions.
 
 #### `router_telemetry.py` — Query Changes
 
@@ -258,17 +295,22 @@ this is entirely backend-driven via `X-Graph` header → `ScenarioContext` in `c
 
 #### `types/index.ts` — `SavedScenario.resources`
 
-Update the `resources` field in `SavedScenario` to reflect shared DBs:
+Update the `resources` field in `SavedScenario` to reflect shared DBs.
+
+> **⚠️ Backwards compatibility:** New fields MUST be optional (`?`) because existing
+> scenario documents in Cosmos were saved without them. The backend should populate
+> defaults when reading old documents (derive `telemetry_container_prefix` and
+> `prompts_container` from the graph name using the same `rsplit` logic).
 
 ```typescript
 resources: {
-  graph: string;                    // "cloud-outage-topology" (unchanged)
-  telemetry_database: string;       // "telemetry" (was "cloud-outage-telemetry")
-  telemetry_container_prefix: string; // "cloud-outage" (NEW)
-  runbooks_index: string;           // unchanged
-  tickets_index: string;            // unchanged
-  prompts_database: string;         // "prompts" (was "cloud-outage-prompts")
-  prompts_container: string;        // "cloud-outage" (NEW)
+  graph: string;                     // "cloud-outage-topology" (unchanged)
+  telemetry_database: string;        // "telemetry" (was "cloud-outage-telemetry")
+  telemetry_container_prefix?: string; // "cloud-outage" (NEW — optional for back-compat)
+  runbooks_index: string;            // unchanged
+  tickets_index: string;             // unchanged
+  prompts_database: string;          // "prompts" (was "cloud-outage-prompts")
+  prompts_container?: string;        // "cloud-outage" (NEW — optional for back-compat)
 };
 ```
 
@@ -289,7 +331,7 @@ resources: {
 
 ### Current State
 
-`AddScenarioModal.tsx` (621 lines) tracks upload progress via `overallPct` (0-100)
+`AddScenarioModal.tsx` (620 lines) tracks upload progress via `overallPct` (0-100)
 and `currentUploadStep` (text label), but has **no elapsed time display**. Users cannot
 gauge how long the upload has been running or estimate completion time.
 
@@ -330,8 +372,11 @@ const [elapsedSeconds, setElapsedSeconds] = useState(0);
 const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 ```
 
-2. **Start timer when upload begins** (in the `handleSave` function, before the first upload):
+2. **Start timer when upload begins** (in the `handleSave` function, **after** validation
+   passes but **before** the first upload call). This avoids counting validation time —
+   place the timer start after the early-return checks in `handleSave`, not at the top:
 ```typescript
+// Place AFTER validation checks (e.g., file presence, name uniqueness) pass:
 uploadStartRef.current = Date.now();
 setElapsedSeconds(0);
 timerIntervalRef.current = setInterval(() => {
@@ -369,6 +414,75 @@ function formatElapsed(seconds: number): string {
 <span className="text-xs text-text-muted ml-auto">
   ⏱ {formatElapsed(elapsedSeconds)}
 </span>
+```
+
+### UX Enhancements for Upload Timer
+
+#### 2a. Per-Slot Timing
+
+The plan shows elapsed time at the overall level only. Each file slot (graph, telemetry,
+runbooks, tickets, prompts) can take wildly different durations. Show per-slot elapsed
+time beside the slot's progress bar:
+
+```
+✓ Graph Data ················ 42 vertices, 68 edges     12s
+◉ Runbooks ···· ■■■■■■■□□□ 65% Creating search index   1m 04s ← running
+○ Tickets ····················· Waiting                  —
+```
+
+**Implementation:** Track `slotStartTime` in the `FileSlot` data structure. When upload
+begins for a slot, record `Date.now()`. When it completes/errors, freeze the elapsed
+time. The running slot shows a live counter; completed slots show their final duration.
+
+**Why:** Users regularly report that "runbooks" is the slowest step. Per-slot timing
+confirms which steps are bottlenecks and sets better expectations for future uploads.
+
+#### 2b. Estimated Time Remaining
+
+After the first slot completes, calculate a rough ETA based on the proportion of
+`overallPct` achieved:
+
+```
+Overall: 2 of 5 ■■■■■■■■■□□□□□□ 40%   ⏱ 1m 23s   ~2m remaining
+```
+
+**Formula:** `eta = elapsed × (100 - pct) / pct`. Only show after `pct > 10%` to avoid
+wild early estimates. Update ETA every 5 seconds (not every second — prevents jitter).
+
+**Why:** A timer alone tells users "how long so far" but not "how much longer." An ETA
+reduces anxiety during the 3-5 minute first-time uploads.
+
+#### 2c. Completion Celebration Moment
+
+**Enhancement:** Add a brief "success moment" before auto-close:
+1. Timer stops → final elapsed time fades from normal to `text-status-success`
+2. A subtle pulse animation on the overall progress bar (CSS `animate-pulse`
+   with `bg-status-success` for 1 second)
+3. Hold the modal open for **2.5 seconds** instead of 1.5 — let users register
+   the final time
+
+**Why:** Users invest 3-5 minutes watching this modal. A dismissive instant close
+feels abrupt. The existing `framer-motion` spring pattern (`stiffness: 400,
+damping: 17`) can be applied to the completion bar for visual cohesion.
+
+#### 2d. Timer Visual Hierarchy
+
+Place the timer right-aligned on the same line as the overall progress, using
+the `text-text-muted` style initially, then `text-text-secondary` after 30 seconds.
+Use `font-mono tabular-nums` so the timer digits don't cause layout shifts as they
+change (e.g., "9s" → "10s" won't cause the surrounding text to jump):
+
+```tsx
+<div className="flex items-center justify-between mt-3">
+  <span className="text-xs text-text-secondary">
+    Overall: {completedSlots} of {totalSlots}
+  </span>
+  <span className={`text-xs font-mono tabular-nums ${
+    elapsedSeconds > 30 ? 'text-text-secondary' : 'text-text-muted'
+  }`}>
+    ⏱ {formatElapsed(elapsedSeconds)}
+  </span>
+</div>
 ```
 
 ---
@@ -475,6 +589,104 @@ The existing nginx `/query/` location block already has `proxy_buffering off` an
 `proxy_cache off` for SSE support. The new `/query/logs` route will be handled
 correctly by the existing config.
 
+### UX Enhancement: Tabbed Log Viewer Alternative
+
+#### Layout Concern
+
+The 50% / 25% / 25% split may crowd the log panels. On a 1920px screen, each log
+panel gets roughly 480px — acceptable. But on a 1440px laptop, each panel gets 360px
+— tight for log lines with long container names, timestamps, and JSON payloads.
+
+#### Proposed Alternative: Tabs Instead of Side-by-Side
+
+Instead of two narrow side-by-side log panels, use a **single log panel with tabs**:
+
+```
+┌──────────────────────────────────────┬─────────────────────┐
+│                                      │ [API] [Graph API]   │
+│    Graph Topology                    │ ──────────────────  │
+│    Viewer                            │ 14:31:14 INFO ...   │
+│                                      │ 14:31:15 DEBUG ...  │
+│                                      │ 14:31:16 INFO ...   │
+└──────────────────────────────────────┴─────────────────────┘
+```
+
+**Benefits:**
+- Log panel retains its full 36% width — no cramping
+- Tabs are a familiar pattern (VS Code terminal tabs, browser tabs)
+- Users typically focus on one log stream at a time — side-by-side comparison is rare
+
+**Implementation:**
+
+```tsx
+// New component: TabbedLogStream.tsx
+interface TabbedLogStreamProps {
+  streams: Array<{ url: string; title: string }>;
+}
+
+function TabbedLogStream({ streams }: TabbedLogStreamProps) {
+  const [activeTab, setActiveTab] = useState(0);
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Tab bar */}
+      <div className="flex border-b border-white/10 px-2">
+        {streams.map((s, i) => (
+          <button
+            key={s.url}
+            onClick={() => setActiveTab(i)}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              activeTab === i
+                ? 'text-brand border-b-2 border-brand'
+                : 'text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            {s.title}
+          </button>
+        ))}
+      </div>
+
+      {/* Active log stream — keep all mounted for SSE continuity */}
+      <div className="flex-1 min-h-0 relative">
+        {streams.map((s, i) => (
+          <div
+            key={s.url}
+            className={i === activeTab ? 'h-full' : 'hidden'}
+          >
+            <LogStream url={s.url} title={s.title} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+**Critical detail:** All `LogStream` instances stay mounted (using `hidden` instead of
+conditional rendering) so their SSE connections remain active and logs accumulate in
+the background. Switching tabs is instant with no reconnect delay.
+
+#### Alternative: Collapsible 3-Panel
+
+If three panels are preferred for at-a-glance comparison, add a **collapse/expand**
+toggle so users can hide the log panels entirely, giving the graph 100% width:
+
+```
+[Graph ▼] [API Logs ▼] [Graph API ▼]   ← panel headers with collapse toggles
+```
+
+#### Unread Indicator on Inactive Tab
+
+When using tabs, add a subtle dot or count badge on the inactive tab to indicate
+new log entries arrived while the user was looking at the other stream:
+
+```
+[API (3)] [Graph API ●]
+```
+
+Clear the indicator when the user switches to that tab. This prevents the "did I miss
+anything?" anxiety that comes with hidden information.
+
 ---
 
 ## Item 4: Graph Pause/Unpause on Mouseover
@@ -489,35 +701,94 @@ There is **no pause/resume logic**. The graph simulation runs continuously after
 loads, then cools down after 3 seconds. Node dragging temporarily "pins" the dragged
 node but doesn't pause the overall simulation.
 
-From the `react-force-graph-2d` SKILL reference (`custom_skills/react-force-graph-2d/SKILL.md`),
-the `ForceGraphMethods` ref exposes imperative methods including:
-- `pauseAnimation()` — freezes the canvas rendering loop
-- `resumeAnimation()` — resumes the canvas rendering loop
+The `react-force-graph-2d` library's `ForceGraphMethods` ref exposes imperative methods
+including `pauseAnimation()` and `resumeAnimation()`. However, **`pauseAnimation()`
+stops the `requestAnimationFrame` render loop entirely**, meaning the canvas will not
+repaint. This breaks node dragging: the user would drag a node but see nothing move
+on screen until the animation resumes.
+
+**Correct approach:** Instead of pausing the render loop, freeze the **d3 simulation**
+by setting `alphaTarget(0)` and `alpha(0)`. This stops nodes from moving but keeps the
+canvas rendering, so node drag, hover tooltips, and visual feedback all continue to work.
 
 ### Target State
 
-When the user's mouse enters the graph canvas area, the simulation pauses (nodes
+When the user's mouse enters the graph canvas area, the simulation freezes (nodes
 stop moving). When the mouse leaves, the simulation resumes. This makes it easier
 for users to hover over specific nodes to read labels and inspect tooltips without
-the graph layout shifting under their cursor.
+the graph layout shifting under their cursor. **Node dragging continues to work
+normally while the simulation is frozen.**
 
 ### Implementation
 
-#### `GraphCanvas.tsx` — Add Pause/Resume
+#### `GraphCanvas.tsx` — Add Freeze/Unfreeze
 
-1. **Expose `pauseAnimation` and `resumeAnimation` via the imperative handle:**
+1. **Expose `freezeSimulation` and `unfreezeSimulation` via the imperative handle:**
 
 ```typescript
 export interface GraphCanvasHandle {
   zoomToFit: () => void;
-  pauseAnimation: () => void;   // NEW
-  resumeAnimation: () => void;  // NEW
+  freezeSimulation: () => void;    // NEW
+  unfreezeSimulation: () => void;  // NEW
 }
 
 useImperativeHandle(ref, () => ({
   zoomToFit: () => fgRef.current?.zoomToFit(400, 40),
-  pauseAnimation: () => fgRef.current?.pauseAnimation(),
-  resumeAnimation: () => fgRef.current?.resumeAnimation(),
+  freezeSimulation: () => {
+    // Stop the d3 simulation but keep the render loop alive.
+    // This allows node dragging and hover to still repaint the canvas.
+    const engine = fgRef.current?.d3Force?.('simulation');
+    if (!engine) {
+      // Fallback: access the simulation via the undocumented _simulation property
+      // or use d3AlphaTarget prop. The simplest reliable approach:
+      fgRef.current?.d3ReheatSimulation?.();  // ensure sim is active
+      // Then immediately cool it:
+    }
+    // The most reliable approach for react-force-graph-2d:
+    fgRef.current?.pauseAnimation();
+    // BUT we need a workaround — see note below.
+  },
+  unfreezeSimulation: () => {
+    fgRef.current?.resumeAnimation();
+    fgRef.current?.d3ReheatSimulation();
+  },
+}), []);
+```
+
+> **⚠️ Implementation note — preferred approach:** Rather than fighting the library's
+> imperative API, use the `cooldownTicks` prop dynamically. Set `cooldownTicks={0}` on
+> mouse-enter (simulation stops ticking but render loop stays alive), and restore the
+> original `cooldownTime={3000}` on mouse-leave with a `d3ReheatSimulation()` call.
+> This is the cleanest solution because the `ForceGraph2D` component natively handles
+> render-loop-independent simulation freezing via cooldown props.
+
+```typescript
+// PREFERRED: Use state-driven cooldown instead of imperative pause/resume
+const [frozen, setFrozen] = useState(false);
+
+// In the ForceGraph2D props:
+<ForceGraph2D
+  ref={fgRef}
+  cooldownTicks={frozen ? 0 : Infinity}
+  cooldownTime={frozen ? 0 : 3000}
+  // ... all existing props ...
+/>
+```
+
+With this approach, `GraphCanvasHandle` simplifies to:
+
+```typescript
+export interface GraphCanvasHandle {
+  zoomToFit: () => void;
+  setFrozen: (frozen: boolean) => void;  // NEW
+}
+
+useImperativeHandle(ref, () => ({
+  zoomToFit: () => fgRef.current?.zoomToFit(400, 40),
+  setFrozen: (f: boolean) => {
+    setFrozen(f);
+    if (!f) fgRef.current?.d3ReheatSimulation();
+  },
 }), []);
 ```
 
@@ -548,19 +819,19 @@ return (
 );
 ```
 
-#### `GraphTopologyViewer.tsx` — Wire Up Pause/Resume
+#### `GraphTopologyViewer.tsx` — Wire Up Freeze/Unfreeze
 
 ```typescript
 const canvasRef = useRef<GraphCanvasHandle>(null);
 const [isPaused, setIsPaused] = useState(false);
 
 const handleMouseEnter = useCallback(() => {
-  canvasRef.current?.pauseAnimation();
+  canvasRef.current?.setFrozen(true);
   setIsPaused(true);
 }, []);
 
 const handleMouseLeave = useCallback(() => {
-  canvasRef.current?.resumeAnimation();
+  canvasRef.current?.setFrozen(false);
   setIsPaused(false);
 }, []);
 
@@ -578,17 +849,91 @@ is true, so users understand why the graph stopped moving.
 
 #### Edge Cases
 
-- **Node dragging:** When a user starts dragging a node, the graph is already paused
-  (mouse is over the canvas). Node drag still works because `pauseAnimation()` only
-  stops the animation frame loop; `enableNodeDrag` operates via mouse events independently.
-  However, we should **not** call `resumeAnimation` on mouse-up during a drag — only
-  on mouseLeave. This is already correct with the current approach since we only resume
-  on `onMouseLeave`.
+- **Node dragging:** Works correctly because we freeze the simulation (stop ticking),
+  not the render loop. The canvas continues to repaint, so dragged nodes move visually.
+  Node drag pins `fx`/`fy` on the dragged node as usual.
 - **Cooldown period:** If the graph hasn't finished its initial cooldown (3s after data
-  load), pausing freezes the layout mid-settling. This is acceptable — the user
+  load), freezing stops the layout mid-settling. This is acceptable — the user
   intentionally moused over to inspect nodes.
 - **Touch devices:** `onMouseEnter`/`onMouseLeave` won't fire on touch. The graph
   behaves as before on touch devices — no regression.
+- **Rapid mouse enter/leave:** `setFrozen` is idempotent — multiple `true` or `false`
+  calls in sequence have no adverse effects.
+
+### UX Enhancements for Graph Pause
+
+#### 4a. Required "⏸ Paused" Visual Indicator
+
+The "⏸ Paused" indicator should be **required**, not optional. Without it, users who
+aren't aware of the pause-on-hover feature will think the graph is broken when it
+freezes.
+
+**Placement:** Bottom-right corner of the graph canvas, overlaying the graph.
+
+**Styling:** Semi-transparent pill badge (`bg-white/10 backdrop-blur-sm text-text-muted`),
+animates in with the existing `GraphTooltip` pattern (scale 0.95→1, 100ms). Small
+enough to not obstruct graph content (height ~20px).
+
+**Why:** The app already uses visual state indicators everywhere: `HealthDot` (green/red),
+agent status dots (amber/green/red), provisioning banner. A "Paused" badge is consistent
+with this language of state visibility.
+
+#### 4b. Debounce Resume on Mouse-Leave
+
+If a user's mouse briefly exits the canvas (e.g., moving to a nearby button), the graph
+instantly resumes and the layout shifts. Add a **300ms debounce** on `onMouseLeave`
+before calling `resumeAnimation()`:
+
+```typescript
+const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+const handleMouseEnter = useCallback(() => {
+  if (resumeTimeoutRef.current) {
+    clearTimeout(resumeTimeoutRef.current);
+    resumeTimeoutRef.current = null;
+  }
+  canvasRef.current?.pauseAnimation();
+  setIsPaused(true);
+}, []);
+
+const handleMouseLeave = useCallback(() => {
+  resumeTimeoutRef.current = setTimeout(() => {
+    canvasRef.current?.resumeAnimation();
+    setIsPaused(false);
+    resumeTimeoutRef.current = null;
+  }, 300);
+}, []);
+```
+
+**Why:** Without debounce, accidental mouse exits (common when reaching for the toolbar
+above the graph or the resize handle below) cause jarring layout jumps.
+
+#### 4c. Manual Pause/Resume Toggle in Toolbar
+
+Add a pause/play button to `GraphToolbar` (alongside the existing zoom-to-fit ⤢ and
+refresh ⟳ buttons):
+
+```
+[CoreRouter ● ] [BGPSession ● ] [Search... ] 42 nodes 68 edges [⏸] [⤢] [⟳]
+```
+
+This gives users **two ways** to pause:
+1. **Implicit:** Mouse over the graph (auto-pause for inspection)
+2. **Explicit:** Click the toolbar button (persistent pause for screenshots, presentations)
+
+The explicit toggle overrides the implicit behavior: if the user manually pauses,
+mouse-leave does NOT resume. Only clicking the toggle again (or the refresh button)
+resumes.
+
+**Why:** Mouse-hover pause is great for quick inspection, but users doing presentations
+or taking screenshots need persistent pause without keeping the mouse over the graph.
+
+#### 4d. Smooth Resume Transition
+
+When the graph resumes after a pause, the sudden physics re-engagement can cause nodes
+to jolt. Ease back into the simulation by lowering alpha or setting `d3AlphaDecay` to a
+higher value (e.g., `0.05`) temporarily after resume, then reverting to `0.02` after
+500ms. This dampens the post-pause settling quickly.
 
 ---
 
@@ -822,13 +1167,20 @@ export function useInteractions() {
 
   const fetchInteractions = useCallback(async (scenario?: string) => {
     setLoading(true);
-    const url = scenario
-      ? `/query/interactions?scenario=${encodeURIComponent(scenario)}&limit=50`
-      : '/query/interactions?limit=50';
-    const res = await fetch(url);
-    const data = await res.json();
-    setInteractions(data.interactions ?? []);
-    setLoading(false);
+    try {
+      const url = scenario
+        ? `/query/interactions?scenario=${encodeURIComponent(scenario)}&limit=50`
+        : '/query/interactions?limit=50';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setInteractions(data.interactions ?? []);
+    } catch (err) {
+      console.error('Failed to fetch interactions:', err);
+      // Don't clear existing interactions on error — keep stale data visible
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const saveInteraction = useCallback(async (interaction: {
@@ -838,21 +1190,33 @@ export function useInteractions() {
     diagnosis: string;
     run_meta: RunMeta | null;
   }) => {
-    const res = await fetch('/query/interactions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(interaction),
-    });
-    const saved = await res.json();
-    setInteractions(prev => [saved, ...prev]);
-    return saved;
+    try {
+      const res = await fetch('/query/interactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(interaction),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const saved = await res.json();
+      setInteractions(prev => [saved, ...prev]);
+      return saved;
+    } catch (err) {
+      console.error('Failed to save interaction:', err);
+      return null;
+    }
   }, []);
 
   const deleteInteraction = useCallback(async (id: string, scenario: string) => {
-    await fetch(`/query/interactions/${id}?scenario=${encodeURIComponent(scenario)}`, {
-      method: 'DELETE',
-    });
-    setInteractions(prev => prev.filter(i => i.id !== id));
+    try {
+      const res = await fetch(
+        `/query/interactions/${id}?scenario=${encodeURIComponent(scenario)}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setInteractions(prev => prev.filter(i => i.id !== id));
+    } catch (err) {
+      console.error('Failed to delete interaction:', err);
+    }
   }, []);
 
   return { interactions, loading, fetchInteractions, saveInteraction, deleteInteraction };
@@ -925,9 +1289,71 @@ export function InteractionSidebar({
 }
 ```
 
-**`InteractionCard` sub-component** renders: relative timestamp, scenario badge,
-truncated query text (line-clamp-2), step count + elapsed time, and a delete button
-visible on hover.
+**`InteractionCard` sub-component:**
+
+```tsx
+interface InteractionCardProps {
+  interaction: Interaction;
+  onClick: () => void;
+  onDelete: () => void;
+}
+
+function InteractionCard({ interaction, onClick, onDelete }: InteractionCardProps) {
+  const timeAgo = formatTimeAgo(interaction.created_at); // e.g. "2m ago", "1h ago"
+
+  return (
+    <div
+      onClick={onClick}
+      className="group cursor-pointer rounded-lg border border-white/5 bg-neutral-bg3
+                 p-2.5 hover:border-white/15 hover:bg-neutral-bg4 transition-colors"
+    >
+      {/* Header: timestamp + delete */}
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] text-text-muted">{timeAgo}</span>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-400
+                     transition-opacity text-xs p-0.5"
+          title="Delete"
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* Scenario badge */}
+      <span className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded
+                       bg-accent/15 text-accent mb-1">
+        {interaction.scenario}
+      </span>
+
+      {/* Query preview */}
+      <p className="text-xs text-text-secondary line-clamp-2 leading-relaxed">
+        {interaction.query}
+      </p>
+
+      {/* Meta: step count + elapsed */}
+      {interaction.run_meta && (
+        <div className="mt-1.5 text-[10px] text-text-muted flex gap-2">
+          <span>{interaction.run_meta.steps} steps</span>
+          <span>{interaction.run_meta.time}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Format ISO timestamp to relative time (e.g. "2m ago", "3h ago", "1d ago") */
+function formatTimeAgo(isoString: string): string {
+  const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+```
 
 #### `App.tsx` — Layout Changes
 
@@ -949,20 +1375,31 @@ export default function App() {
     fetchInteractions(activeScenario ?? undefined);
   }, [activeScenario, fetchInteractions]);
 
-  // Auto-save interaction when investigation completes
+  // Auto-save interaction when investigation completes.
+  // We use refs for values that should be captured at save-time to avoid
+  // stale closures AND satisfy react-hooks/exhaustive-deps.
   const prevRunningRef = useRef(running);
+  const alertRef = useRef(alert);
+  const stepsRef = useRef(steps);
+  const runMetaRef = useRef(runMeta);
+  const activeScenarioRef = useRef(activeScenario);
+  useEffect(() => { alertRef.current = alert; }, [alert]);
+  useEffect(() => { stepsRef.current = steps; }, [steps]);
+  useEffect(() => { runMetaRef.current = runMeta; }, [runMeta]);
+  useEffect(() => { activeScenarioRef.current = activeScenario; }, [activeScenario]);
+
   useEffect(() => {
-    if (prevRunningRef.current && !running && finalMessage && activeScenario) {
+    if (prevRunningRef.current && !running && finalMessage && activeScenarioRef.current) {
       saveInteraction({
-        scenario: activeScenario,
-        query: alert,
-        steps,
+        scenario: activeScenarioRef.current,
+        query: alertRef.current,
+        steps: stepsRef.current,
         diagnosis: finalMessage,
-        run_meta: runMeta,
+        run_meta: runMetaRef.current,
       });
     }
     prevRunningRef.current = running;
-  }, [running, finalMessage]);
+  }, [running, finalMessage, saveInteraction]);
 
   // When viewing a past interaction, override displayed data
   const displaySteps = viewingInteraction?.steps ?? steps;
@@ -1030,6 +1467,115 @@ When a user clicks on an interaction card:
 
 Starting a new investigation automatically clears `viewingInteraction`.
 
+### UX Enhancements for Interaction Sidebar
+
+#### 5a. Loading Skeleton Instead of Text
+
+Use a **skeleton loader** that matches the card shape instead of `<p>Loading...</p>`:
+
+```tsx
+{loading && (
+  <div className="space-y-2 p-2">
+    {[1, 2, 3].map(i => (
+      <div key={i} className="h-20 rounded-lg bg-white/5 animate-pulse" />
+    ))}
+  </div>
+)}
+```
+
+The app already uses `animate-pulse` for loading states (graph topology loader,
+provisioning dot). Skeleton loaders communicate "content is coming" without the
+abruptness of a text label.
+
+#### 5b. Search / Filter in Sidebar
+
+With 50 interactions loaded by default, scrolling to find a specific past investigation
+is tedious. Add a search input at the top of the sidebar that filters interactions
+client-side by matching against `query` text and `scenario` name. The input should use
+the existing `.glass-input` class and match the toolbar search input in
+`GraphTopologyViewer` (same font size, same placeholder pattern).
+
+#### 5c. "Viewing Past Interaction" Banner Design
+
+This is critical — users must always know whether they're looking at **live
+investigation data** or **historical replay**.
+
+**Proposed design:** A slim persistent banner at the top of the investigation area
+(spanning both panels):
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ ◀ Viewing interaction from 2 hours ago · telco-noc  [Clear] │ ← brand-subtle bg
+├───────────────────────┬──────────────────────────────────────┤
+│ Investigation Panel   │ Diagnosis Panel                      │
+```
+
+**Styling:** `bg-brand-subtle` (rgba(130,81,238,0.15)) with `border-brand/20` bottom
+border — uses the same visual language as the `ProvisioningBanner` but with brand
+color instead of amber. Includes arrow ◀ indicating "going back in time", relative
+timestamp, scenario name badge, and "Clear" button to return to live state.
+
+**Animation:** Slides down from the top (matching `ProvisioningBanner`'s entrance pattern).
+
+#### 5d. Empty State That Teaches
+
+Replace the minimal empty state with a more **educational and action-oriented** design:
+
+Mirror the `DiagnosisPanel` empty state (centered diamond icon + title + subtitle)
+for visual continuity. Use the same `text-text-muted` and `opacity-40` pattern.
+Message: "History appears here. Submit an alert to start an investigation. Results
+are auto-saved."
+
+#### 5e. Interaction Card Enhancements
+
+**a) Relative timestamps that auto-update:** Use `Intl.RelativeTimeFormat` or a simple
+helper that re-renders every 60 seconds. After 24 hours, switch to absolute date format.
+
+**b) Query preview with keyword highlighting:** If the query contains severity keywords
+(CRITICAL, WARNING, ERROR), highlight them using the same colors as graph node status
+dots: CRITICAL/ERROR → `text-status-error`, WARNING → `text-status-warning`.
+
+**c) Step count + elapsed time badge:** Show `4 steps · 45s` in the card footer, giving
+users a quick sense of investigation complexity before clicking.
+
+**d) Hover preview tooltip:** On hover (300ms delay — matching `GraphTooltip` timing),
+show a tooltip with the first 2 lines of the diagnosis text.
+
+**e) Delete confirmation:** Don't delete on single click. Show a brief inline
+confirmation ("Delete?" with ✓/✗ buttons) that auto-dismisses after 3 seconds.
+
+#### 5f. Keyboard Navigation
+
+The sidebar should support:
+- `↑`/`↓` arrows to move between interaction cards
+- `Enter` to select/view an interaction
+- `Escape` to clear the viewing state
+- `Delete` to trigger delete confirmation on the focused card
+
+#### 5g. Auto-Save Feedback
+
+Users should know when an auto-save happens. Add a transient indicator — flash the
+sidebar header "History" text with a brief green tint + "+ Saved" text that fades
+after 2 seconds:
+
+```
+History + Saved ✓   → (2s later) →   History
+```
+
+#### 5h. Sidebar Width Transition
+
+Use `transition-[width]` instead of `transition-all` to avoid transitioning unrelated
+properties (color, opacity, etc.). Use `duration-200 ease-out` to match the app's
+standard 200ms animation timing:
+
+```tsx
+className={`
+  border-l border-white/10 bg-neutral-bg2 flex flex-col
+  transition-[width] duration-200 ease-out
+  ${collapsed ? 'w-10' : 'w-72'}
+`}
+```
+
 ---
 
 ## Item 6: Pre-Create Core DBs in Bicep
@@ -1085,7 +1631,7 @@ resource scenariosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
       id: 'scenarios'
       partitionKey: { paths: ['/id'], kind: 'Hash', version: 2 }
     }
-    options: { autoscaleSettings: { maxThroughput: 400 } }
+    options: { autoscaleSettings: { maxThroughput: 1000 } }  // ⚠️ AUDIT FIX: minimum for autoscale is 1000
   }
 }
 
@@ -1116,8 +1662,22 @@ resource interactionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabas
     resource: {
       id: 'interactions'
       partitionKey: { paths: ['/scenario'], kind: 'Hash', version: 2 }
+      // Composite index for efficient ORDER BY c.created_at DESC queries.
+      // Without this, cross-partition ORDER BY queries consume excessive RUs
+      // and may return inconsistent ordering.
+      indexingPolicy: {
+        compositeIndexes: [
+          [
+            { path: '/scenario', order: 'ascending' }
+            { path: '/created_at', order: 'descending' }
+          ]
+        ]
+      }
+      // Auto-expire interactions after 90 days to prevent unbounded growth.
+      // Set to -1 (or remove) to disable TTL and keep interactions forever.
+      defaultTtl: 7776000  // 90 days in seconds
     }
-    options: { autoscaleSettings: { maxThroughput: 400 } }
+    options: { autoscaleSettings: { maxThroughput: 1000 } }  // ⚠️ AUDIT FIX: minimum for autoscale is 1000
   }
 }
 ```
@@ -1218,14 +1778,15 @@ redundant. Update each router:
 > Independent. No dependencies.
 
 **Files to modify:**
-- `frontend/src/components/graph/GraphCanvas.tsx` — add `pauseAnimation`/`resumeAnimation` to handle; add mouse event props; wrap in `<div>`
+- `frontend/src/components/graph/GraphCanvas.tsx` — add simulation freeze via `cooldownTicks` prop; add `setFrozen` to handle; add mouse event props; wrap in `<div>`
 - `frontend/src/components/GraphTopologyViewer.tsx` — wire mouse enter/leave callbacks
 
 **Verification:**
 - Load graph topology → confirm nodes animate
-- Mouse over graph → confirm animation pauses
-- Mouse out → confirm animation resumes
-- Confirm node drag + hover tooltips still work while paused
+- Mouse over graph → confirm simulation freezes (nodes stop moving)
+- Mouse out → confirm simulation resumes
+- **Confirm node drag still works while frozen** (canvas must continue repainting)
+- Confirm hover tooltips still work while frozen
 
 ### Phase 6: Interaction History Sidebar
 
@@ -1264,9 +1825,11 @@ redundant. Update each router:
 | `frontend/src/types/index.ts` | MODIFY | 2, 6 | Update `SavedScenario.resources`; add `Interaction` interface |
 | `frontend/src/components/AddScenarioModal.tsx` | MODIFY | 3 | Add timer (refs, interval, elapsed display) |
 | `graph-query-api/main.py` | MODIFY | 4, 6 | Add `GET /query/logs`; mount `interactions_router` |
-| `frontend/src/components/MetricsBar.tsx` | MODIFY | 4 | Add third `<Panel>` with Graph API `<LogStream>` |
-| `frontend/src/components/graph/GraphCanvas.tsx` | MODIFY | 5 | Add pause/resume to handle; mouse event props; wrapper div |
-| `frontend/src/components/GraphTopologyViewer.tsx` | MODIFY | 5 | Wire mouse enter/leave |
+| `frontend/src/components/MetricsBar.tsx` | MODIFY | 4 | Add third `<Panel>` with Graph API `<LogStream>` (or `TabbedLogStream`) |
+| `frontend/src/components/TabbedLogStream.tsx` | **CREATE** | 4 (UX) | Tabbed log viewer alternative to avoid 3-panel cramping (~60 lines) |
+| `frontend/src/components/graph/GraphCanvas.tsx` | MODIFY | 5 | Add simulation freeze via cooldown props; mouse event props; wrapper div |
+| `frontend/src/components/GraphTopologyViewer.tsx` | MODIFY | 5 | Wire mouse enter/leave; required "⏸ Paused" indicator; debounce resume |
+| `frontend/src/components/graph/GraphToolbar.tsx` | MODIFY | 5 (UX) | Add manual pause/play toggle button |
 | `graph-query-api/router_interactions.py` | **CREATE** | 6 | Interactions CRUD (~180 lines) |
 | `graph-query-api/models.py` | MODIFY | 6 | Add `InteractionStep`, `InteractionRunMeta`, `InteractionSaveRequest` |
 | `frontend/src/hooks/useInteractions.ts` | **CREATE** | 6 | Fetch, save, delete interactions (~80 lines) |
@@ -1282,6 +1845,122 @@ redundant. Update each router:
 - `graph-query-api/search_indexer.py` — search pipeline unchanged
 - `graph-query-api/backends/` — graph backends unchanged
 - `frontend/src/context/ScenarioContext.tsx` — minimal/no changes (backend handles routing)
+
+---
+
+## Cross-Cutting UX Gaps
+
+These are not tied to a specific QOL item but affect the overall feel of the app.
+Addressing them alongside the QOL changes would significantly improve coherence.
+
+### Gap 1: No Toast/Notification System
+
+**Current state:** Feedback is exclusively inline (modal banners, component-level
+error states, colored dots). There is no mechanism for **transient, global feedback**
+— notifications that appear briefly and auto-dismiss.
+
+**Where toasts would improve UX in the QOL plan:**
+- Item 2: "Scenario uploaded successfully (3m 47s)" — currently a green banner
+  inside the modal that auto-closes
+- Item 5: "Investigation saved to history" — currently silent
+- Item 5: "Interaction deleted" — currently silent
+- Item 4: Edge case feedback: "Graph paused" (if pause fails or is disabled)
+
+**Recommended library:** `sonner` (13KB, zero config, supports stacking, progress
+bars, undo actions). Alternatively, build a minimal toast using `AnimatePresence`
++ a context provider — the app already has the animation infrastructure.
+
+**Placement:** Bottom-right corner, above any sidebar, consistent with VS Code's
+own notification position.
+
+### Gap 2: Investigation/Diagnosis Split Not Resizable
+
+The investigation panel and diagnosis panel are locked at 50/50 (`w-1/2`). The
+vertical metrics/content split uses `react-resizable-panels`. This inconsistency
+means users with long diagnoses can't expand the diagnosis panel, and users focused
+on step-by-step debugging can't expand the investigation panel.
+
+**Recommendation:** Replace `w-1/2` with a horizontal `PanelGroup` (same library
+already installed). This is a small change with high usability payoff:
+
+```tsx
+<PanelGroup direction="horizontal" className="h-full">
+  <Panel defaultSize={50} minSize={25}>
+    <InvestigationPanel ... />
+  </Panel>
+  <PanelResizeHandle className="metrics-resize-handle" />
+  <Panel defaultSize={50} minSize={25}>
+    <DiagnosisPanel ... />
+  </Panel>
+</PanelGroup>
+```
+
+### Gap 3: Diagnosis Should Stream Incrementally
+
+The current DiagnosisPanel shows the final diagnosis all-at-once when the SSE
+`message` event fires. The backend already uses SSE, which can stream the diagnosis
+token-by-token or paragraph-by-paragraph.
+
+**Why this matters for QOL:** If the goal is to "enhance observation and improve UX"
+(Items 3-5), the single biggest improvement to user perception of speed is streaming
+the diagnosis as it's generated. Users see progress immediately instead of staring at
+bouncing dots for 30+ seconds.
+
+**This is out of scope for the current QOL plan** but should be logged as a fast-follow,
+especially since the SSE infrastructure already exists.
+
+### Gap 4: Graph Keyboard Accessibility
+
+The graph currently has zero keyboard support: all interactions (hover, click, drag,
+right-click) are mouse-only. While a full keyboard-accessible graph is a large effort,
+the QOL plan's pause/resume feature (Item 4) should include:
+- `Space` key to toggle pause/resume when the graph div has focus
+- `Tab` to focus the graph div from the toolbar
+
+This is a small addition to Item 4's scope that brings meaningful accessibility improvement.
+
+---
+
+## UX Priority Matrix
+
+Ranked by **impact on intuitive feel** relative to implementation effort:
+
+| Priority | Enhancement | QOL Item | Effort | Impact |
+|----------|------------|----------|--------|--------|
+| **P0** | Tabbed log viewer (avoid 3-panel cramping) | 3 | Small | High |
+| **P0** | Required "Paused" badge on graph | 4 | Tiny | High |
+| **P0** | "Viewing past interaction" banner design | 5 | Small | High |
+| **P1** | Timer: `font-mono tabular-nums` (prevent layout shift) | 2 | Tiny | Medium |
+| **P1** | Timer: per-slot elapsed time | 2 | Small | Medium |
+| **P1** | Mouse-leave resume debounce (300ms) | 4 | Tiny | Medium |
+| **P1** | Sidebar loading skeletons | 5 | Tiny | Medium |
+| **P1** | Delete confirmation inline | 5 | Small | Medium |
+| **P1** | Auto-save feedback indicator | 5 | Small | Medium |
+| **P2** | Timer: ETA estimate | 2 | Small | Medium |
+| **P2** | Manual pause/resume toolbar toggle | 4 | Small | Medium |
+| **P2** | Sidebar search/filter | 5 | Small | Medium |
+| **P2** | Card keyword highlighting | 5 | Tiny | Low |
+| **P2** | Investigation/Diagnosis resizable split | Global | Small | Medium |
+| **P3** | Toast notification system | Global | Medium | Medium |
+| **P3** | Timer: completion celebration moment | 2 | Tiny | Low |
+| **P3** | Sidebar keyboard navigation | 5 | Small | Low |
+| **P3** | Unread badge on inactive log tab | 3 | Small | Low |
+| **P3** | Smooth graph resume transition | 4 | Small | Low |
+| **P3** | Sidebar hover preview tooltip | 5 | Small | Low |
+| **Backlog** | Streaming diagnosis rendering | Global | Medium | High |
+| **Backlog** | Graph keyboard accessibility (full) | 4 | Large | Medium |
+
+### Implementation Notes
+
+- **P0 items** should be implemented alongside their respective QOL phases. They
+  prevent UX regressions (3-panel cramping) or are essential for feature
+  comprehension (paused badge, viewing banner).
+- **P1 items** are small polish additions that can be dropped in directly during
+  implementation without architecture changes.
+- **P2 items** are nice-to-haves that enhance the feature but don't block a good
+  initial experience.
+- **P3 items** are polish for post-launch iteration.
+- **Backlog items** require separate work streams beyond the QOL scope.
 
 ---
 
@@ -1314,24 +1993,36 @@ uploads taking 30s-5min.
 
 ### Graph Pause (Item 4)
 
-**Rapid mouse enter/leave:** `pauseAnimation()`/`resumeAnimation()` are idempotent.
+**Simulation freeze vs render pause:** We freeze the d3 simulation (via `cooldownTicks`
+prop), NOT the render loop (`pauseAnimation`). This ensures the canvas keeps repainting
+so node drag, hover effects, and tooltips continue to work while the graph is frozen.
 
-**Initial layout:** Pausing during cooldown freezes mid-settle. Acceptable — mouse
-removal resumes.
+**Rapid mouse enter/leave:** `setFrozen` is idempotent — no adverse effects.
+
+**Initial layout:** Freezing during cooldown stops the layout mid-settle. Acceptable —
+mouse removal resumes with `d3ReheatSimulation()`.
 
 **Touch devices:** No regression — `onMouseEnter`/`onMouseLeave` don't fire on touch.
 
 ### Interaction Sidebar (Item 5)
 
 **Large history:** `limit=50` default prevents overloading. Older records remain
-in Cosmos.
+in Cosmos. A 90-day TTL on the container auto-prunes old interactions.
 
-**Auto-save race condition:** Use `ref` for `runMeta` to capture correct value.
+**Auto-save race condition:** All values captured at save-time (`alert`, `steps`,
+`runMeta`, `activeScenario`) are stored in refs that are synced via dedicated
+`useEffect` hooks. The save `useEffect` depends only on `[running, finalMessage,
+saveInteraction]`, avoiding both stale closures and exhaustive-deps lint violations.
+
+**Error handling:** All `fetch` calls in `useInteractions` are wrapped in
+`try/catch/finally`. Network errors are logged to console. `setLoading(false)` is
+always called via `finally` to prevent the sidebar from getting stuck in a loading state.
 
 **Viewing vs. running:** Starting a new investigation clears `viewingInteraction`.
 
 **Partition key:** Cross-scenario queries use `enable_cross_partition_query=True`.
-Acceptable for < 1000 interactions.
+Acceptable for < 1000 interactions. A composite index on `[scenario, created_at DESC]`
+ensures efficient ordering.
 
 ### Pre-Create DBs in Bicep (Item 6)
 
@@ -1360,14 +2051,23 @@ fall back to the old per-scenario DB:
 
 ```python
 # In router_telemetry.py:
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+
 try:
     # Try shared DB with prefixed container
     container = db.get_container_client(f"{prefix}-{container_name}")
-except:
-    # Fallback to old per-scenario DB
+    # Probe with a lightweight read to confirm the container exists
+    container.read()
+except CosmosResourceNotFoundError:
+    # Fallback to old per-scenario DB for pre-migration data
     old_db = client.get_database_client(f"{prefix}-telemetry")
     container = old_db.get_container_client(container_name)
 ```
+
+> **⚠️ Note:** The fallback uses `CosmosResourceNotFoundError` (not a bare `except:`)
+> to avoid swallowing unrelated exceptions like `ServiceRequestError`,
+> `CosmosHttpResponseError`, `KeyboardInterrupt`, etc. The `container.read()` probe
+> is needed because `get_container_client()` is lazy and doesn't hit the network.
 
 This fallback can be removed after all scenarios are re-uploaded.
 
@@ -1375,4 +2075,356 @@ This fallback can be removed after all scenarios are re-uploaded.
 
 All API endpoints remain the same. Changes are internal to the data layer.
 Frontend is unaffected except for the `SavedScenario.resources` type update
-(additive — new fields).
+(additive — new optional fields marked with `?` for back-compat with existing docs).
+
+---
+
+## Audit: Bugs, Defects, Gotchas & Agent-Readiness Review
+
+> **Audited:** 2026-02-15
+> **Scope:** Cross-referenced every code snippet, file reference, line number, API
+> assumption, and proposed change against the live codebase. Findings categorized by
+> severity.
+
+### CRITICAL — Will Break Deployment or Runtime
+
+#### A1. Bicep `autoscaleSettings.maxThroughput: 400` Is Below Azure Minimum
+
+**Location:** Item 6 Bicep changes — `scenariosContainer` and `interactionsContainer`
+both specify `options: { autoscaleSettings: { maxThroughput: 400 } }`.
+
+**Problem:** Azure Cosmos DB requires `autoscaleSettings.maxThroughput >= 1000`.
+Setting 400 will cause the Bicep deployment to fail with a validation error. The
+existing codebase confirms this — the Gremlin graph uses `maxThroughput: 1000`
+(the minimum), and no resource in the project uses a value below 1000.
+
+**Fix:** Change both occurrences to `maxThroughput: 1000`:
+```bicep
+options: { autoscaleSettings: { maxThroughput: 1000 } }
+```
+
+**Alternative:** Use manual provisioned throughput at 400 RU/s instead of autoscale:
+```bicep
+options: { throughput: 400 }
+```
+This avoids the autoscale minimum and keeps cost low for low-traffic containers.
+
+#### A2. Item 4 Graph Pause: Three Contradictory Implementation Approaches
+
+**Location:** Item 4, lines ~720-900.
+
+**Problem:** The plan presents three different approaches for pausing the graph, and
+the code samples MIX them:
+
+1. **Imperative `pauseAnimation()`/`resumeAnimation()`** — presented first, then
+   immediately flagged as problematic because it stops the render loop (breaking
+   drag and hover).
+2. **Preferred `cooldownTicks` prop** — presented as the "correct" approach via
+   state-driven `frozen` prop. This is the right approach.
+3. **UX Enhancement 4b (debounce code)** — REVERTS to the rejected
+   `canvasRef.current?.pauseAnimation()` / `resumeAnimation()` approach!
+
+An agent implementing this will not know which code to use. The `freezeSimulation`
+block in the first approach also has incomplete/confused comments like
+`"// BUT we need a workaround — see note below."`.
+
+**Fix:** Remove the first imperative approach entirely. Keep only the `cooldownTicks`
+state-driven approach. Update the 4b debounce code to use `setFrozen(true)` /
+`setFrozen(false)` instead of `pauseAnimation()` / `resumeAnimation()`. The debounce
+section should read:
+
+```typescript
+const handleMouseEnter = useCallback(() => {
+  if (resumeTimeoutRef.current) {
+    clearTimeout(resumeTimeoutRef.current);
+    resumeTimeoutRef.current = null;
+  }
+  canvasRef.current?.setFrozen(true);
+  setIsPaused(true);
+}, []);
+
+const handleMouseLeave = useCallback(() => {
+  resumeTimeoutRef.current = setTimeout(() => {
+    canvasRef.current?.setFrozen(false);
+    setIsPaused(false);
+    resumeTimeoutRef.current = null;
+  }, 300);
+}, []);
+```
+
+---
+
+### HIGH — Will Cause Bugs or Incorrect Behavior
+
+#### A3. Item 5: Missing 404 Handling in `get_interaction` and `delete_interaction`
+
+**Location:** `router_interactions.py` — `get_interaction` and `delete_interaction` endpoints.
+
+**Problem:** Both endpoints call `container.read_item()` and `container.delete_item()`
+without handling `CosmosResourceNotFoundError`. If the interaction doesn't exist, the
+Azure SDK raises an unhandled exception → FastAPI returns HTTP 500 instead of 404.
+
+The plan correctly uses `CosmosResourceNotFoundError` in the migration fallback section
+(Item 1), showing awareness of this exception, but omits it from the interaction
+endpoints.
+
+**Fix:** Wrap both endpoints:
+```python
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from fastapi import HTTPException
+
+@router.get("/interactions/{interaction_id}")
+async def get_interaction(interaction_id: str, scenario: str = Query(...)):
+    container = _get_interactions_container(ensure_created=False)
+    def _get():
+        try:
+            return container.read_item(item=interaction_id, partition_key=scenario)
+        except CosmosResourceNotFoundError:
+            raise HTTPException(status_code=404, detail="Interaction not found")
+    return await asyncio.to_thread(_get)
+```
+
+Same pattern for `delete_interaction`.
+
+#### A4. Item 5: Cross-Partition Query Waste When Scenario Filter Is Set
+
+**Location:** `router_interactions.py` — `list_interactions` endpoint.
+
+**Problem:** When `scenario` parameter is provided, the query includes
+`WHERE c.scenario = @scenario` but still uses `enable_cross_partition_query=True`.
+Since the partition key IS `/scenario`, this query could be routed to a single
+partition, saving significant RU cost. Cross-partition queries fan out to ALL
+partitions even when the partition key is known.
+
+**Fix:** Pass `partition_key` when filtering by scenario:
+```python
+if scenario:
+    items = list(container.query_items(
+        query=query, parameters=params,
+        partition_key=scenario,  # ← single-partition fan-out
+    ))
+else:
+    items = list(container.query_items(
+        query=query, parameters=params,
+        enable_cross_partition_query=True,  # ← needed only for unfiltered queries
+    ))
+```
+
+#### A5. NoSQL Database Name Derivation Is More Complex Than Documented
+
+**Location:** Item 1 backend changes — the plan assumes `nosql_db = f"{name}-telemetry"`.
+
+**Problem:** The actual code in `router_ingest.py` (~line 903-907) has TWO derivation
+paths:
+
+```python
+if scenario_name:           # query param override
+    nosql_db = f"{sc_name}-telemetry"       # hardcoded suffix
+else:                        # from manifest
+    nosql_db = f"{sc_name}-{cosmos_cfg.get('nosql',{}).get('database','telemetry')}"
+```
+
+If a `scenario.yaml` defines `cosmos.nosql.database: "metrics"`, the database name
+would be `{name}-metrics`, NOT `{name}-telemetry`. The migration fallback logic
+(Item 1's probing code) only tries `{prefix}-telemetry` — it would fail for scenarios
+created with non-default database suffixes from the manifest.
+
+**Fix:** The migration fallback should also check the manifest-derived name. Or
+document that all existing scenarios use the default `telemetry` suffix. If ALL
+existing scenario.yaml files use the default, this is a non-issue — but the plan
+should explicitly state this assumption.
+
+#### A6. Implementation Status Table: Phase Scope Mismatches
+
+**Location:** Top of document, "Implementation Status" table.
+
+**Problems:**
+1. **Phase 1** scope lists `router_scenarios.py`, `router_prompts.py`,
+   `router_ingest.py` — but those router changes belong in **Phase 2**. Phase 1
+   should only be `cosmos-gremlin.bicep`.
+2. **Phase 2** scope is missing `router_telemetry.py`, which IS described in the
+   Phase 2 body text as needing container prefix changes.
+
+**Fix:** Update the status table:
+```
+| Phase 1 | cosmos-gremlin.bicep |
+| Phase 2 | config.py, router_ingest.py, router_prompts.py, router_telemetry.py, router_scenarios.py, types/index.ts |
+```
+
+---
+
+### MEDIUM — Will Confuse a Blind Implementing Agent
+
+#### A7. `react-resizable-panels` Import Aliasing
+
+**Problem:** The codebase imports panel components with non-standard aliases:
+```tsx
+// Actual codebase pattern (MetricsBar.tsx, App.tsx):
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle }
+  from 'react-resizable-panels';
+```
+
+The plan's code samples use `PanelGroup` and `PanelResizeHandle` as if they're
+direct exports. An agent writing `import { PanelGroup, PanelResizeHandle } from
+'react-resizable-panels'` will get import errors.
+
+**Fix:** Add an "Import Conventions" note to the plan:
+> **Import note:** The project aliases react-resizable-panels exports:
+> `Group as PanelGroup`, `Separator as PanelResizeHandle`. Follow this
+> pattern in all new code, OR normalize all imports to use the library's
+> actual export names (`PanelGroup`, `PanelResizeHandle`) if the version
+> supports it (v3+ does).
+
+#### A8. Item 4 UX Enhancement 4b Debounce Code Uses Rejected Approach
+
+**Location:** Section 4b, "Debounce Resume on Mouse-Leave."
+
+**Problem:** The debounce code block calls `canvasRef.current?.pauseAnimation()`
+and `canvasRef.current?.resumeAnimation()` — the imperative API that was
+explicitly rejected earlier in the same item for breaking node drag and hover.
+Since the preferred approach exposes `setFrozen(boolean)` on `GraphCanvasHandle`,
+the debounce code must use that instead.
+
+An agent following the code literally would implement the wrong approach.
+
+**Fix:** See A2 above — replace `pauseAnimation()`/`resumeAnimation()` with
+`setFrozen(true)`/`setFrozen(false)` in the 4b debounce section.
+
+#### A9. Missing Routing Context for `/query/*` → Port 8100 Mapping
+
+**Problem:** The plan doesn't explain WHY `/query/interactions` and `/query/logs`
+reach the graph-query-api. A blind agent may not know about the vite proxy and
+nginx routing that maps `/query/*` → port 8100.
+
+**Fix:** Add a note in Item 5 (or a cross-cutting section):
+> **Routing context:** All `/query/*` paths are proxied to the graph-query-api
+> service on port 8100 — by vite in dev (`vite.config.ts` proxy) and by nginx
+> in production (`/query/` location block). New routes under `/query/` prefix
+> (like `/query/interactions`) automatically inherit this routing. No proxy or
+> nginx changes are needed.
+
+#### A10. `ScenarioContext.activeScenario` vs `X-Graph` Header Distinction
+
+**Problem:** The plan mixes two naming concepts that an agent needs to understand:
+- `activeScenario` = base name (e.g., `"telco-noc"`) — stored in frontend context,
+  used as `scenario` param in interaction API calls.
+- `X-Graph` header = `"telco-noc-topology"` (derived as `${activeScenario}-topology`)
+  — sent to backend for `ScenarioContext` routing.
+
+The interaction endpoints (`/query/interactions`) use the base scenario name directly
+(not the graph name). The plan correctly shows `scenario: req.scenario` and
+`scenario: string = Query(...)`, but doesn't explain this distinction. A blind
+agent might pass the graph name or use `ScenarioContext` instead of the direct param.
+
+**Fix:** Add a note in Item 5 backend section:
+> **Note:** Interaction endpoints use the scenario's **base name** (e.g.,
+> `"telco-noc"`) directly as the `scenario` field and partition key. They do NOT
+> use the `X-Graph` header or `ScenarioContext` dependency. The frontend's
+> `activeScenario` (from `ScenarioContext.tsx`) already stores the base name.
+
+#### A11. Item 5 Auto-Save: Over-Engineered Ref-Syncing Pattern
+
+**Problem:** The plan uses 5 separate `useEffect` hooks to sync refs for 4 values
+(`alert`, `steps`, `runMeta`, `activeScenario`). This is fragile and verbose.
+
+**Simpler alternative — single composite ref:**
+```typescript
+const latestValuesRef = useRef({ alert, steps, runMeta, activeScenario });
+useEffect(() => {
+  latestValuesRef.current = { alert, steps, runMeta, activeScenario };
+});
+
+useEffect(() => {
+  if (prevRunningRef.current && !running && finalMessage && latestValuesRef.current.activeScenario) {
+    const { alert, steps, runMeta, activeScenario } = latestValuesRef.current;
+    saveInteraction({ scenario: activeScenario, query: alert, steps, diagnosis: finalMessage, run_meta: runMeta });
+  }
+  prevRunningRef.current = running;
+}, [running, finalMessage, saveInteraction]);
+```
+
+This preserves the same semantics with 1 sync effect instead of 4.
+
+#### A12. Missing `__init__` or Model Imports for `router_interactions.py`
+
+**Problem:** The plan creates a new file `router_interactions.py` with models
+`InteractionStep`, `InteractionRunMeta`, `InteractionSaveRequest` defined in
+`models.py`. But Pydantic models like `InteractionStep` use `str | None` union
+syntax, which requires Python 3.10+. The codebase uses it elsewhere so this is
+fine — but the import line `from models import InteractionSaveRequest, ...` is
+not shown in the `router_interactions.py` code sample. An agent implementing
+this must know to add the import.
+
+**Fix:** Add the import to the `router_interactions.py` code sample:
+```python
+from models import InteractionStep, InteractionRunMeta, InteractionSaveRequest
+```
+
+---
+
+### LOW — Minor Issues, Typos, Polish
+
+#### A13. Typo: "inconsisent" in Bicep Comment
+
+**Location:** Item 6, interactions container `indexingPolicy` comment.
+
+```
+"may return inconsisent ordering"  →  "may return inconsistent ordering"
+```
+
+#### A14. `cooldownTicks` + `cooldownTime` Redundancy
+
+**Location:** Item 4, preferred approach code sample.
+
+The plan sets BOTH props simultaneously:
+```tsx
+cooldownTicks={frozen ? 0 : Infinity}
+cooldownTime={frozen ? 0 : 3000}
+```
+
+`cooldownTicks={0}` alone is sufficient to stop the simulation when frozen (0 ticks
+allowed). When unfrozen, `cooldownTicks={Infinity}` defers to `cooldownTime={3000}`
+(whichever limit is hit first). Setting `cooldownTime={0}` when frozen is redundant.
+
+**Recommendation:** Simplify to only control `cooldownTicks` and leave `cooldownTime`
+at a constant:
+```tsx
+cooldownTicks={frozen ? 0 : Infinity}
+cooldownTime={3000}  // always 3000 — cooldownTicks controls freeze behavior
+```
+
+#### A15. Missing CSS Class Context for New Panel Resize Handles
+
+**Problem:** The plan uses `className="metrics-resize-handle"` for new panel resize
+handles but doesn't note that this class provides horizontal col-resize styling
+(6px wide, white hover glow). A blind agent should know it exists in
+`frontend/src/styles/globals.css` and is distinct from `vertical-resize-handle`
+(which is used for the vertical MetricsBar/content split in `App.tsx`).
+
+#### A16. `formatTimeAgo` Doesn't Handle Future Timestamps
+
+**Location:** Item 5, `InteractionCard` sub-component.
+
+If the server's clock is ahead of the client's, `Date.now() - new Date(isoString).getTime()`
+could be negative. The function would return `"just now"` (since `seconds < 60`
+when negative), which is acceptable behavior — just worth noting.
+
+---
+
+### Agent-Readiness Checklist
+
+For an agent coming in blind, the following context is essential but not currently
+documented in the plan:
+
+| Context | Where to Find It | Why It Matters |
+|---------|------------------|----------------|
+| `/query/*` routes to graph-query-api (port 8100) | `vite.config.ts` L44-53, `nginx.conf` L43-53 | New endpoints must use `/query/` prefix |
+| Panel imports are aliased (`Group as PanelGroup`) | `MetricsBar.tsx` L2, `App.tsx` L3 | Unaliased imports will fail |
+| `activeScenario` = base name, `X-Graph` = `{name}-topology` | `ScenarioContext.tsx` L77-83 | Interaction API uses base name, not graph name |
+| `_ensure_nosql_db_and_containers` is 3 levels nested | `router_ingest.py` L915 (inside `run()` inside `stream()` inside `upload_telemetry()`) | Extraction is complex — closures over credentials, emit callback |
+| SSE events use `event: log` naming | `api/app/routers/logs.py` yield dict, `graph-query-api/main.py` manual format | LogStream listens for `'log'` — both backends already emit this |
+| CSS: `metrics-resize-handle` vs `vertical-resize-handle` | `frontend/src/styles/globals.css` L84-142 | Use the right one for horizontal vs vertical splits |
+| Autoscale minimum is 1000 RU/s | Azure Cosmos DB constraint; existing Bicep uses 1000 | Cannot set 400 — deployment will fail |
+| `scenario_name` flows from upload form (query param), not `X-Graph` | `router_ingest.py` L901 | Upload and query use different routing mechanisms |
+| `useInvestigation` exposes `setAlert` | `App.tsx` L12, `useInvestigation.ts` | Needed for Item 5 viewing historical interactions |
+| NO existing `Interaction` type in TypeScript or Pydantic | `types/index.ts`, `models.py` | Must create both from scratch |
