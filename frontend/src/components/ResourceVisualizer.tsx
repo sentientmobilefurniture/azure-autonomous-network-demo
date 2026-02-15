@@ -13,7 +13,7 @@ import type { ResourceNode, ResourceEdge, ResourceNodeType } from '../types';
  * resource-specific node types, shapes, and a layered force layout.
  */
 export function ResourceVisualizer() {
-  const { nodes, edges } = useResourceGraph();
+  const { nodes, edges, loading, error } = useResourceGraph();
   const canvasRef = useRef<ResourceCanvasHandle>(null);
 
   // ── Container sizing (fill available space) ───────────────────────────
@@ -177,12 +177,31 @@ export function ResourceVisualizer() {
             </div>
           )}
 
-          {/* Mock data badge */}
-          <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full
-                         bg-amber-500/15 text-amber-400 text-[10px] font-medium
-                         border border-amber-500/20">
-            Mock data — will connect to config API
-          </div>
+          {/* Loading / error / empty overlays */}
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-2 text-text-secondary">
+                <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                <span className="text-xs">Loading resource graph…</span>
+              </div>
+            </div>
+          )}
+          {!loading && error && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center space-y-2 text-text-muted">
+                <p className="text-sm">Could not load resource graph</p>
+                <p className="text-xs text-red-400 max-w-sm">{error}</p>
+              </div>
+            </div>
+          )}
+          {!loading && !error && nodes.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center space-y-2 text-text-muted">
+                <p className="text-sm">No resources to display</p>
+                <p className="text-xs">Upload and configure a scenario to see the resource graph.</p>
+              </div>
+            </div>
+          )}
         </div>
 
         <ResourceTooltip tooltip={tooltip} />

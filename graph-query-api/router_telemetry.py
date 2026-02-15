@@ -7,20 +7,19 @@ The target database is derived from the X-Graph header via ScenarioContext.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 
-from azure.cosmos.exceptions import CosmosHttpResponseError
 from fastapi import APIRouter, Depends
 
 from config import (
-    COSMOS_NOSQL_ENDPOINT,
-    COSMOS_NOSQL_DATABASE,
     ScenarioContext,
     get_scenario_context,
 )
-from cosmos_helpers import get_cosmos_client, close_cosmos_client
+from adapters.cosmos_config import (
+    COSMOS_NOSQL_ENDPOINT,
+)
+from stores import get_document_store
 from models import TelemetryQueryRequest, TelemetryQueryResponse
 
 logger = logging.getLogger("graph-query-api")
@@ -30,45 +29,30 @@ router = APIRouter()
 
 def close_telemetry_backend() -> None:
     """Close the cached CosmosClient (called during app lifespan shutdown)."""
+    from cosmos_helpers import close_cosmos_client
     close_cosmos_client()
 
 
-def _execute_cosmos_sql(
-    query: str,
-    container_name: str,
-    cosmos_endpoint: str = "",
-    cosmos_database: str = "",
-) -> dict:
-    """Execute a Cosmos SQL query against a named container and return structured results."""
-    endpoint = cosmos_endpoint or COSMOS_NOSQL_ENDPOINT
-    db_name = cosmos_database or COSMOS_NOSQL_DATABASE
+# ---------------------------------------------------------------------------
+# Post-processing (stays in router — the store returns raw documents)
+# ---------------------------------------------------------------------------
 
-    logger.info("Cosmos SQL request: db=%s  container=%s  endpoint=%s", db_name, container_name, endpoint)
-    logger.debug("Cosmos SQL query:\n%s", query)
+_SYSTEM_KEYS = {"_rid", "_self", "_etag", "_attachments", "_ts"}
 
-    client = get_cosmos_client()
-    database = client.get_database_client(db_name)
-    container = database.get_container_client(container_name)
 
-    t0 = time.time()
-    items = list(container.query_items(
-        query=query,
-        enable_cross_partition_query=True,
-    ))
-    elapsed_ms = (time.time() - t0) * 1000
+def _transform_telemetry_results(items: list[dict]) -> dict:
+    """Transform raw documents into {columns, rows} for the API response.
 
+    Derives column metadata from first row and excludes Cosmos system keys.
+    """
     if not items:
-        logger.info("Cosmos SQL returned 0 rows (%.0fms)", elapsed_ms)
         return {"columns": [], "rows": []}
 
-    # Derive column metadata from first row (Cosmos returns JSON docs)
     first = items[0]
-    # Exclude Cosmos system properties
-    system_keys = {"_rid", "_self", "_etag", "_attachments", "_ts"}
     columns = [
         {"name": k, "type": type(v).__name__}
         for k, v in first.items()
-        if k not in system_keys
+        if k not in _SYSTEM_KEYS
     ]
     col_names = {c["name"] for c in columns}
 
@@ -76,8 +60,6 @@ def _execute_cosmos_sql(
         {k: v for k, v in item.items() if k in col_names}
         for item in items
     ]
-
-    logger.info("Cosmos SQL success: %d columns, %d rows (%.0fms)", len(columns), len(rows), elapsed_ms)
     return {"columns": columns, "rows": rows}
 
 
@@ -112,7 +94,6 @@ async def query_telemetry(
         ctx.telemetry_database, container_name, req.query,
     )
     endpoint = COSMOS_NOSQL_ENDPOINT
-    db = ctx.telemetry_database
     if not endpoint:
         return TelemetryQueryResponse(
             columns=[],
@@ -120,20 +101,17 @@ async def query_telemetry(
             error="Cosmos NoSQL endpoint not configured (set COSMOS_NOSQL_ENDPOINT env var)",
         )
     try:
-        result = await asyncio.to_thread(
-            _execute_cosmos_sql,
-            req.query,
-            container_name=container_name,
-            cosmos_endpoint=endpoint,
-            cosmos_database=db,
+        store = get_document_store(
+            ctx.telemetry_database, container_name, "/id",
         )
-    except CosmosHttpResponseError as e:
-        logger.warning("Cosmos SQL query error (returning 200 with error body): %s", e)
-        return TelemetryQueryResponse(
-            columns=[],
-            rows=[],
-            error=f"Cosmos SQL query error: {e.message}. Read the error, fix the query syntax, and retry.",
+        t0 = time.time()
+        items = await store.list(query=req.query)
+        elapsed_ms = (time.time() - t0) * 1000
+        logger.info(
+            "Telemetry query: %d items (%.0fms)",
+            len(items), elapsed_ms,
         )
+        result = _transform_telemetry_results(items)
     except Exception as e:
         logger.exception("Cosmos SQL backend error (returning 200 with error body)")
         return TelemetryQueryResponse(

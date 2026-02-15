@@ -1,5 +1,5 @@
 // ============================================================================
-// Azure Storage Account — Blob containers for runbooks and historical tickets
+// Azure Storage Account — Shared blob containers (scenario-specific created at runtime)
 // ============================================================================
 
 @description('Name of the storage account (must be globally unique, lowercase, no hyphens)')
@@ -10,9 +10,6 @@ param location string
 
 @description('Resource tags')
 param tags object = {}
-
-@description('Name of the blob container for runbooks')
-param containerName string = 'runbooks'
 
 // ---------------------------------------------------------------------------
 // Storage Account
@@ -40,28 +37,14 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 }
 
 // ---------------------------------------------------------------------------
-// Blob Service & Container
+// Blob Service & Shared Containers
+// Scenario-specific containers (runbooks, tickets) are created at runtime
+// by router_ingest.py during scenario upload.
 // ---------------------------------------------------------------------------
 
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storageAccount
   name: 'default'
-}
-
-resource runbooksContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: containerName
-  properties: {
-    publicAccess: 'None'
-  }
-}
-
-resource ticketsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'tickets'
-  properties: {
-    publicAccess: 'None'
-  }
 }
 
 resource telemetryDataContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
@@ -87,4 +70,3 @@ resource networkDataContainer 'Microsoft.Storage/storageAccounts/blobServices/co
 output id string = storageAccount.id
 output name string = storageAccount.name
 output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob
-output containerName string = runbooksContainer.name

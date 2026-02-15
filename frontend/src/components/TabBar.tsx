@@ -4,38 +4,30 @@ interface TabBarProps {
 }
 
 export function TabBar({ activeTab, onTabChange }: TabBarProps) {
+  const tabs = [
+    { id: 'investigate' as const, label: '▸ Investigate' },
+    { id: 'info' as const, label: 'ℹ Scenario Info' },
+    { id: 'resources' as const, label: '◇ Resources' },
+  ];
+
   return (
-    <div className="flex border-b border-white/10 bg-neutral-bg2 px-4 shrink-0">
-      <button
-        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-          activeTab === 'investigate'
-            ? 'border-brand text-brand'
-            : 'border-transparent text-text-secondary hover:text-text-primary'
-        }`}
-        onClick={() => onTabChange('investigate')}
-      >
-        ▸ Investigate
-      </button>
-      <button
-        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-          activeTab === 'info'
-            ? 'border-brand text-brand'
-            : 'border-transparent text-text-secondary hover:text-text-primary'
-        }`}
-        onClick={() => onTabChange('info')}
-      >
-        ℹ Scenario Info
-      </button>
-      <button
-        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-          activeTab === 'resources'
-            ? 'border-brand text-brand'
-            : 'border-transparent text-text-secondary hover:text-text-primary'
-        }`}
-        onClick={() => onTabChange('resources')}
-      >
-        ◇ Resources
-      </button>
+    <div role="tablist" aria-label="Main navigation" className="flex border-b border-white/10 bg-neutral-bg2 px-4 shrink-0">
+      {tabs.map(tab => (
+        <button
+          key={tab.id}
+          role="tab"
+          aria-selected={activeTab === tab.id}
+          aria-controls={`tabpanel-${tab.id}`}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === tab.id
+              ? 'border-brand text-brand'
+              : 'border-transparent text-text-secondary hover:text-text-primary'
+          }`}
+          onClick={() => onTabChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
     </div>
   );
 }

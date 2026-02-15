@@ -262,7 +262,8 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           slot.file,
           {
             onProgress: (data) => {
-              updateSlot(def.key, { progress: data.detail, pct: data.pct });
+              updateSlot(def.key, { progress: data.detail, pct: data.pct, category: data.category });
+              setCurrentUploadStep(data.category ? `${def.label}: ${data.category}` : `Uploading ${def.label}...`);
               const overallBase = (i / SLOT_DEFS.length) * 100;
               const slotContribution = (data.pct / 100) * (100 / SLOT_DEFS.length);
               setOverallPct(Math.round(overallBase + slotContribution));
@@ -545,8 +546,8 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
           {/* Global error */}
           {globalError && (
-            <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3">
-              <p className="text-xs text-status-error">{globalError}</p>
+            <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3 max-h-32 overflow-y-auto">
+              <p className="text-xs text-status-error whitespace-pre-wrap">{globalError}</p>
             </div>
           )}
 
@@ -656,6 +657,9 @@ function FileSlot({ def, slot, disabled, onFile, onClear, onRetry }: {
 
       {slot.status === 'uploading' && (
         <div className="space-y-1">
+          {slot.category && (
+            <p className="text-[10px] font-medium text-brand truncate">{slot.category}</p>
+          )}
           <div className="w-full bg-neutral-bg2 rounded-full h-1">
             <div className="bg-brand h-1 rounded-full transition-all" style={{ width: `${Math.max(slot.pct, 5)}%` }} />
           </div>
@@ -669,7 +673,9 @@ function FileSlot({ def, slot, disabled, onFile, onClear, onRetry }: {
 
       {slot.status === 'error' && (
         <div>
-          <p className="text-[10px] text-status-error truncate">{slot.error}</p>
+          <div className="max-h-16 overflow-y-auto">
+            <p className="text-[10px] text-status-error whitespace-pre-wrap">{slot.error}</p>
+          </div>
           {onRetry && (
             <button onClick={onRetry} className="text-[10px] text-brand hover:text-brand/80 mt-1">
               Retry

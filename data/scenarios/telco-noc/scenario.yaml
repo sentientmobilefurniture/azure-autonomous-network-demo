@@ -8,7 +8,7 @@ description: >
   A fibre cut on the Sydney-Melbourne corridor triggers a cascading alert
   storm affecting enterprise VPNs, broadband, and mobile services. The AI
   investigates root cause, blast radius, and remediation.
-version: "1.0"
+version: "2.0"
 domain: telecommunications
 
 # ---------------------------------------------------------------------------
@@ -35,47 +35,104 @@ example_questions:
 # ---------------------------------------------------------------------------
 
 paths:
-  entities: data/entities              # CSV files for graph vertices + edges
-  graph_schema: graph_schema.yaml      # Gremlin ingestion manifest (at scenario root)
-  telemetry: data/telemetry            # AlertStream.csv, LinkTelemetry.csv
-  runbooks: data/knowledge/runbooks    # .md files → AI Search
-  tickets: data/knowledge/tickets      # .txt files → AI Search
-  prompts: data/prompts                # Agent prompt fragments
-  default_alert: data/prompts/alert_storm.md  # Default demo input
+  entities: data/entities
+  graph_schema: graph_schema.yaml
+  telemetry: data/telemetry
+  runbooks: data/knowledge/runbooks
+  tickets: data/knowledge/tickets
+  prompts: data/prompts
+  default_alert: data/prompts/alert_storm.md
 
 # ---------------------------------------------------------------------------
-# Cosmos DB mapping (names are scenario-prefixed at deploy time)
+# Data sources — defines all Azure resources this scenario needs
 # ---------------------------------------------------------------------------
 
-cosmos:
-  gremlin:
-    database: networkgraph            # shared database
-    graph: topology                   # deploy script prefixes: telco-noc-topology
-  nosql:
-    database: telemetry               # deploy script prefixes: telco-noc-telemetry
-    containers:
-      - name: AlertStream
-        partition_key: /SourceNodeType
-        csv_file: AlertStream.csv
-        id_field: AlertId
-        numeric_fields: [OpticalPowerDbm, BitErrorRate, CPUUtilPct, PacketLossPct]
-      - name: LinkTelemetry
-        partition_key: /LinkId
-        csv_file: LinkTelemetry.csv
-        id_field: null  # composite: LinkId + Timestamp
-        numeric_fields: [UtilizationPct, OpticalPowerDbm, BitErrorRate, LatencyMs]
+data_sources:
+  graph:
+    connector: "cosmosdb-gremlin"
+    config:
+      database: "networkgraph"
+      graph: "telco-noc-topology"
+      partition_key: "/partitionKey"
+    schema_file: "graph_schema.yaml"
+
+  telemetry:
+    connector: "cosmosdb-nosql"
+    config:
+      database: "telemetry"
+      container_prefix: "telco-noc"
+      containers:
+        - name: AlertStream
+          partition_key: /SourceNodeType
+          csv_file: AlertStream.csv
+          id_field: AlertId
+          numeric_fields: [OpticalPowerDbm, BitErrorRate, CPUUtilPct, PacketLossPct]
+        - name: LinkTelemetry
+          partition_key: /LinkId
+          csv_file: LinkTelemetry.csv
+          id_field: null
+          numeric_fields: [UtilizationPct, OpticalPowerDbm, BitErrorRate, LatencyMs]
+
+  search_indexes:
+    runbooks:
+      index_name: "telco-noc-runbooks-index"
+      source: "data/knowledge/runbooks"
+      blob_container: "runbooks"
+    tickets:
+      index_name: "telco-noc-tickets-index"
+      source: "data/knowledge/tickets"
+      blob_container: "tickets"
 
 # ---------------------------------------------------------------------------
-# AI Search indexes
+# Agents — defines the complete agent topology for this scenario
 # ---------------------------------------------------------------------------
 
-search_indexes:
-  - name: runbooks-index
-    container: runbooks               # blob storage container name
-    source: data/knowledge/runbooks
-  - name: tickets-index
-    container: tickets
-    source: data/knowledge/tickets
+agents:
+  - name: "GraphExplorerAgent"
+    role: "graph_explorer"
+    model: "gpt-4.1"
+    instructions_file: "prompts/graph_explorer/"
+    compose_with_connector: true
+    tools:
+      - type: "openapi"
+        spec_template: "graph"
+        keep_path: "/query/graph"
+
+  - name: "TelemetryAgent"
+    role: "telemetry"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_telemetry_agent_v2.md"
+    tools:
+      - type: "openapi"
+        spec_template: "telemetry"
+        keep_path: "/query/telemetry"
+
+  - name: "RunbookKBAgent"
+    role: "runbook"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_runbook_kb_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "runbooks"
+
+  - name: "HistoricalTicketAgent"
+    role: "ticket"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_historical_ticket_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "tickets"
+
+  - name: "Orchestrator"
+    role: "orchestrator"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_orchestrator_agent.md"
+    is_orchestrator: true
+    connected_agents:
+      - "GraphExplorerAgent"
+      - "TelemetryAgent"
+      - "RunbookKBAgent"
+      - "HistoricalTicketAgent"
 
 # ---------------------------------------------------------------------------
 # Graph visualisation hints (frontend node styling)
@@ -83,14 +140,14 @@ search_indexes:
 
 graph_styles:
   node_types:
-    CoreRouter:    { color: "#60a5fa", size: 28, icon: "router" }
-    AggSwitch:     { color: "#34d399", size: 22, icon: "switch" }
-    BaseStation:   { color: "#a78bfa", size: 18, icon: "antenna" }
-    TransportLink: { color: "#f97316", size: 16, icon: "link" }
-    MPLSPath:      { color: "#fbbf24", size: 14, icon: "path" }
-    Service:       { color: "#f472b6", size: 20, icon: "service" }
-    SLAPolicy:     { color: "#94a3b8", size: 12, icon: "policy" }
-    BGPSession:    { color: "#22d3ee", size: 14, icon: "session" }
+    CoreRouter:    { color: "#38BDF8", size: 28, icon: "router" }
+    AggSwitch:     { color: "#FB923C", size: 22, icon: "switch" }
+    BaseStation:   { color: "#A78BFA", size: 18, icon: "antenna" }
+    TransportLink: { color: "#3B82F6", size: 16, icon: "link" }
+    MPLSPath:      { color: "#C084FC", size: 14, icon: "path" }
+    Service:       { color: "#CA8A04", size: 20, icon: "service" }
+    SLAPolicy:     { color: "#FB7185", size: 12, icon: "policy" }
+    BGPSession:    { color: "#F472B6", size: 14, icon: "session" }
 
 # ---------------------------------------------------------------------------
 # Telemetry baselines (used to generate prompt sections)

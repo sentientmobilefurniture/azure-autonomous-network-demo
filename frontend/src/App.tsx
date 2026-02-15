@@ -11,6 +11,7 @@ import { InteractionSidebar } from './components/InteractionSidebar';
 import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
+import { EmptyState } from './components/EmptyState';
 import { useScenarioContext } from './context/ScenarioContext';
 import type { Interaction } from './types';
 
@@ -110,10 +111,13 @@ export default function App() {
       <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
       {/* Zone 2 + 3: Main content + sidebar */}
-      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-h-0 flex" role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={activeTab}>
         {activeTab === 'resources' ? (
           <ResourceVisualizer />
         ) : activeTab === 'investigate' ? (
+          !activeScenario ? (
+            <EmptyState />
+          ) : (
           <>
             {/* Main content area */}
             <div className="flex-1 min-w-0">
@@ -186,6 +190,7 @@ export default function App() {
               onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
             />
           </>
+          )
         ) : (
           <ScenarioInfoPanel
             onSelectQuestion={(q) => {

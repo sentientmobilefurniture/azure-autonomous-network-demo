@@ -62,6 +62,8 @@ export interface ScenarioUploadSlot {
   status: SlotStatus;
   progress: string;
   pct: number;
+  /** High-level stage category from SSE stream (e.g. "validating", "creating_graph") */
+  category?: string;
   result: Record<string, unknown> | null;
   error: string | null;
 }

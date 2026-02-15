@@ -1,12 +1,26 @@
 # Fabric Integration — Implementation Plan (Revised: Service Separation Architecture)
 
+I am realizing something quite interesting and excellent. Because of the config-forward style of specificying data sources and agents and the overall architecture, it is possible for us to just specify fabric components in the config as well. Fabric generics are just another option to tweak in the scenario config file. There is not need for an entire new service or whatever...just a set of fabric specific backend/helper functions. And it is entirely possible to have both cosmosdb with gremlin and fabric existing in the same architecture. 
+
+
 > **Created:** 2026-02-15
-> **Last revised:** 2026-02-16 (major revision — service separation architecture)
+> **Last revised:** 2026-02-16 (major revision — V10 coordination + service separation architecture)
 > **Status:** ⬜ Not Started
+> **Depends on:** [V10 — Config-Driven Multi-Agent Orchestration](V10generalflow.md) (in progress)
 > **Goal:** Add Microsoft Fabric as an alternative graph backend to CosmosDB,
 > keeping the two backends as **completely independent services** — `cosmosdb-graph-api`
 > (renamed from `graph-query-api`) and a new `fabric-graph-api` — so the UI works
 > correctly even if either backend is unavailable, missing, or not instantiated.
+
+> **⚠️ V10 Dependency:** V10 (Config-Driven Multi-Agent Orchestration) is currently
+> underway and introduces foundational abstractions that V11 builds upon:
+> `DocumentStore` Protocol, Backend Registry (string-based, no enum), config-driven
+> agent provisioning from scenario YAML, OpenAPI spec templating, generic
+> `ScenarioContext` field names (`graph_database` replacing `gremlin_database`),
+> and frontend genericization. This plan assumes V10 Phases 0–9 are **complete**
+> before V11 implementation begins. Where V10 changes affect V11's design,
+> the specific impacts are called out inline. See the
+> [V10 Coordination](#v10-coordination--impacts) section for a summary.
 
 ---
 
@@ -36,17 +50,55 @@
 
 ---
 
+## V10 Coordination & Impacts
+
+V10 (Config-Driven Multi-Agent Orchestration) introduces several abstractions
+that change how V11 is implemented. This section summarises each V10 change
+and its effect on V11.
+
+| V10 Change | V10 Phase | Impact on V11 |
+|-----------|-----------|---------------|
+| **Directory stays `graph-query-api/`** during V10 | All | V11 Phase 0 renames `graph-query-api/` → `cosmosdb-graph-api/`. All V10 paths (`graph-query-api/stores/`, `graph-query-api/adapters/`, etc.) become `cosmosdb-graph-api/stores/`, `cosmosdb-graph-api/adapters/`, etc. after the rename. |
+| **DocumentStore Protocol** (`stores/__init__.py`, `stores/cosmos_nosql.py`) | V10 Ph 1 | Shared concerns (prompts, scenarios, interactions) are accessed via `DocumentStore`, not raw Cosmos SDK. V11's Gap 6 ("Cosmos still required in Fabric mode") could eventually be resolved by adding a Fabric-backed `DocumentStore` — but this is out of scope for V11. |
+| **Cosmos Config extraction** (`adapters/cosmos_config.py`) | V10 Ph 2 | Cosmos env vars move from `config.py` to `adapters/cosmos_config.py`. V11's `cosmosdb-graph-api/main.py` health endpoint should import from the new location. |
+| **Generic ScenarioContext fields** (`graph_database` replaces `gremlin_database`) | V10 Ph 3 | V11 frontend code and any references to `ScenarioContext` should use `graph_database`, not `gremlin_database`. |
+| **NoSQL routers migrated to DocumentStore** | V10 Ph 4 | `router_interactions.py`, `router_scenarios.py`, `router_telemetry.py`, `router_prompts.py` now call `DocumentStore` methods. No direct Cosmos SDK usage in routers. V11 does not modify these files (service separation), so no conflict. |
+| **Backend Registry** (string-based, `GraphBackendType` enum removed) | V10 Ph 7 | `GRAPH_BACKEND` is now a `str`, not an enum. All `.value` calls are gone. V11's health endpoint (`cosmosdb-graph-api/main.py`) should return `GRAPH_BACKEND` directly, not `GRAPH_BACKEND.value`. |
+| **Config-driven agent provisioner** (`provision_from_config()`) | V10 Ph 8 | **Major impact on V11 Item 4.** The provisioner no longer uses a hardcoded `OPENAPI_SPEC_MAP` dispatch. Instead, the scenario YAML `data_sources.graph.connector` field determines which OpenAPI spec template to use. Adding Fabric means: (a) adding a `"fabric-gql"` connector entry to the provisioner's connector→spec resolution, and (b) the scenario YAML declares `connector: "fabric-gql"` for Fabric scenarios. See revised Item 4. |
+| **OpenAPI Spec Templating** | V10 Ph 9 | Specs use `.replace()` per-placeholder. V11's `fabric.yaml` should follow the same template pattern with `{base_url}`, `{graph_name}`, `{query_language_description}` placeholders. |
+| **Config-driven prompts** | V10 Ph 10 | Prompt-to-agent mapping comes from scenario YAML, not `PROMPT_AGENT_MAP`. Fabric scenarios define their own prompt files in YAML. |
+| **Frontend genericization** (ScenarioContext, graphConstants, stub agents) | V10 Ph 11 | **Major impact on V11 Item 5.** The frontend is already config-aware after V10: `ScenarioContext` uses resource names from `SavedScenario.resources`, `graphConstants.ts` maps are empty (colors from config), agents are loaded dynamically from `agent_ids.json`. V11's frontend changes build on this foundation instead of modifying hardcoded structures. |
+| **Resource Visualizer backend** (`GET /api/config/resources`) | V10 Ph 12 | Fabric resources (workspace, ontology, eventhouse) should appear as nodes in the resource visualizer graph. V11's resource graph builder should emit Fabric-specific node types. |
+| **Infrastructure genericization** (Bicep removes scenario-specific resources) | V10 Ph 0 | V11's Phase 0 infrastructure changes (Dockerfile, supervisord, nginx, deploy.sh) must coordinate with V10 Phase 0's Bicep cleanup. Scenario-specific env vars (`COSMOS_GREMLIN_GRAPH`, `RUNBOOKS_INDEX_NAME`, etc.) are already removed by V10. V11 only adds Fabric env vars. |
+| **Scenario YAML v2.0** (`data_sources:` replaces `cosmos:`, `agents:` section added) | V10 Ph 13 | Fabric scenarios use the v2.0 format with `data_sources.graph.connector: "fabric-gql"` and `data_sources.telemetry.connector: "fabric-kql"`. The `_normalize_manifest()` backward compatibility layer handles old-format YAML. |
+
+### Execution Order
+
+V10 and V11 share Phase 0 (infrastructure). The recommended execution order:
+
+1. **V10 Phases 0–9** — Core genericization (DocumentStore, registry, config provisioner)
+2. **V11 Phase 0** — Directory rename + add `fabric-graph-api` to infra
+3. **V11 Phases 1–3.5** — Build `fabric-graph-api` service (independent of V10)
+4. **V10 Phases 10–13** — Config-driven prompts, frontend, resource viz, telco-noc migration
+5. **V11 Phase 4** — Agent provisioner Fabric entries (requires V10 Ph 8+9)
+6. **V11 Phase 5** — Frontend adaptive UI (builds on V10 Ph 11)
+7. **V11 Phase 6** — End-to-end testing
+
+Phases V11.1–V11.3.5 can run in parallel with V10.10–V10.13 since `fabric-graph-api` is fully independent.
+
+---
+
 ## Implementation Status
 
 | Phase | Status | Scope |
 |-------|--------|-------|
-| **Phase 0:** Directory rename + infrastructure | ⬜ Not started | Rename `graph-query-api` → `cosmosdb-graph-api`, update Dockerfile, supervisord, nginx, vite.config, deploy.sh, azure.yaml |
+| **Phase 0:** Directory rename + infrastructure | ⬜ Not started | Rename `graph-query-api` → `cosmosdb-graph-api`, update Dockerfile, supervisord, nginx, vite.config, deploy.sh, azure.yaml. Coordinate with V10 Phase 0 (Bicep genericization). |
 | **Phase 1:** `fabric-graph-api` service setup | ⬜ Not started | New directory, `pyproject.toml`, `config.py`, `models.py`, `main.py` |
 | **Phase 2:** Fabric graph backend | ⬜ Not started | `fabric_backend.py`, `router_graph.py`, `router_topology.py` in `fabric-graph-api` |
 | **Phase 3:** Fabric discovery endpoints | ⬜ Not started | `router_discovery.py` in `fabric-graph-api` |
 | **Phase 3.5:** Fabric provisioning API | ⬜ Not started | `api/app/routers/fabric_provision.py` (stays in API service) |
-| **Phase 4:** Agent provisioner changes | ⬜ Not started | `openapi/fabric.yaml` (in `fabric-graph-api`), `agent_provisioner.py` updates |
-| **Phase 5:** Frontend — adaptive backend UI + resilience | ⬜ Not started | Backend detection, `/query/*` vs `/fabric/*` routing, graceful degradation |
+| **Phase 4:** Agent provisioner changes | ⬜ Not started | `openapi/fabric.yaml` (in `fabric-graph-api`), connector registration in config-driven provisioner (V10 Ph 8 prerequisite) |
+| **Phase 5:** Frontend — adaptive backend UI + resilience | ⬜ Not started | Backend detection, `/query/*` vs `/fabric/*` routing, graceful degradation. Builds on V10 Ph 11 frontend genericization. |
 | **Phase 6:** End-to-end integration testing | ⬜ Not started | Manual verification, mock Fabric mode |
 
 ### Deviations From Plan (Original V9 → V9 Revised)
@@ -85,6 +137,7 @@ These deviations from the first V9 audit still apply:
 ## Table of Contents
 
 - [Requirements](#requirements-original)
+- [V10 Coordination & Impacts](#v10-coordination--impacts)
 - [Architecture Decision: Service Separation](#architecture-decision-service-separation)
 - [Codebase Conventions & Context](#codebase-conventions--context)
 - [Overview of Changes](#overview-of-changes)
@@ -197,6 +250,19 @@ This is simpler than conditional startup logic. The service self-reports its rea
 
 ## Codebase Conventions & Context
 
+> **⚠️ Post-V10 state:** This section describes the codebase **after** V10
+> genericization is complete. Key changes from pre-V10:
+> - `GraphBackendType` enum is gone — `GRAPH_BACKEND` is now a plain `str`
+> - Cosmos env vars live in `adapters/cosmos_config.py` (moved from `config.py`)
+> - `ScenarioContext.gremlin_database` renamed to `.graph_database`
+> - NoSQL routers use `DocumentStore` Protocol (not raw Cosmos SDK)
+> - Agent provisioning is config-driven via `provision_from_config()` reading
+>   scenario YAML `agents:` section
+> - Frontend `ScenarioContext` uses config-specified resources from
+>   `SavedScenario.resources`, with convention-based fallback
+> - `graphConstants.ts` hardcoded maps are empty — colors/sizes come from
+>   scenario `graph_styles` or auto-hash
+
 ### Request Routing (Updated)
 
 | URL prefix | Proxied to | Port | Config |
@@ -210,22 +276,34 @@ This is simpler than conditional startup logic. The service self-reports its rea
 
 | Concept | Example | Derivation |
 |---------|---------|-----------|
-| Graph name | `"cloud-outage-topology"` | User-chosen scenario name + `-topology` suffix |
+| Graph name | `"cloud-outage-topology"` | From scenario YAML `data_sources.graph.config.graph` (V10 v2.0 schema) |
 | Scenario prefix | `"cloud-outage"` | `graph_name.rsplit("-", 1)[0]` |
-| Telemetry container | `"cloud-outage-AlertStream"` | `{prefix}-{ContainerName}` |
-| Search index | `"cloud-outage-runbooks-index"` | `{prefix}-runbooks-index` |
+| Telemetry container | `"cloud-outage-AlertStream"` | From scenario YAML `data_sources.telemetry.config.container_prefix` + container name |
+| Search index | `"cloud-outage-runbooks-index"` | From scenario YAML `data_sources.search_indexes.runbooks.index_name` |
 | Prompts container | `"cloud-outage"` | Same as prefix |
+
+> **V10 change:** Names are now read from scenario YAML `data_sources:` section
+> (v2.0 schema) instead of being derived by convention alone. The convention
+> logic remains as a fallback via `_normalize_manifest()` for old-format YAML files.
 
 > **Fabric routing:** In Fabric mode, graph data is resolved via `workspace_id` + `graph_model_id` passed in the request body to `/fabric/graph`. The `X-Graph` header is still sent to `/query/*` endpoints for prompts/telemetry container routing (those remain in Cosmos via cosmosdb-graph-api). Fabric endpoints do not use `X-Graph` at all.
 
 ### Import & Code Style Conventions
 
 ```python
-# cosmosdb-graph-api: unchanged from current codebase
-# Config uses module-level os.getenv() with defaults:
-COSMOS_GREMLIN_ENDPOINT = os.getenv("COSMOS_GREMLIN_ENDPOINT", "")
+# cosmosdb-graph-api: post-V10 structure
+# Generic platform config stays in config.py:
+GRAPH_BACKEND: str = os.getenv("GRAPH_BACKEND", "cosmosdb")  # string, not enum (V10 Ph 7)
 
-# fabric-graph-api: same pattern, Fabric-specific vars:
+# Cosmos-specific env vars live in adapters/cosmos_config.py (V10 Ph 2):
+from adapters.cosmos_config import COSMOS_GREMLIN_ENDPOINT
+
+# NoSQL routers use DocumentStore protocol (V10 Ph 4):
+from stores import get_document_store
+store = get_document_store("interactions", "interactions", "/scenario")
+await store.list(query="SELECT * FROM c", partition_key=scenario)
+
+# fabric-graph-api: same env pattern, Fabric-specific vars:
 FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
 FABRIC_API = os.getenv("FABRIC_API_URL", "https://api.fabric.microsoft.com/v1")
 
@@ -247,6 +325,7 @@ def get_credential():
 | SSE progress events | `event: progress\ndata: {"step": "...", "detail": "..."}\n\n` | Upload and provisioning endpoints |
 | Per-request graph routing (Cosmos) | `X-Graph` header → `ScenarioContext` | All `/query/*` routers |
 | Per-request graph routing (Fabric) | `workspace_id` + `graph_model_id` in request body | `/fabric/graph`, `/fabric/topology` |
+| Scenario config (V10) | `scenario.yaml` v2.0 with `data_sources:` + `agents:` | Upload, provisioning, resource visualizer |
 
 ---
 
@@ -265,29 +344,32 @@ def get_credential():
 ### Dependency Graph
 
 ```
-Phase 0 (rename + infra) ──┐
-                            ├──▶ Phase 1 (fabric-graph-api setup)
-                            │       │
-                            │       ├──▶ Phase 2 (Fabric graph backend)
-                            │       │       │
-                            │       │       └──▶ Phase 4 (OpenAPI + provisioner)
-                            │       │
-                            │       ├──▶ Phase 3 (discovery endpoints)
-                            │       │
-                            │       └──▶ Phase 3.5 (provisioning API — in API service)
-                            │
-                            └───────────────▶ Phase 5 (frontend)
-                                                 │
-                                                 └──▶ Phase 6 (E2E testing)
+V10 Phases 0–9 (complete) ──┐
+                             │
+V11 Phase 0 (rename+infra)──┤
+                             ├──▶ Phase 1 (fabric-graph-api setup)
+                             │       │
+                             │       ├──▶ Phase 2 (Fabric graph backend)
+                             │       │       │
+                             │       │       └──────────────────────────────┐
+                             │       ├──▶ Phase 3 (discovery endpoints)    │
+                             │       │                                     │
+                             │       └──▶ Phase 3.5 (provisioning API)     │
+                             │                                             │
+V10 Phases 8+9 (prov+tmpl)──┼──────────────▶ Phase 4 (OpenAPI + provisioner)
+                             │
+V10 Phase 11 (FE generic) ──┼──────────────▶ Phase 5 (frontend)
+                             │                   │
+                             │                   └──▶ Phase 6 (E2E testing)
+                             │
+V10 Phase 12 (resource viz)──────────────── Phase 5 adds Fabric nodes
 ```
 
-Phase 0 is prerequisite for everything (rename must happen first).
-Phase 1 is prerequisite for Phases 2, 3, 3.5.
-Phases 2 and 3 can be parallelized.
-Phase 3.5 depends on Phase 1 (shares Fabric env vars) but is independent of Phases 2/3.
-Phase 4 depends on Phase 2 (needs working backend for spec validation).
-Phase 5 depends on Phases 0, 3, and 3.5 (needs both services + discovery + provisioning endpoints).
-Phase 6 is final.
+V10 Phases 0–9 are prerequisites for V11 Phase 0 (directory rename + infra).
+V11 Phases 1–3.5 are independent of remaining V10 phases (fabric-graph-api is a standalone service).
+V11 Phase 4 requires V10 Phases 8+9 (config-driven provisioner + OpenAPI templating).
+V11 Phase 5 requires V10 Phase 11 (frontend genericization provides the config-aware scaffold).
+V11 Phase 6 requires all prior V11 phases + V10 Phase 13 (telco-noc migration validates full stack).
 
 ---
 
@@ -381,15 +463,33 @@ The `X-Graph` header is still sent by the frontend to `/query/*` endpoints (Cosm
 
 ## Item 0: Directory Rename & Infrastructure
 
-### Current State
+> **V10 Coordination:** V10 Phase 0 (Infrastructure Genericization) removes scenario-specific
+> env vars from Bicep, `deploy.sh`, and `azure_config.env.template`. It also cleans up
+> hardcoded scenario references in infrastructure files. **V11 Phase 0 should run after
+> V10 Phase 0** so that the infrastructure files are already in their genericized state
+> before V11 adds Fabric-specific variables and the directory rename.
+>
+> Specifically, after V10 Phase 0:
+> - `deploy.sh` no longer contains scenario-specific echo blocks (just generic start instructions)
+> - `azure_config.env.template` no longer lists scenario-specific env vars — V11 adds the Fabric section to this cleaned-up template
+> - Bicep no longer provisions scenario-specific Cosmos databases — V11's Fabric capacity is additive
+>
+> Additionally, V10 Phases 1–3 create new directories inside `graph-query-api/` (`stores/`,
+> `adapters/`, `services/`). The directory rename (`graph-query-api/ → cosmosdb-graph-api/`)
+> must happen **after** these V10 directories exist, or they must be created in the renamed
+> location. The recommended approach: complete V10 Phases 0–9, then do the V11 Phase 0 rename.
+
+### Current State (post-V10)
 
 - `graph-query-api/` contains all graph query logic (Cosmos Gremlin, Cosmos NoSQL telemetry, ingest, prompts, scenarios, etc.)
+- **Post-V10 additions inside `graph-query-api/`:** `stores/` (DocumentStore), `adapters/` (cosmos_config), `services/` (backend registry)
 - Dockerfile copies `graph-query-api/` to `/app/graph-query-api/` and runs it on port 8100
 - `supervisord.conf` has a `[program:graph-query-api]` at `/app/graph-query-api`
 - `nginx.conf` proxies `/query/*` to `127.0.0.1:8100`
 - `vite.config.ts` proxies `/query` to `localhost:8100`
-- `deploy.sh` references `graph-query-api` in comments and local start commands
+- `deploy.sh` references `graph-query-api` in local start commands (post-V10: genericized, fewer occurrences)
 - `azure.yaml` comment references `graph-query-api`
+- **Post-V10:** `GRAPH_BACKEND` is a plain string (not an enum), set via env var and resolved by the Backend Registry
 
 ### Target State
 
@@ -452,6 +552,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY cosmosdb-graph-api/*.py ./
 COPY cosmosdb-graph-api/backends/ ./backends/
+COPY cosmosdb-graph-api/stores/ ./stores/       # V10: DocumentStore
+COPY cosmosdb-graph-api/adapters/ ./adapters/   # V10: cosmos_config
+COPY cosmosdb-graph-api/services/ ./services/   # V10: backend registry
 COPY cosmosdb-graph-api/openapi/ ./openapi/
 
 # ── fabric-graph-api dependencies (NEW) ────────────────────────────
@@ -785,13 +888,16 @@ async def query_health():
     return {
         "status": "healthy",
         "backend": "cosmosdb",
-        "service": "graph-query-api",
+        "service": "cosmosdb-graph-api",
         "version": app.version,
-        "graph_backend": GRAPH_BACKEND.value,
+        "graph_backend": GRAPH_BACKEND,  # Post-V10: plain string, not .value
     }
 ```
 
 > **Why both `/health` and `/query/health`?** The existing `/health` endpoint is used by supervisord and internal checks (direct port 8100 access). The new `/query/health` is used by the frontend via nginx (`/query/health` → `:8100/query/health`). Both return the same information.
+>
+> **Post-V10 note:** `GRAPH_BACKEND` is a plain string after V10 Phase 7 (Backend Registry replaces
+> `GraphBackendType` enum). Use `GRAPH_BACKEND` directly, not `GRAPH_BACKEND.value`.
 
 #### `scripts/agent_provisioner.py` — Fix OPENAPI_DIR path (CRITICAL)
 
@@ -807,7 +913,13 @@ After the rename, this path no longer exists and **agent provisioning via `/api/
 OPENAPI_DIR = PROJECT_ROOT / "cosmosdb-graph-api" / "openapi"
 ```
 
-> **⚠️ This fix was originally planned for Phase 4 but MUST happen in Phase 0.** The rename and the path update are atomic — deploying one without the other breaks agent provisioning. The Phase 4 changes (adding `"fabric"` to `OPENAPI_SPEC_MAP` and the second `FABRIC_OPENAPI_DIR`) are still Phase 4.
+> **⚠️ This fix was originally planned for Phase 4 but MUST happen in Phase 0.** The rename and the path update are atomic — deploying one without the other breaks agent provisioning. The Phase 4 changes (adding `"fabric-gql"` connector support) are still Phase 4.
+>
+> **Post-V10 note:** V10 Phase 8 introduces `provision_from_config()` which reads scenario YAML
+> to determine connector types and resolve OpenAPI specs. After V10, `OPENAPI_DIR` is used
+> by the connector→spec resolution logic (not a hardcoded `OPENAPI_SPEC_MAP`). The path fix
+> here is still required — V10's `_resolve_spec_for_connector()` still needs the correct
+> base directory to find spec templates.
 
 #### `azure_config.env.template` — Add Fabric section
 
@@ -1677,22 +1789,45 @@ app.include_router(fabric_provision_router)
 
 ## Item 4: Agent Provisioner Changes
 
-### Current State
+> **V10 Dependency: Phase 8 (Config-Driven Agent Provisioner) and Phase 9 (OpenAPI Spec Templating) must be complete before this item.**
+>
+> V10 Phase 8 replaces the hardcoded `provision_all()` / `OPENAPI_SPEC_MAP` approach
+> with `provision_from_config()`, which reads agent definitions from scenario YAML.
+> V10 Phase 9 introduces OpenAPI spec templating with `.replace()` per-placeholder and
+> a `CONNECTOR_OPENAPI_VARS` dict keyed by connector string.
+>
+> **V11's job here is NOT to add `"fabric"` to a hardcoded map — that map no longer
+> exists post-V10. Instead, V11:**
+> 1. Adds `"fabric-gql"` as a recognized connector in `_resolve_connector_for_agent()`
+> 2. Adds `"fabric-gql"` to `CONNECTOR_OPENAPI_VARS` with GQL-specific descriptions
+> 3. Creates the `fabric-graph-api/openapi/fabric.yaml` spec (unchanged from original plan)
+> 4. Adds a `"fabric-gql"` entry to the connector→spec-template resolution logic
+> 5. Ensures Fabric scenario YAML uses `connector: "fabric-gql"` under `data_sources.graph`
 
-- `scripts/agent_provisioner.py` maps `"cosmosdb"` and `"mock"` to YAML spec files
-- OpenAPI specs live in `graph-query-api/openapi/` (now `cosmosdb-graph-api/openapi/`)
-- No `"fabric"` entry in any map
+### Current State (post-V10)
+
+- `scripts/agent_provisioner.py` uses `provision_from_config()` to read agents from scenario YAML
+- `_resolve_connector_for_agent()` maps agent tool definitions to data source connectors
+- `_build_tools()` resolves OpenAPI spec templates via connector string
+- `CONNECTOR_OPENAPI_VARS` provides per-connector template variables for `.replace()` expansion
+- Two connectors are defined: `"cosmosdb-gremlin"` and `"cosmosdb-nosql"` (plus `"mock"`)
+- OpenAPI spec templates live in `cosmosdb-graph-api/openapi/`
+- `_load_openapi_spec()` uses `.replace()` to expand `{base_url}`, `{graph_name}`, `{query_language_description}`
 
 ### Target State
 
 - New `fabric-graph-api/openapi/fabric.yaml` documenting `/fabric/graph` with GQL syntax
-- `OPENAPI_SPEC_MAP` gains `"fabric"` pointing to the new spec
-- `GRAPH_TOOL_DESCRIPTIONS` gains `"fabric"` entry
-- Agent provisioner handles different base URL paths per backend
+- `"fabric-gql"` added to `CONNECTOR_OPENAPI_VARS` with GQL-specific descriptions
+- `_resolve_connector_for_agent()` recognizes `"fabric-gql"` connector
+- `_load_openapi_spec()` knows to look in `fabric-graph-api/openapi/` when connector starts with `"fabric"`
+- Fabric scenario YAML declares `connector: "fabric-gql"` and the provisioner auto-selects the correct spec and prompt fragments
+- Agent GraphExplorer, when provisioned for a Fabric scenario, uses GQL prompt fragments and the `/fabric/graph` endpoint
 
 ### Changes
 
 #### `fabric-graph-api/openapi/fabric.yaml` — **NEW** (~160 lines)
+
+This file is unchanged from the original plan — it's the OpenAPI spec for the Fabric graph endpoint:
 
 ```yaml
 openapi: "3.0.3"
@@ -1761,27 +1896,179 @@ paths:
 
 > **Note:** The path is `/fabric/graph` (not `/query/graph`). The `{base_url}` substitution provides the hostname. The agent's `OpenApiTool` will call `{base_url}/fabric/graph`.
 
-#### `scripts/agent_provisioner.py` — Add Fabric entries
+#### `scripts/agent_provisioner.py` — Add Fabric connector support
+
+**Post-V10, the changes are targeted additions to existing V10 structures, not a rewrite:**
 
 ```python
-# The OPENAPI_DIR must now be able to find specs in both services:
+# 1. Add Fabric OpenAPI directory alongside the Cosmos one:
 COSMOSDB_OPENAPI_DIR = Path(__file__).resolve().parent.parent / "cosmosdb-graph-api" / "openapi"
 FABRIC_OPENAPI_DIR = Path(__file__).resolve().parent.parent / "fabric-graph-api" / "openapi"
 
-OPENAPI_SPEC_MAP = {
-    "cosmosdb": COSMOSDB_OPENAPI_DIR / "cosmosdb.yaml",
-    "fabric": FABRIC_OPENAPI_DIR / "fabric.yaml",
-    "mock": COSMOSDB_OPENAPI_DIR / "mock.yaml",
+# 2. Add "fabric-gql" to CONNECTOR_OPENAPI_VARS (V10 Phase 9 structure):
+CONNECTOR_OPENAPI_VARS = {
+    "cosmosdb-gremlin": {
+        "query_language_description": "A Gremlin traversal query string. Use g.V()...",
+    },
+    "cosmosdb-nosql": {
+        "query_language_description": "A KQL query against the telemetry container...",
+    },
+    "mock": {
+        "query_language_description": "Query the topology graph (offline mock mode).",
+    },
+    # NEW — V11:
+    "fabric-gql": {
+        "query_language_description": (
+            "A GQL (Graph Query Language) MATCH/RETURN query against the Fabric "
+            "GraphModel. Use ISO GQL syntax (not Gremlin, not GraphQL). Examples:\n"
+            "  MATCH (r:CoreRouter) RETURN r.RouterId, r.City LIMIT 10\n"
+            "  MATCH (a)-[e]->(b) RETURN a, e, b LIMIT 20"
+        ),
+    },
 }
 
-GRAPH_TOOL_DESCRIPTIONS = {
-    "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB...",
-    "fabric": "Execute a GQL query against the Fabric GraphModel to explore network topology.",
-    "mock": "Query the topology graph (offline mock mode).",
-}
+# 3. Update _load_openapi_spec() to resolve spec files from the correct directory:
+def _load_openapi_spec(api_uri, spec_template, *, graph_name, keep_path=None):
+    """Load and expand an OpenAPI spec template.
+    
+    Post-V10: uses connector string to find the right spec file.
+    V11 addition: specs starting with "fabric" resolve from FABRIC_OPENAPI_DIR.
+    """
+    if spec_template.startswith("fabric"):
+        spec_path = FABRIC_OPENAPI_DIR / f"{spec_template}.yaml"
+    else:
+        spec_path = COSMOSDB_OPENAPI_DIR / f"{spec_template}.yaml"
+    
+    raw = spec_path.read_text()
+    raw = raw.replace("{base_url}", api_uri.rstrip("/"))
+    raw = raw.replace("{graph_name}", graph_name)
+    
+    # V10 Phase 9: expand connector-specific vars
+    connector_vars = CONNECTOR_OPENAPI_VARS.get(spec_template, {})
+    for key, value in connector_vars.items():
+        raw = raw.replace(f"{{{key}}}", value)
+    
+    if keep_path:
+        # Filter to only the specified path (existing V10 behavior)
+        ...
+    
+    return raw
 ```
 
-#### `api/app/routers/config.py` — Support Fabric in config apply
+> **Key difference from pre-V10 plan:** The original V11 plan added `"fabric"` to a
+> hardcoded `OPENAPI_SPEC_MAP` dict. Post-V10, there is no `OPENAPI_SPEC_MAP`.
+> Instead, `_load_openapi_spec()` resolves specs by connector name, and
+> `CONNECTOR_OPENAPI_VARS` provides the per-connector template variables.
+> V11 just adds the `"fabric-gql"` entries to these structures.
+
+#### `_resolve_connector_for_agent()` — Recognize Fabric connector
+
+The V10 function already handles arbitrary connector strings via scenario YAML lookup. No code change needed — when a Fabric scenario YAML declares `connector: "fabric-gql"`, the function returns `"fabric-gql"` automatically:
+
+```python
+# V10's _resolve_connector_for_agent() already works for Fabric:
+# It reads config["data_sources"]["graph"]["connector"] → "fabric-gql"
+# No code change needed — the function is data-driven.
+```
+
+#### Fabric scenario YAML — `data_sources` section
+
+A Fabric scenario declares its connector in the V10 v2.0 YAML schema:
+
+```yaml
+# data/scenarios/fabric-telecom/scenario.yaml
+name: "fabric-telecom"
+display_name: "Telecom Network (Fabric)"
+description: "Network topology exploration via Microsoft Fabric GraphModel"
+
+data_sources:
+  graph:
+    connector: "fabric-gql"          # ← V11 addition: new connector type
+    # No database/container fields — Fabric uses workspace/graph model IDs
+    # which are passed at runtime via env vars or request body
+  # Note: no telemetry data source — Fabric telemetry is out of scope
+  search_indexes:
+    - name: "runbooks"
+      index_name: "telco-noc-runbooks-index"
+    - name: "tickets"
+      index_name: "telco-noc-tickets-index"
+
+agents:
+  - name: "GraphExplorerAgent"
+    display_name: "Network Graph Explorer"
+    role: "graph_explorer"
+    model: "gpt-4.1"
+    instructions_file: "prompts/graph_explorer/"
+    compose_with_connector: true      # ← V10: auto-selects language_gql.md
+    tools:
+      - type: "openapi"
+        spec_template: "fabric"       # ← resolves to fabric-graph-api/openapi/fabric.yaml
+        keep_path: "/fabric/graph"    # ← different prefix from Cosmos
+
+  # RunbookKB and HistoricalTicket agents are identical to Cosmos scenarios
+  # (they use AI Search, not graph queries)
+  - name: "RunbookKBAgent"
+    display_name: "Runbook Knowledge Base"
+    role: "runbook"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_runbook_kb_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "runbooks"
+
+  - name: "HistoricalTicketAgent"
+    display_name: "Historical Ticket Search"
+    role: "ticket"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_historical_ticket_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "tickets"
+
+  # Note: No TelemetryAgent — Fabric telemetry is deferred (Decision 3)
+  - name: "Orchestrator"
+    display_name: "Investigation Orchestrator"
+    role: "orchestrator"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_orchestrator_agent.md"
+    is_orchestrator: true
+    connected_agents: ["GraphExplorerAgent", "RunbookKBAgent", "HistoricalTicketAgent"]
+```
+
+> **Key points:**
+> - `compose_with_connector: true` causes `_load_prompt()` to auto-select `language_gql.md` from the prompt fragments directory (V10 Phase 10). This fragment must be created with GQL syntax guidance.
+> - `spec_template: "fabric"` maps to `fabric-graph-api/openapi/fabric.yaml`
+> - `keep_path: "/fabric/graph"` ensures the spec only exposes the Fabric endpoint
+> - No `TelemetryAgent` — the Orchestrator connects to 3 agents instead of 4
+> - Search agents are unchanged — they don't depend on the graph backend
+
+#### `prompts/graph_explorer/language_gql.md` — **NEW** prompt fragment
+
+V10's `compose_with_connector` mechanism (Phase 10) selects language fragments based on the connector string. For `"fabric-gql"`, the suffix is `"gql"`, so the file is `language_gql.md`:
+
+```markdown
+## Query Language: GQL (Graph Query Language)
+
+You write queries in **ISO GQL** (MATCH/RETURN syntax). This is NOT Gremlin and NOT GraphQL.
+
+### Syntax Reference
+
+```
+MATCH (n:Label) RETURN n.property LIMIT 10
+MATCH (a:Label)-[e:EdgeType]->(b:Label) RETURN a, e, b
+MATCH (n) RETURN LABELS(n) AS type, count(n) AS cnt GROUP BY type ORDER BY cnt DESC
+```
+
+### Key Differences from Gremlin
+- No `g.V()` — use `MATCH (n)`
+- No `.has()` — use `WHERE n.property = value`
+- No `.out()` — use `MATCH (a)-[e]->(b)`
+- Results are tabular (columns + rows), not traversal streams
+```
+
+#### `api/app/routers/config.py` — Support Fabric in config apply (post-V10)
+
+Post-V10, `config.py` uses `provision_from_config()` which reads the scenario YAML. The Fabric-specific fields in `ConfigApplyRequest` provide **runtime overrides** for Fabric workspace/graph model IDs:
 
 ```python
 class ConfigApplyRequest(BaseModel):
@@ -1790,34 +2077,62 @@ class ConfigApplyRequest(BaseModel):
     tickets_index: str = "tickets-index"
     prompt_scenario: str | None = None
     prompts: dict[str, str] | None = None
-    # NEW: Fabric-specific overrides
+    # NEW (V11): Fabric-specific runtime overrides
     backend_type: str | None = None  # "cosmosdb" | "fabric" | None (use env default)
     fabric_workspace_id: str | None = None
     fabric_ontology_id: str | None = None
     fabric_graph_model_id: str | None = None
 ```
 
-When `backend_type: "fabric"`, the provisioner uses `OPENAPI_SPEC_MAP["fabric"]` and binds agents to `POST /fabric/graph` instead of `POST /query/graph`.
+When `backend_type: "fabric"`:
+- `provision_from_config()` reads the scenario YAML (which declares `connector: "fabric-gql"`)
+- `_resolve_connector_for_agent()` returns `"fabric-gql"` for graph agents
+- `_load_openapi_spec()` loads from `fabric-graph-api/openapi/`
+- `_load_prompt()` selects `language_gql.md` fragment
+- The GraphExplorer agent is provisioned with GQL instructions and the `/fabric/graph` tool
+
+> **No hardcoded backend switching logic in config.py.** The backend type is declared
+> in the scenario YAML's `data_sources.graph.connector` field. The `backend_type`
+> parameter in `ConfigApplyRequest` is used by the frontend to pass to the agent
+> provisioner, but the provisioner itself reads the connector from the YAML config.
 
 ### Verification
 
-- `GRAPH_BACKEND=fabric POST /api/config/apply` → agents created with Fabric spec, targeting `/fabric/graph`
-- `GRAPH_BACKEND=cosmosdb POST /api/config/apply` → agents created with CosmosDB spec, targeting `/query/graph` (unchanged)
+- Upload Fabric scenario YAML → `save_scenario_config()` stores it (V10 mechanism)
+- `POST /api/config/apply { prompt_scenario: "fabric-telecom" }` → provisioner reads YAML, creates agents with Fabric spec and GQL prompts
 - Agent GraphExplorer sends GQL to `/fabric/graph` → gets results
+- Same provisioner flow works for Cosmos scenarios unchanged — `connector: "cosmosdb-gremlin"` → Gremlin spec and prompts
 
 ---
 
 ## Item 5: Frontend — Adaptive Backend UI with Resilience
 
-### Current State
+> **V10 Dependency: Phase 11 (Frontend Genericization) should be complete before this item.**
+>
+> V10 Phase 11 transforms the frontend from a hardcoded telco-NOC UI into a config-aware
+> scaffold. After V10:
+> - `ScenarioContext` uses `SavedScenario.resources` (config-specified, not hardcoded)
+> - `graphConstants.ts` maps are empty (no hardcoded labels/colors/icons)
+> - Agent names come from `agent_ids.json` (config-driven, not hardcoded 5-agent list)
+> - First-run empty state is supported (no scenario loaded = generic welcome)
+> - `setActiveScenario()` callback reads config-specified resources
+> - ARIA semantics are applied to interactive widgets
+>
+> **V11 builds on this genericized scaffold.** The backend type, health detection, and
+> Fabric-specific state are **additive layers** on top of V10's config-aware context —
+> not modifications to hardcoded telco-specific code.
 
-- No concept of backend type in frontend state
-- All graph calls go to `/query/*`
+### Current State (post-V10)
+
+- Frontend is config-aware: `ScenarioContext` uses `SavedScenario.resources`, agent names from `agent_ids.json`
+- `graphConstants.ts` is empty — labels, colors, icons come from config/data
+- No concept of backend type (all graph calls go to `/query/*`)
 - No health checks against individual backend services
+- No Fabric-specific state or UI
 
 ### Target State
 
-The frontend:
+The frontend adds a backend type layer on top of V10's generic scaffold:
 1. Probes both backend health endpoints on mount
 2. Populates the backend dropdown with only available backends
 3. Routes graph queries to `/query/*` or `/fabric/*` based on selection
@@ -1828,13 +2143,16 @@ The frontend:
 
 #### `context/ScenarioContext.tsx` — Add backend type + Fabric state + health detection
 
+V10's `ScenarioContext` already has config-driven fields (`SavedScenario.resources`,
+dynamic agent names). V11 adds backend type fields as a new layer:
+
 ```tsx
 interface ScenarioState {
-  // ... existing fields ...
+  // ... V10 fields (resources, agents from config, etc.) ...
 
-  /** Active backend type */
+  /** Active backend type — V11 addition */
   activeBackendType: 'cosmosdb' | 'fabric';
-  /** Which backends are available (health check passed) */
+  /** Which backends are available (health check passed) — V11 addition */
   availableBackends: ('cosmosdb' | 'fabric')[];
   /** Fabric workspace ID */
   fabricWorkspaceId: string;
@@ -1855,6 +2173,11 @@ interface ScenarioState {
   setFabricCapacityId: (id: string) => void;
 }
 ```
+
+> **V10 integration note:** V10's `setActiveScenario()` callback already reads
+> `SavedScenario.resources` to populate context. V11 extends this: when a Fabric
+> scenario is selected, `setActiveScenario()` also sets `activeBackendType: 'fabric'`
+> based on the scenario config's `data_sources.graph.connector` field.
 
 **Backend health detection on mount:**
 
@@ -2137,9 +2460,22 @@ Same as original plan:
 
 ## Implementation Phases
 
+> **V10 Prerequisite:** All V11 phases assume V10 Phases 0–9 are complete.
+> Specifically:
+> - V10 Phase 0 (Infrastructure Genericization) → before V11 Phase 0
+> - V10 Phases 1–3 (DocumentStore, Cosmos Config, ScenarioContext) → before V11 Phase 0 rename
+> - V10 Phase 7 (Backend Registry) → before V11 Phase 0 health endpoint
+> - V10 Phase 8 (Config-Driven Provisioner) → before V11 Phase 4
+> - V10 Phase 9 (OpenAPI Templating) → before V11 Phase 4
+> - V10 Phase 11 (Frontend Genericization) → before V11 Phase 5
+>
+> V11 Phases 1–3.5 can run in parallel with V10 Phases 10–13 (prompt system,
+> frontend, visualizer, backward compat) since they operate on independent code.
+
 ### Phase 0: Directory Rename & Infrastructure
 
 > **Prerequisite for everything.** Must be done first.
+> **V10 Prerequisite:** V10 Phases 0–9 complete (infrastructure genericized, stores/adapters/services dirs exist in `graph-query-api/`, backend is string-based).
 
 **Actions:**
 1. `git mv graph-query-api cosmosdb-graph-api`
@@ -2245,23 +2581,31 @@ Same as original plan:
 ### Phase 4: Agent Provisioner Changes
 
 > Depends on Phase 2 (working backend).
+> **V10 Prerequisite:** V10 Phase 8 (Config-Driven Provisioner) and Phase 9 (OpenAPI Templating) must be complete.
 > 
-> **Note:** The `OPENAPI_DIR` path fix (`graph-query-api` → `cosmosdb-graph-api`) was already done in Phase 0 (critical rename dependency). This phase only adds the **new** Fabric entries.
+> **Note:** The `OPENAPI_DIR` path fix (`graph-query-api` → `cosmosdb-graph-api`) was already done in Phase 0 (critical rename dependency). This phase adds the `"fabric-gql"` connector to V10's config-driven provisioner structures (`CONNECTOR_OPENAPI_VARS`, `_load_openapi_spec()` directory resolution) and creates the Fabric scenario YAML + GQL prompt fragment.
 
 **Files to create:**
 - `fabric-graph-api/openapi/fabric.yaml`
+- `prompts/graph_explorer/language_gql.md` (GQL prompt fragment for V10's `compose_with_connector`)
+- `data/scenarios/fabric-telecom/scenario.yaml` (Fabric scenario using V10 v2.0 YAML schema)
 
 **Files to modify:**
-- `scripts/agent_provisioner.py` — add `FABRIC_OPENAPI_DIR`, add `"fabric"` to `OPENAPI_SPEC_MAP`, add `GRAPH_TOOL_DESCRIPTIONS["fabric"]` (the `OPENAPI_DIR` rename fix was already applied in Phase 0)
+- `scripts/agent_provisioner.py` — add `FABRIC_OPENAPI_DIR`, add `"fabric-gql"` to `CONNECTOR_OPENAPI_VARS`, update `_load_openapi_spec()` to resolve Fabric specs from correct directory
 - `api/app/routers/config.py` — add `backend_type` + Fabric fields to `ConfigApplyRequest`
 
 **Verification:**
-- `backend_type=fabric POST /api/config/apply` → agents provisioned with Fabric spec targeting `/fabric/graph`
-- `backend_type=cosmosdb POST /api/config/apply` → agents provisioned with Cosmos spec (unchanged)
+- Upload Fabric scenario YAML → `save_scenario_config()` stores it (V10 mechanism)
+- `POST /api/config/apply { prompt_scenario: "fabric-telecom" }` → agents provisioned with Fabric spec and GQL prompts, targeting `/fabric/graph`
+- `POST /api/config/apply { prompt_scenario: "telco-noc-5g" }` → agents provisioned with Cosmos spec (unchanged)
+- Agent GraphExplorer sends GQL to `/fabric/graph` → gets results
 
 ### Phase 5: Frontend — Adaptive Backend UI
 
 > Depends on Phase 0 (URL routes), Phase 3 (discovery), Phase 3.5 (provisioning).
+> **V10 Prerequisite:** V10 Phase 11 (Frontend Genericization) should be complete.
+> V11's frontend changes build on V10's config-aware scaffold (empty `graphConstants`,
+> config-specified resources in `ScenarioContext`, dynamic agent names).
 
 **Files to create:**
 - `frontend/src/hooks/useFabric.ts`
@@ -2300,19 +2644,23 @@ Same as original plan:
 
 ### Phase 0 — Rename & Infrastructure
 
+> **Post-V10 note:** The directory being renamed (`graph-query-api/`) now contains V10-created
+> subdirectories (`stores/`, `adapters/`, `services/`). These are included in the rename
+> automatically. The Dockerfile COPY commands must include these new directories.
+
 | File | Action | Changes |
 |------|--------|---------|
-| `graph-query-api/` → `cosmosdb-graph-api/` | RENAME | `git mv` — all contents unchanged |
+| `graph-query-api/` → `cosmosdb-graph-api/` | RENAME | `git mv` — all contents unchanged (includes V10 dirs: `stores/`, `adapters/`, `services/`) |
 | `cosmosdb-graph-api/pyproject.toml` | MODIFY | `name = "cosmosdb-graph-api"` (was `graph-query-api`) |
-| `Dockerfile` | MODIFY | `graph-query-api` → `cosmosdb-graph-api` in all COPY/WORKDIR; add `fabric-graph-api` build block |
+| `Dockerfile` | MODIFY | `graph-query-api` → `cosmosdb-graph-api` in all COPY/WORKDIR; add `fabric-graph-api` build block; add COPY for V10 dirs (`stores/`, `adapters/`, `services/`) |
 | `supervisord.conf` | MODIFY | Rename `[program:graph-query-api]` → `[program:cosmosdb-graph-api]`, update directory; add `[program:fabric-graph-api]` |
 | `nginx.conf` | MODIFY | Update comment; add `location /fabric/` block |
 | `frontend/vite.config.ts` | MODIFY | Add `/fabric` proxy to port 8200 |
-| `deploy.sh` | MODIFY | 3 `graph-query-api` string refs → `cosmosdb-graph-api` (lines 10, 470, 593); add Fabric local start command; renumber Terminal 3→4 |
+| `deploy.sh` | MODIFY | `graph-query-api` string refs → `cosmosdb-graph-api` (post-V10: fewer occurrences since Phase 0 genericizes); add Fabric local start; renumber terminals |
 | `azure.yaml` | MODIFY | Update comment |
 | `scripts/agent_provisioner.py` | MODIFY | Fix `OPENAPI_DIR` path: `graph-query-api/openapi` → `cosmosdb-graph-api/openapi` (CRITICAL — agent provisioning breaks without this) |
-| `cosmosdb-graph-api/main.py` | MODIFY | Add `GET /query/health` endpoint (CRITICAL — frontend health detection requires this) |
-| `azure_config.env.template` | MODIFY | Add Fabric variables section (Gap 12) |
+| `cosmosdb-graph-api/main.py` | MODIFY | Add `GET /query/health` endpoint; use `GRAPH_BACKEND` as plain string (post-V10: no `.value`) |
+| `azure_config.env.template` | MODIFY | Add Fabric variables section (post-V10: template is already genericized, Fabric section is purely additive) |
 
 ### Phase 1 — fabric-graph-api Setup
 
@@ -2352,10 +2700,15 @@ Same as original plan:
 
 ### Phase 4 — Agent Provisioner
 
+> **Post-V10:** The provisioner is now config-driven (`provision_from_config()`). The changes
+> here add `"fabric-gql"` connector support to V10's data-driven structures, not a hardcoded map.
+
 | File | Action | Changes |
 |------|--------|---------|
 | `fabric-graph-api/openapi/fabric.yaml` | **CREATE** | GQL OpenAPI spec (~160 lines) |
-| `scripts/agent_provisioner.py` | MODIFY | Add `FABRIC_OPENAPI_DIR`, add `"fabric"` to `OPENAPI_SPEC_MAP` + `GRAPH_TOOL_DESCRIPTIONS` (note: `OPENAPI_DIR` rename fix was already done in Phase 0) |
+| `prompts/graph_explorer/language_gql.md` | **CREATE** | GQL prompt fragment for V10's `compose_with_connector` mechanism |
+| `data/scenarios/fabric-telecom/scenario.yaml` | **CREATE** | Fabric scenario YAML using V10 v2.0 schema (`connector: "fabric-gql"`) |
+| `scripts/agent_provisioner.py` | MODIFY | Add `FABRIC_OPENAPI_DIR`; add `"fabric-gql"` to `CONNECTOR_OPENAPI_VARS`; update `_load_openapi_spec()` to resolve from Fabric dir when connector starts with `"fabric"` |
 | `api/app/routers/config.py` | MODIFY | Add `backend_type` + Fabric fields to `ConfigApplyRequest` |
 
 ### Phase 5 — Frontend
@@ -2414,6 +2767,13 @@ Same as original plan:
 ### Gap 6: Cosmos DB still required in Fabric mode
 
 **Impact:** Prompts, scenarios, interactions, and AI Search indexes live in Cosmos/AI Search. These are served by cosmosdb-graph-api. If cosmosdb-graph-api is unavailable, these features don't work even when Fabric is selected.
+
+**V10 note:** V10 Phase 1 introduces the `DocumentStore` Protocol, which abstracts document
+persistence behind a generic interface. Currently, the only implementation is `CosmosDocumentStore`,
+but the protocol is designed for alternative backends. In the future, a `FabricDocumentStore`
+(backed by Fabric Lakehouse or Eventhouse) could eliminate the Cosmos dependency for shared
+concerns (prompts, scenarios, interactions). This is out of scope for V11 but the architectural
+path exists thanks to V10.
 
 **Mitigation:**
 - The Fabric Setup tab shows a note: "Prompts and knowledge bases are stored in Cosmos DB / AI Search regardless of graph backend."
@@ -2503,6 +2863,37 @@ TELEMETRY_DATA_AGENT_ID=
 **Resolution:** ~~Add a `GET /query/health` endpoint to `cosmosdb-graph-api/main.py` (Phase 0).~~ **Done — integrated into Phase 0 actions list (item 11) and Item 0 changes.** See the `cosmosdb-graph-api/main.py` section under Item 0 for the full implementation.
 
 The frontend uses `/query/health` (→ cosmosdb-graph-api on :8100) and `/fabric/health` (→ fabric-graph-api on :8200) independently.
+
+### Gap 14: Resource Visualizer — Fabric nodes (NEW)
+
+**Impact:** V10 Phase 12 introduces a real backend endpoint for the Resource Visualizer
+(`GET /query/resources`), replacing the current hardcoded frontend mock. The visualizer
+shows a dependency graph of infrastructure resources (Cosmos account, databases, containers,
+AI Search indexes, etc.).
+
+**V11 addition:** When Fabric is the active backend, the Resource Visualizer should include
+Fabric-specific nodes:
+- Fabric Capacity → Workspace → Ontology → Graph Model (provisioning hierarchy)
+- Fabric Workspace → Lakehouse (data storage)
+- Fabric Workspace → Eventhouse → KQL Database (telemetry storage)
+
+**Implementation approach:** The Resource Visualizer backend endpoint (V10 Phase 12) returns
+a graph of resources. V11 adds a `/fabric/resources` endpoint to `fabric-graph-api` that
+returns Fabric-specific resource nodes. The frontend merges both resource graphs when both
+backends are available, or shows only the relevant one.
+
+**Priority:** P2 — functional but not critical for V11 MVP. Can be added as a follow-up
+after the core Fabric integration works.
+
+### Gap 15: V10 `_normalize_manifest()` backward compatibility (NEW)
+
+**Impact:** V10 Phase 13 introduces `_normalize_manifest()` which converts old YAML format
+(`cosmos:` key) to v2.0 format (`data_sources:` key). Fabric scenarios should always use
+v2.0 format natively — they should **not** use the `cosmos:` key.
+
+**Mitigation:** Document in the Fabric scenario YAML template that `data_sources:` is
+required (not `cosmos:`). `_normalize_manifest()` handles old Cosmos scenarios, not Fabric
+scenarios.
 
 ---
 

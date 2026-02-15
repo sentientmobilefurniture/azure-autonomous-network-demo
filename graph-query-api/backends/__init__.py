@@ -11,9 +11,9 @@ ScenarioContext (X-Graph header).
 from __future__ import annotations
 
 import threading
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
-from config import GRAPH_BACKEND, GraphBackendType, ScenarioContext
+from config import GRAPH_BACKEND, ScenarioContext
 
 
 @runtime_checkable
@@ -44,9 +44,44 @@ class GraphBackend(Protocol):
         """
         ...
 
+    async def ingest(
+        self,
+        vertices: list[dict],
+        edges: list[dict],
+        *,
+        graph_name: str,
+        graph_database: str,
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> dict:
+        """Load vertices and edges into the graph backend.
+
+        Args:
+            vertices: List of {label, id, partition_key, properties} dicts
+            edges: List of {label, source_id, target_id, properties} dicts
+            graph_name: Target graph name
+            graph_database: Target database name
+            on_progress: Callback(message, current, total) for progress reporting
+
+        Returns:
+            {vertices_loaded: int, edges_loaded: int, errors: list[str]}
+        """
+        ...
+
     def close(self) -> None:
         """Clean up resources (connections, clients)."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# Backend registry
+# ---------------------------------------------------------------------------
+
+_backend_registry: dict[str, type[GraphBackend]] = {}
+
+
+def register_backend(name: str, cls: type[GraphBackend]) -> None:
+    """Register a GraphBackend implementation by name."""
+    _backend_registry[name] = cls
 
 
 def get_backend() -> GraphBackend:
@@ -55,17 +90,7 @@ def get_backend() -> GraphBackend:
     Uses the default graph from env vars. For per-request graph selection,
     use get_backend_for_context() instead.
     """
-    if GRAPH_BACKEND == GraphBackendType.COSMOSDB:
-        from .cosmosdb import CosmosDBGremlinBackend
-        return CosmosDBGremlinBackend()
-    elif GRAPH_BACKEND == GraphBackendType.MOCK:
-        from .mock import MockGraphBackend
-        return MockGraphBackend()
-    else:
-        raise ValueError(
-            f"Unknown GRAPH_BACKEND: {GRAPH_BACKEND!r}. "
-            f"Valid options: cosmosdb, mock"
-        )
+    return get_backend_for_graph("__default__")
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +107,7 @@ def get_backend_for_context(ctx: ScenarioContext) -> GraphBackend:
     For mock backends, returns a shared singleton (graph name irrelevant).
     For cosmosdb, returns a per-graph-name cached backend.
     """
-    if ctx.backend_type == GraphBackendType.MOCK:
+    if ctx.backend_type == "mock":
         return get_backend_for_graph("__mock__", ctx.backend_type)
 
     return get_backend_for_graph(ctx.graph_name, ctx.backend_type)
@@ -90,22 +115,20 @@ def get_backend_for_context(ctx: ScenarioContext) -> GraphBackend:
 
 def get_backend_for_graph(
     graph_name: str,
-    backend_type: GraphBackendType | None = None,
+    backend_type: str | None = None,
 ) -> GraphBackend:
     """Return a cached backend for a specific graph name."""
     bt = backend_type or GRAPH_BACKEND
-    cache_key = f"{bt.value}:{graph_name}"
+    cache_key = f"{bt}:{graph_name}"
 
     with _backend_lock:
         if cache_key not in _backend_cache:
-            if bt == GraphBackendType.COSMOSDB:
-                from .cosmosdb import CosmosDBGremlinBackend
-                _backend_cache[cache_key] = CosmosDBGremlinBackend(graph_name=graph_name)
-            elif bt == GraphBackendType.MOCK:
-                from .mock import MockGraphBackend
-                _backend_cache[cache_key] = MockGraphBackend()
-            else:
-                raise ValueError(f"Unknown backend type: {bt}")
+            if bt not in _backend_registry:
+                raise ValueError(
+                    f"Unknown backend: {bt!r}. "
+                    f"Available: {list(_backend_registry)}"
+                )
+            _backend_cache[cache_key] = _backend_registry[bt](graph_name=graph_name)
         return _backend_cache[cache_key]
 
 
@@ -118,3 +141,20 @@ async def close_all_backends() -> None:
             if inspect.isawaitable(result):
                 await result
         _backend_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Auto-register known backends at module load
+# ---------------------------------------------------------------------------
+
+try:
+    from .cosmosdb import CosmosDBGremlinBackend
+    register_backend("cosmosdb", CosmosDBGremlinBackend)
+except ImportError:
+    import logging
+    logging.getLogger("graph-query-api").warning(
+        "CosmosDBGremlinBackend not available (missing gremlin_python?)"
+    )
+
+from .mock import MockGraphBackend  # noqa: E402
+register_backend("mock", MockGraphBackend)

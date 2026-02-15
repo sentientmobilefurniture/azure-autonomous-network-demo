@@ -48,7 +48,7 @@ async def query_graph(
     backend = get_backend_for_context(ctx)
     logger.info(
         "POST /query/graph — backend=%s graph=%s  query=%.200s",
-        ctx.backend_type.value, ctx.graph_name, req.query,
+        ctx.backend_type, ctx.graph_name, req.query,
     )
     try:
         result = await backend.execute_query(req.query)

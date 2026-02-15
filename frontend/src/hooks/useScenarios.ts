@@ -115,18 +115,23 @@ export function useScenarios() {
 
   // Select a saved scenario: update context bindings + auto-provision agents
   const selectScenario = useCallback(async (name: string) => {
-    // 1. Update all frontend bindings instantly
-    setActiveScenario(name);
+    // 1. Update all frontend bindings instantly, using config-specified resources if available
+    const saved = savedScenarios.find(s => s.id === name);
+    setActiveScenario(name, saved);
 
     // 2. Push scenario graph_styles into context for dynamic node colors
-    const saved = savedScenarios.find(s => s.id === name);
     if (saved?.graph_styles) {
       setScenarioStyles(saved.graph_styles as { node_types?: Record<string, { color: string; size: number }> });
     } else {
       setScenarioStyles(null);
     }
 
-    // 3. Auto-provision agents with SSE progress tracking
+    // 3. Derive resource names from saved resources or conventions
+    const graph = saved?.resources?.graph ?? `${name}-topology`;
+    const runbooks_index = saved?.resources?.runbooks_index ?? `${name}-runbooks-index`;
+    const tickets_index = saved?.resources?.tickets_index ?? `${name}-tickets-index`;
+
+    // 4. Auto-provision agents with SSE progress tracking
     setProvisioningStatus({ state: 'provisioning', step: 'Starting...', scenarioName: name });
 
     try {
@@ -134,9 +139,9 @@ export function useScenarios() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          graph: `${name}-topology`,
-          runbooks_index: `${name}-runbooks-index`,
-          tickets_index: `${name}-tickets-index`,
+          graph,
+          runbooks_index,
+          tickets_index,
           prompt_scenario: name,
         }),
       });

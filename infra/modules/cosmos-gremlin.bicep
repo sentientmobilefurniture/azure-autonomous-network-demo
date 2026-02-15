@@ -10,12 +10,6 @@ param location string = resourceGroup().location
 @description('Name of the Gremlin database')
 param databaseName string = 'networkgraph'
 
-@description('Name of the Gremlin graph')
-param graphName string = 'topology'
-
-@description('Partition key path for the graph')
-param partitionKeyPath string = '/partitionKey'
-
 @description('Maximum throughput for autoscale (RU/s)')
 param maxThroughput int = 1000
 
@@ -68,37 +62,9 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/gremlinDatabases@2024-1
   }
 }
 
-// ─── Gremlin Graph (Container) ───────────────────────────────────────────────
-
-resource graph 'Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/graphs@2024-11-15' = {
-  name: graphName
-  parent: database
-  properties: {
-    resource: {
-      id: graphName
-      partitionKey: {
-        paths: [partitionKeyPath]
-        kind: 'Hash'
-        version: 2
-      }
-      indexingPolicy: {
-        indexingMode: 'consistent'
-        automatic: true
-        includedPaths: [
-          { path: '/*' }
-        ]
-        excludedPaths: [
-          { path: '/"_etag"/?' }
-        ]
-      }
-    }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: maxThroughput
-      }
-    }
-  }
-}
+// ─── Gremlin Graph — REMOVED (scenario-specific, created at runtime) ─────────
+// Graphs are created by router_ingest.py → _ensure_gremlin_graph() during
+// scenario upload. Graph name comes from scenario.yaml data_sources.graph.config.graph.
 
 // ─── Cosmos DB NoSQL Account (for telemetry data) ────────────────────────────
 
@@ -161,6 +127,28 @@ resource scenariosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
       id: 'scenarios'
       partitionKey: {
         paths: ['/id']
+        kind: 'Hash'
+        version: 2
+      }
+    }
+    options: {
+      autoscaleSettings: {
+        maxThroughput: 1000
+      }
+    }
+  }
+}
+
+// ─── Configs Container (stores parsed scenario.yaml for each scenario) ───────
+
+resource configsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  name: 'configs'
+  parent: scenariosDatabase
+  properties: {
+    resource: {
+      id: 'configs'
+      partitionKey: {
+        paths: ['/scenario_name']
         kind: 'Hash'
         version: 2
       }
@@ -236,9 +224,6 @@ output cosmosAccountName string = cosmosAccount.name
 
 @description('The Gremlin database name')
 output gremlinDatabaseName string = database.name
-
-@description('The Gremlin graph name')
-output gremlinGraphName string = graph.name
 
 @description('The Cosmos DB account resource ID')
 output cosmosAccountId string = cosmosAccount.id

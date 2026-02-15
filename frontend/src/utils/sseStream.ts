@@ -14,6 +14,10 @@ export interface SSEProgressData {
   step: string;
   detail: string;
   pct: number;
+  /** High-level stage category (e.g. "validating", "creating_graph", "loading_vertices") */
+  category?: string;
+  /** Human-readable message from the backend */
+  message?: string;
 }
 
 export interface SSEHandlers {
@@ -84,6 +88,8 @@ export async function consumeSSE(
               step: parsed.step ?? '',
               detail: parsed.detail ?? parsed.step ?? '',
               pct: parsed.pct ?? 0,
+              category: parsed.category,
+              message: parsed.message,
             });
           }
         } catch {

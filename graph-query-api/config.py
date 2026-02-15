@@ -12,40 +12,21 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from enum import Enum
 
 from fastapi import Header
 from azure.identity import DefaultAzureCredential
+
+# Cosmos-specific env vars live in adapters.cosmos_config.
+# Re-export COSMOS_GREMLIN_GRAPH only for get_scenario_context() fallback.
+from adapters.cosmos_config import COSMOS_GREMLIN_DATABASE, COSMOS_GREMLIN_GRAPH
 
 
 # ---------------------------------------------------------------------------
 # Graph backend selector
 # ---------------------------------------------------------------------------
 
-class GraphBackendType(str, Enum):
-    """Supported graph backends, controlled by GRAPH_BACKEND env var."""
-    COSMOSDB = "cosmosdb"
-    MOCK = "mock"
+GRAPH_BACKEND: str = os.getenv("GRAPH_BACKEND", "cosmosdb").lower()
 
-
-GRAPH_BACKEND = GraphBackendType(os.getenv("GRAPH_BACKEND", "cosmosdb").lower())
-
-
-# ---------------------------------------------------------------------------
-# Cosmos DB NoSQL settings (used by /query/telemetry)
-# ---------------------------------------------------------------------------
-
-COSMOS_NOSQL_ENDPOINT = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
-COSMOS_NOSQL_DATABASE = os.getenv("COSMOS_NOSQL_DATABASE", "telemetry")
-
-# ---------------------------------------------------------------------------
-# Cosmos DB Gremlin settings (used by GRAPH_BACKEND=cosmosdb)
-# ---------------------------------------------------------------------------
-
-COSMOS_GREMLIN_ENDPOINT = os.getenv("COSMOS_GREMLIN_ENDPOINT", "")
-COSMOS_GREMLIN_PRIMARY_KEY = os.getenv("COSMOS_GREMLIN_PRIMARY_KEY", "")
-COSMOS_GREMLIN_DATABASE = os.getenv("COSMOS_GREMLIN_DATABASE", "networkgraph")
-COSMOS_GREMLIN_GRAPH = os.getenv("COSMOS_GREMLIN_GRAPH", "topology")
 
 # ---------------------------------------------------------------------------
 # AI Search settings (used by /query/indexes)
@@ -74,7 +55,7 @@ def get_credential():
 class ScenarioContext:
     """Per-request routing context derived from the X-Graph header.
 
-    Determines which Gremlin graph, NoSQL telemetry database, and prompts
+    Determines which graph, NoSQL telemetry database, and prompts
     database each request targets. If no header is provided, falls back
     to the default graph from env vars.
 
@@ -84,12 +65,12 @@ class ScenarioContext:
       - Prompts container: "{prefix}" within the shared "prompts" DB
     """
     graph_name: str                  # e.g. "cloud-outage-topology"
-    gremlin_database: str            # e.g. "networkgraph" (shared across scenarios)
+    graph_database: str              # e.g. "networkgraph" (shared across scenarios)
     telemetry_database: str          # "telemetry" (shared DB, pre-created by Bicep)
     telemetry_container_prefix: str  # "cloud-outage" (used to prefix container names)
     prompts_database: str            # "prompts" (shared DB, pre-created by Bicep)
     prompts_container: str           # "cloud-outage" (per-scenario container name)
-    backend_type: GraphBackendType
+    backend_type: str
 
 
 def get_scenario_context(
@@ -110,7 +91,7 @@ def get_scenario_context(
 
     return ScenarioContext(
         graph_name=graph_name,
-        gremlin_database=COSMOS_GREMLIN_DATABASE,
+        graph_database=COSMOS_GREMLIN_DATABASE,
         telemetry_database="telemetry",           # shared DB
         telemetry_container_prefix=prefix,         # scenario prefix for container lookup
         prompts_database="prompts",                # shared DB
@@ -122,12 +103,12 @@ def get_scenario_context(
 # Required env vars per backend (used by lifespan health check)
 # ---------------------------------------------------------------------------
 
-BACKEND_REQUIRED_VARS: dict[GraphBackendType, tuple[str, ...]] = {
-    GraphBackendType.COSMOSDB: (
+BACKEND_REQUIRED_VARS: dict[str, tuple[str, ...]] = {
+    "cosmosdb": (
         "COSMOS_GREMLIN_ENDPOINT",
         "COSMOS_GREMLIN_PRIMARY_KEY",
     ),
-    GraphBackendType.MOCK: (),
+    "mock": (),
 }
 
 # Telemetry (Cosmos NoSQL) vars — optional; /query/telemetry fails gracefully without them
