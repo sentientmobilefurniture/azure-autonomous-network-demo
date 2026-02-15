@@ -4,6 +4,10 @@
 > scenario management (SCENARIOHANDLING.md) with first-class scenario
 > CRUD, per-type uploads, per-request graph routing, Cosmos-backed prompts,
 > unified container deployment, and UI scenario switching with auto-provisioning.
+>
+> **Audit note:** All code paths verified against actual source files 2026-02-15.
+> Discrepancy corrections applied for health endpoints, line counts, SSE utility
+> signatures, Related Documentation filenames, and missing project files.
 
 ---
 
@@ -28,6 +32,8 @@
 - [Configuration Reference](#configuration-reference)
 - [Quick Reference: Where to Fix Things](#quick-reference-where-to-fix-things)
 - [Scenario Management](#scenario-management)
+- [Planned Work & QOL Backlog](#planned-work--qol-backlog)
+- [Fabric Integration (Future)](#fabric-integration-future)
 - [SDK Versions](#sdk-versions)
 
 ---
@@ -66,6 +72,13 @@ All three services run in a **single container** managed by supervisord:
 | nginx | `0.0.0.0:80` (external) | Reverse proxy + React SPA |
 | API (uvicorn) | `127.0.0.1:8000` | Agent orchestrator, SSE streaming, config endpoints |
 | graph-query-api (uvicorn) | `127.0.0.1:8100` | Graph/telemetry queries, data upload, prompt CRUD |
+
+**CORS discrepancy between services:**
+- API (:8000) sets `allow_credentials=True` (supports cookies/auth headers)
+- graph-query-api (:8100) does NOT set `allow_credentials` (defaults to `False`)
+- Both default `allow_origins` to localhost URLs when `CORS_ORIGINS` env var is unset, but with different defaults:
+  - API: `"http://localhost:5173"` (single origin)
+  - graph-query-api: `"http://localhost:5173,http://localhost:3000"` (two origins)
 
 ### nginx Routes
 
@@ -142,7 +155,7 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin)
 │   ├── router_telemetry.py     # POST /query/telemetry (per-scenario NoSQL)
 │   ├── router_topology.py      # POST /query/topology (graph visualization)
-│   ├── router_ingest.py        # Upload endpoints + scenario/index listing (1329 lines)
+│   ├── router_ingest.py        # Upload endpoints + scenario/index listing (~1376 lines)
 │   ├── router_prompts.py       # Prompts CRUD in Cosmos (334 lines)
 │   ├── router_scenarios.py     # Scenario metadata CRUD in Cosmos (272 lines)
 │   ├── search_indexer.py       # AI Search indexer pipeline creation
@@ -163,6 +176,7 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │       ├── main.tsx            # Wraps App in ScenarioProvider
 │       ├── App.tsx             # 3-zone layout (useInvestigation hook)
 │       ├── types/index.ts      # Shared TypeScript interfaces (StepEvent, SavedScenario, etc.)
+│       ├── styles/globals.css  # CSS variables, dark theme, Tailwind imports (159 lines)
 │       ├── context/
 │       │   └── ScenarioContext.tsx  # Full scenario state: activeScenario, bindings,
 │       │                           # provisioningStatus, localStorage persistence,
@@ -215,6 +229,8 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │
 ├── infra/                      # Bicep IaC
 │   ├── main.bicep              # Subscription-scoped (creates RG, deploys 9 modules)
+│   ├── main.bicepparam         # Bicep parameter file (uses readEnvironmentVariable())
+│   ├── nuclear_teardown.sh     # Full teardown: azd down + Cognitive Services purge + RG delete
 │   └── modules/                # vnet, search, storage, cosmosGremlin, aiFoundry,
 │                               # containerAppsEnv, app, roles, cosmosPrivateEndpoints
 │
@@ -239,7 +255,7 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 | POST | `/api/config/apply` | SSE stream | Re-provision 5 agents with new bindings |
 | GET | `/api/config/current` | JSON | Current active configuration state |
 | GET | `/api/logs` | SSE stream | Real-time log broadcast (fan-out to all clients) |
-| GET | `/health` | JSON `{"status": "ok"}` | Health check |
+| GET | `/health` | JSON `{"status": "ok", "service": "autonomous-network-noc-api"}` | Health check |
 
 ### graph-query-api Service (`:8100`)
 
@@ -257,6 +273,7 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 | POST | `/query/upload/runbooks` | SSE stream | Upload runbooks tarball → Blob + AI Search |
 | POST | `/query/upload/tickets` | SSE stream | Upload tickets tarball → Blob + AI Search |
 | POST | `/query/upload/prompts` | SSE stream | Upload prompts tarball → Cosmos NoSQL |
+| GET | `/health` | JSON `{"status":"ok", "service":"graph-query-api", "version":"0.5.0", "graph_backend":"cosmosdb"}` | Health check (includes version + backend type) |
 | GET | `/query/prompts` | JSON | List prompts (filter: `?agent=X&scenario=Y`) |
 | GET | `/query/prompts/scenarios` | JSON | List distinct scenario names with prompt counts |
 | GET | `/query/prompts/{prompt_id}` | JSON | Get specific prompt (requires `?agent=X` for partition key) |
@@ -618,8 +635,11 @@ GRAPH_BACKEND = GraphBackendType(os.getenv("GRAPH_BACKEND", "cosmosdb").lower())
 # --- Shared credential (lazy-init, cached singleton) ---
 _credential = None
 def get_credential() -> DefaultAzureCredential:
-    # WARNING: Do NOT use this in asyncio.to_thread() sync functions.
-    # Create a fresh DefaultAzureCredential() inside the thread function instead.
+    # Returns cached DefaultAzureCredential instance.
+    # IMPORTANT (doc-only note — NOT in code comments): Do NOT use this in
+    # asyncio.to_thread() sync functions. Create a fresh DefaultAzureCredential()
+    # inside the thread function instead — the shared instance may have an
+    # incompatible transport if initialized in the async context.
 
 # --- Per-request context (FastAPI dependency) ---
 @dataclass
@@ -736,10 +756,12 @@ it closes the old client and creates a new one. Protected by `threading.Lock()`.
 ### `graph-query-api/router_ingest.py` — Upload + Listing Endpoints
 
 **IMPORTANT CODE ORGANIZATION:**
-- Lines ~1-120: imports, helpers (`_extract_tar`, `_gremlin_client`, `_gremlin_submit`, `_read_csv`, `_ensure_gremlin_graph`)
-- Lines ~120-600: **OLD commented-out monolithic upload code** (DEAD CODE — should be removed)
-- Lines ~600-760: `GET /query/scenarios`, `DELETE /query/scenario/{name}`, `GET /query/indexes`
-- Lines ~760-1329: **ACTIVE per-type upload endpoints** (`/upload/graph`, `/upload/telemetry`, `/upload/runbooks`, `/upload/tickets`, `/upload/prompts`)
+- Lines ~1-50: imports, logger, router prefix `/query`
+- Lines ~51-125: helpers (`_gremlin_client`, `_gremlin_submit`, `_read_csv`, `_ensure_gremlin_graph`)
+- Lines ~127-600: **OLD commented-out monolithic upload code** (DEAD CODE — should be removed)
+- Lines ~609-730: `GET /query/scenarios` (L609), `DELETE /query/scenario/{name}` (L671), `GET /query/indexes` (L686)
+- Lines ~731-744: `_extract_tar` helper
+- Lines ~745-1376: **ACTIVE per-type upload endpoints** (`upload_graph` L745, `upload_telemetry` L873, `upload_runbooks` L957, `upload_tickets` L1055, `upload_prompts` L1163)
 
 **Two separate Gremlin retry implementations**:
 - `backends/cosmosdb.py` `_submit_query()` — used by query/topology endpoints, handles `WSServerHandshakeError`, reconnects on generic errors
@@ -1254,8 +1276,8 @@ upload/provisioning). Uses `aria-modal="true"` and `role="dialog"` attributes.
 12. **`useInvestigation` stale closure bug** — `getQueryHeaders` is NOT in the `submitAlert` `useCallback` dependency array. If user switches `activeGraph` without changing alert text, the OLD `X-Graph` header is sent.
 
 13. **Shared SSE utility pattern** (`utils/sseStream.ts`): Two exports:
-    - `consumeSSE(response, handlers, signal?)` — Low-level: takes a `Response`, reads `ReadableStream`, parses `data:` lines, dispatches to `onProgress`/`onComplete`/`onError` handlers
-    - `uploadWithSSE(url, formData, handlers, signal?)` — High-level: wraps `fetch` + `consumeSSE` for form upload endpoints
+    - `consumeSSE(response, handlers, signal?)` — Low-level: takes a `Response`, reads `ReadableStream`, parses `data:` lines, dispatches to `onProgress`/`onComplete`/`onError` handlers. Returns the last complete event payload.
+    - `uploadWithSSE(endpoint, file, handlers, params?, signal?)` — High-level: takes a `File` (not `FormData`), builds `FormData` internally, appends optional `params` as URL query parameters, wraps `fetch` + `consumeSSE` for form upload endpoints
     - Completion detection uses heuristic field-checking (`scenario`, `index`, `graph`, `prompts_stored` keys in parsed JSON) because backend SSE streams use `data:` lines only, not `event:` type markers (deviation D-5)
 
 14. **AddScenarioModal auto-slot detection**: `detectSlot(filename)` parses the last hyphen-separated segment before `.tar.gz` to match file to upload slot. E.g., `cloud-outage-graph.tar.gz` → slot `graph`, scenarioName `cloud-outage`. Auto-fills scenario name input if empty. Multi-file drop assigns all matching files in one gesture.
@@ -1300,6 +1322,13 @@ scenarios/{scenario-name}/
 ```
 
 ### `scenario.yaml` Schema
+
+> **NOTE:** The schema below is an **illustrative composite example** showing all
+> possible fields. Actual scenario files may differ in field values. For instance,
+> the real `telco-noc` scenario uses `partition_key: /SourceNodeType` (not `/alert_id`),
+> `id_field: AlertId` (Pascal case), and `telemetry_baselines` as descriptive strings
+> (e.g., `normal: \"2–15 ms\"`) rather than structured objects. The general structure
+> and field names are stable; the values are scenario-specific.
 
 ```yaml
 name: telco-noc                     # Used to derive graph/database names
@@ -1627,7 +1656,7 @@ mention all 3 services.
 - **Derives Gremlin endpoint** from account name: `{account}.gremlin.cosmos.azure.com`
 - **Queries separate NoSQL account** (`{account}-nosql`) for NoSQL endpoint
 - Contains a dead `upload_with_retry` function (6 attempts, 30s wait) — defined but never called
-- `DEFAULT_SCENARIO` and `LOADED_SCENARIOS` vars synced in preprovision.sh are vestigial — not defined in azure_config.env template
+- `DEFAULT_SCENARIO` and `LOADED_SCENARIOS` vars ARE defined in `azure_config.env.template` (with defaults `telco-noc`) and synced in preprovision.sh, but are not consumed by any runtime code — they are vestigial from the pre-V8 CLI-based data loading workflow
 
 **Config bidirectional flow**:
 ```
@@ -1677,6 +1706,25 @@ services:
 **After code-only deploy:** If you changed agent provisioning logic or OpenAPI specs,
 re-provision agents through the UI (⚙ → Provision Agents) — old agents in Foundry
 still have old tool specs baked in.
+
+### Full Teardown (`infra/nuclear_teardown.sh`)
+
+Use when you need to completely destroy the environment and start fresh:
+
+```bash
+./infra/nuclear_teardown.sh
+```
+
+Steps:
+1. Sources `azure_config.env` (error-suppressed if missing)
+2. `azd down --force --purge` — destroys all azd-managed resources
+3. If `AI_FOUNDRY_NAME` + `AZURE_RESOURCE_GROUP` + `AZURE_LOCATION` are set: purges soft-deleted Cognitive Services account via `az cognitiveservices account purge`
+4. If `AZURE_RESOURCE_GROUP` is set: `az group delete --yes --no-wait` to clean up any lingering resources
+5. `azd env delete --yes` — removes local azd environment state
+
+**When to use vs. `azd down`:** Use `nuclear_teardown.sh` when `azd down` fails to
+fully clean up (orphaned Cognitive Services soft-deletes, resource locks), or when
+you need a guaranteed clean slate. Use `azd down` for normal teardown.
 
 ---
 
@@ -2103,6 +2151,39 @@ These agree **only when** the suffix values in `scenario.yaml` are the defaults
 endpoints now force hardcoded suffixes to maintain consistency. See SCENARIOHANDLING.md
 "Telemetry Database Derivation Coupling" section for full analysis.
 
+### CORS allow_credentials Mismatch
+API (:8000) sets `allow_credentials=True` in its CORS config; graph-query-api (:8100)
+does not. This is harmless when both services are behind nginx (browser always hits
+port 80), but could cause issues if a frontend ever needs credential-bearing requests
+directly to graph-query-api (e.g., in local dev with separate origins).
+
+### Two Gremlin Retry Implementations
+`backends/cosmosdb.py` `_submit_query()` (used by query/topology endpoints) and
+`router_ingest.py` `_gremlin_submit()` (used by upload endpoints) are separate
+retry implementations with different capabilities. `cosmosdb.py` handles `WSServerHandshakeError`
+and reconnects on generic errors; `router_ingest.py` is simpler (no reconnect logic).
+These should ideally be consolidated.
+
+### Inconsistent Tarball Extraction
+Only `/upload/graph` and `/upload/telemetry` use the shared `_extract_tar()` helper.
+`/upload/runbooks`, `/upload/tickets`, and `/upload/prompts` each do their own inline
+`tarfile.open()` + `extractall()` + `os.walk()`. Should be consolidated.
+
+### scripts/cosmos/ Empty Directory
+`scripts/cosmos/` exists but is empty. Dead directory from a previous implementation.
+
+### graph-query-api Lifespan Unused Import
+`main.py` imports `close_all_backends` from `backends` but does NOT call it in the
+lifespan shutdown — it calls `close_graph_backend()` + `close_telemetry_backend()`
+separately instead. The unused import should be removed or the shutdown should use
+`close_all_backends()`.
+
+### Template Has Vars Not Consumed at Runtime
+`azure_config.env.template` defines `RUNBOOKS_INDEX_NAME`, `TICKETS_INDEX_NAME`,
+`RUNBOOKS_CONTAINER_NAME`, `TICKETS_CONTAINER_NAME`, `DEFAULT_SCENARIO`, and
+`LOADED_SCENARIOS` — none of these are read by the API or graph-query-api at runtime.
+They were used by deprecated CLI scripts. They are harmless but misleading.
+
 ---
 
 ## Configuration Reference
@@ -2129,11 +2210,17 @@ All config lives in `azure_config.env`. Key variables:
 | `APP_URI` / `GRAPH_QUERY_API_URI` | postprovision | Agent OpenAPI tool base URL |
 | `EMBEDDING_MODEL` | Bicep (default: text-embedding-3-small) | Search vectorizer |
 | `EMBEDDING_DIMENSIONS` | Bicep (default: 1536) | Vector field dimensions |
-| `CORS_ORIGINS` | Bicep (default: *) / user (local: http://localhost:5173) | CORS allowed origins |
-
-**Note**: graph-query-api defaults `CORS_ORIGINS` to `http://localhost:5173,http://localhost:3000` (two origins) when the env var is not set.
+| `CORS_ORIGINS` | Bicep (default: *) / user (local: http://localhost:5173) | CORS allowed origins (see CORS discrepancy note in Unified Container Architecture) |
 | `AGENT_IDS_PATH` | Bicep (default: /app/scripts/agent_ids.json) | Path to provisioned agent IDs |
-| `CONTAINER_APP_HOSTNAME` | runtime (if set) | Fallback for `GRAPH_QUERY_API_URI` |
+| `CONTAINER_APP_HOSTNAME` | runtime (auto-set by Azure) | Fallback for `GRAPH_QUERY_API_URI` |
+| `DEFAULT_SCENARIO` | user (default: telco-noc) | Vestigial — in template but not consumed by runtime |
+| `LOADED_SCENARIOS` | user (default: telco-noc) | Vestigial — in template but not consumed by runtime |
+| `RUNBOOKS_INDEX_NAME` | user (default: runbooks-index) | In template but not consumed by graph-query-api runtime |
+| `TICKETS_INDEX_NAME` | user (default: tickets-index) | In template but not consumed by graph-query-api runtime |
+| `RUNBOOKS_CONTAINER_NAME` | user (default: runbooks) | In template but not consumed by graph-query-api runtime |
+| `TICKETS_CONTAINER_NAME` | user (default: tickets) | In template but not consumed by graph-query-api runtime |
+| `AI_FOUNDRY_ENDPOINT` | postprovision | AI Foundry hub endpoint (separate from PROJECT_ENDPOINT) |
+| `GRAPH_QUERY_API_PRINCIPAL_ID` | postprovision | Managed identity principal for RBAC |
 
 ### Local Development
 
@@ -2196,6 +2283,10 @@ cd frontend && npm run dev
 | LLM agent sends wrong header value | OpenAPI spec uses `default` — change to single-value `enum`. See Lessons #15 and #19 |
 | CAE needs VNet but already deployed | VNet is immutable on CAE. Must `azd down && azd up`. See Lesson #9 |
 | Sub-agent tool not executing | `FunctionTool` doesn't work with `ConnectedAgentTool`. Must use `OpenApiTool`. See Lesson #5 |
+| Full environment teardown needed | Use `infra/nuclear_teardown.sh` (azd down + Cognitive Services purge + RG delete + env delete) |
+| First Cosmos DB access slow (~20-30s) | ARM database/container creation on first use. See QOL backlog item #1 for pre-provisioning in Bicep |
+| Need to change dark theme colors | `frontend/src/styles/globals.css` — CSS custom properties for the entire color scheme |
+| Upload retry logic differs from query retry | `router_ingest.py` `_gremlin_submit` vs `cosmosdb.py` `_submit_query` — different retry capabilities |
 
 ---
 
@@ -2311,6 +2402,46 @@ Names must match: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`
 
 ---
 
+## Planned Work & QOL Backlog
+
+> **Source:** `documentation/QOLimprovements.md`
+
+| # | Improvement | Status | Architecture Impact |
+|---|-------------|--------|---------------------|
+| 1 | **Pre-provision core Cosmos databases in Bicep** — create `networkgraph` (Gremlin), `scenarios`, `telemetry` databases at infra deploy time to avoid first-use ARM creation delays | ⬜ Not done | Would require adding `Microsoft.DocumentDB/databaseAccounts/gremlinDatabases` and `sqlDatabases` resources to `infra/modules/cosmos-gremlin.bicep`. Eliminates the ~20-30s first-access block documented in Known Issues |
+| 2 | **Upload progress timer** — show elapsed time during scenario uploads | ⬜ Not done | Frontend-only change in `AddScenarioModal.tsx` |
+| 3 | **Graph-query-api log stream in UI** — third pane in MetricsBar for graph-query-api logs (currently only API logs visible because nginx routes `/api/logs` to :8000) | ⬜ Not done | Requires new nginx route (e.g., `/query/logs` → :8100) or exposing graph-query-api's `/api/logs` under a different path. Frontend needs second `LogStream` instance |
+| 4 | **Graph pause/unpause on mouse hover** — stop force simulation when mouse is over the graph | ⬜ Not done | `GraphCanvas.tsx` change; reference implementation may exist in `custom_skills/react-force-graph-2d/` |
+| 5 | **Right sidebar interaction history** — save/retrieve past investigations in Cosmos NoSQL (`interactions` database), show in sidebar with timestamps and scenario names, clickable to replay | ⬜ Not done | Requires new Cosmos database, new API endpoints, new frontend component + sidebar layout. Significant feature |
+| 6 | **Per-scenario topology databases** — move graph data from shared `networkgraph` database to scenario-specific databases (like telemetry/prompts pattern) for faster loading | ⬜ Not done | Would change the graph naming from `networkgraph/{scenario}-topology` to `{scenario}-graph/{scenario}-topology`. Affects `config.py`, `router_ingest.py`, `cosmosdb.py`, `agent_provisioner.py`. Breaking change for existing data |
+
+---
+
+## Fabric Integration (Future)
+
+> **Source:** `documentation/v9fabricintegration.md` (plan only — no implementation in main codebase)
+> **Reference code:** `fabric_implementation_references/` (full stack reference)
+
+Planned alternative to CosmosDB/Gremlin backend using Microsoft Fabric Ontology for graph data
+and Fabric Eventhouses for telemetry. Key architectural impacts if implemented:
+
+| Requirement | Description | Files Affected |
+|-------------|-------------|----------------|
+| Fabric workspace ID configuration | User provides workspace ID via Settings UI | `azure_config.env`, `ScenarioContext`, `SettingsModal` |
+| Ontology listing | Read available ontologies from Fabric workspace | New backend module in `graph-query-api/backends/` |
+| Backend toggle | Checkbox in Settings to switch between CosmosDB and Fabric | `SettingsModal.tsx` (new tab), `config.py` (backend factory) |
+| Graph topology from Fabric | Query Fabric ontology for topology visualization | New `GraphBackend` implementation |
+| Telemetry from Eventhouses | Query Fabric eventhouse for telemetry data | New telemetry backend |
+| Agent data connections | Create Fabric workspace connections for OpenApiTool | `agent_provisioner.py` modifications |
+
+**Current state:** Reference implementations exist in `fabric_implementation_references/` directory
+(full API, frontend, graph-query-api, data, infra). Root `pyproject.toml` includes
+`azure-storage-file-datalake>=12.18.0` (OneLake/ADLS Gen2 dependency — for Fabric integration).
+Env vars `FABRIC_ONTOLOGY_ID` and `FABRIC_GRAPH_MODEL_ID` may exist in some `azure_config.env` files
+but are NOT in the template and NOT consumed by any runtime code.
+
+---
+
 ## SDK Versions
 
 | Package | Version | Notes |
@@ -2347,7 +2478,9 @@ Names must match: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`
 | `documentation/SCENARIOHANDLING.md` | Scenario management feature spec — UX design, backend schema, implementation phases, deviations |
 | `documentation/azure_deployment_lessons.md` | Detailed Azure deployment lessons (Private Endpoints, Policy, VNet, Bicep patterns) |
 | `documentation/CUSTOM_SKILLS.md` | Custom skills documentation (neo4j, cosmosdb gremlin, etc.) |
-| `documentation/v11modularagentworkflows.md` | V11 modular agent workflows |
+| `documentation/v11customizableagentworkflows.md` | V11 customizable agent workflows (placeholder — currently empty) |
 | `documentation/v8codesimplificationandrefactor.md` | V8 code simplification and refactor notes |
-| `documentation/v10fabricintegration.md` | V10 Fabric integration plans |
+| `documentation/v9fabricintegration.md` | V9 Fabric ontology integration plan (alternative graph backend) |
+| `documentation/QOLimprovements.md` | QOL improvement backlog (DB pre-provisioning, upload timer, graph pause, interaction history) |
+| `fabric_implementation_references/` | Reference implementation for Fabric integration (full stack: API, frontend, graph-query-api, data, infra) |
 | `documentation/deprecated/` | 16 historical docs (TASKS, BUGSTOFIX, SCENARIO, older versions) — kept for reference |
