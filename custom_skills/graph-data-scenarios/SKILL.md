@@ -151,10 +151,37 @@ This file is the **single source of truth** for the graph:
 ### Step 7: Write Prompt Fragments
 
 These connect the data to the AI agents:
-- `orchestrator.md` — telemetry baseline ranges, alert types, investigation flow
-- `graph_explorer/core_instructions.md` — Gremlin traversal patterns using this scenario's edge labels
-- `telemetry_agent.md` — Cosmos NoSQL container schemas, partition keys, value ranges
-- `default_alert.md` — a realistic alert message that kicks off the demo investigation
+- `foundry_orchestrator_agent.md` — investigation flow, telemetry baselines, alert types, sub-agent descriptions, scenario context with graph name
+- `foundry_telemetry_agent_v2.md` — Cosmos NoSQL container schemas, partition keys, value ranges, X-Graph header rule
+- `graph_explorer/core_instructions.md` — Gremlin traversal patterns using this scenario's edge labels, X-Graph header rule
+- `graph_explorer/core_schema.md` — full entity schema with all instances and relationships
+- `graph_explorer/description.md` — agent description for Foundry registration
+- `graph_explorer/language_gremlin.md` — Gremlin query examples for this scenario's relationships
+- `graph_explorer/language_mock.md` — natural language examples for mock mode
+- `foundry_runbook_kb_agent.md` — runbook agent prompt with domain-specific runbook descriptions
+- `foundry_historical_ticket_agent.md` — ticket agent prompt with domain-specific ticket descriptions
+- `default_alert.md` — a realistic alert CSV that kicks off the demo investigation
+
+**CRITICAL: X-Graph Header Rule.** Three prompts MUST contain explicit instructions
+telling the agent to include the `X-Graph` header with the concrete scenario graph
+name. This is because the Azure AI Foundry OpenApiTool does NOT reliably enforce
+`default` or `enum` values from OpenAPI specs — the LLM controls the parameter
+value and often ignores schema constraints. The defense-in-depth approach uses
+BOTH an OpenAPI `enum` constraint AND a prompt-level CRITICAL RULE.
+
+Files requiring the X-Graph rule:
+1. `foundry_orchestrator_agent.md` — "Scenario Context" section stating the active graph name
+2. `foundry_telemetry_agent_v2.md` — CRITICAL RULE #7: "Always include the X-Graph header with value `<scenario>-topology`"
+3. `graph_explorer/core_instructions.md` — CRITICAL RULE #6: "Always include the X-Graph header with value `<scenario>-topology`"
+
+The graph name follows the pattern `<scenario-name>-topology` (e.g., `telco-noc-topology`,
+`cloud-outage-topology`, `customer-recommendation-topology`). The telemetry database
+is derived at runtime: `rsplit("-", 1)[0]` + `-telemetry` (e.g., `telco-noc-telemetry`).
+
+**Scenario prompts must use concrete values, not placeholders.** The scenario-specific
+prompts (in `data/scenarios/<name>/data/prompts/`) are uploaded to Cosmos DB and used
+by the API provisioner, which does NOT perform placeholder substitution. Use the actual
+graph name (e.g., `cloud-outage-topology`), not `{graph_name}`.
 
 ## References
 

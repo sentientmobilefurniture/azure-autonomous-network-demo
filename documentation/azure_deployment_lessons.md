@@ -749,3 +749,76 @@ transport.
 `infra/modules/roles.bicep`:
 - `DocumentDB Account Contributor` on both Cosmos accounts (management plane)
 - `Cosmos DB Built-in Data Contributor` SQL role on the NoSQL account (data plane)
+
+---
+
+## 19. OpenAPI Tool Headers — LLMs Ignore `default` AND `enum`; Use Prompt Reinforcement
+
+**Problem:** When Foundry's `OpenApiTool` sends HTTP requests on behalf of an agent,
+the LLM decides what values to use for each parameter — including headers. Both
+`default` and single-value `enum` in the OpenAPI schema are supposed to constrain
+the value, but the LLM may ignore both and choose its own value (e.g., sending
+`X-Graph: topology` instead of `X-Graph: telco-noc-topology`).
+
+**How this manifests:**
+
+- **Graph queries:** The agent calls `/query/graph` with `X-Graph: topology`.
+  The graph `topology` doesn't exist — the actual graph is `telco-noc-topology`.
+  Query returns `{columns: [], data: []}`.
+
+- **Telemetry queries:** Same wrong header → database derivation falls through:
+  `"topology"` has no hyphens → falls back to `COSMOS_NOSQL_DATABASE="telemetry"`.
+  But the actual database is `telco-noc-telemetry` → Cosmos returns
+  `Resource Not Found`.
+
+**Fix — defense in depth (OpenAPI enum + prompt reinforcement):**
+
+Neither `enum` alone nor `default` alone is enough. The working approach uses
+**both** an OpenAPI `enum` constraint AND explicit prompt instructions:
+
+1. **OpenAPI spec** — `enum` with the substituted value:
+   ```yaml
+   parameters:
+     - name: X-Graph
+       in: header
+       required: true
+       schema:
+         type: string
+         enum: ["{graph_name}"]  # Substituted at provisioning time
+       description: |
+         The graph name to route this request to. Always use the value shown.
+   ```
+
+2. **Agent prompts** — explicit CRITICAL RULE in each agent's system prompt:
+   ```markdown
+   6. **Always include the X-Graph header.** When calling the `query_graph` tool,
+      you MUST include the `X-Graph` header with the value `telco-noc-topology`.
+      This routes your query to the correct scenario graph. Without this header,
+      queries will return empty results. Never shorten or modify this value.
+   ```
+
+3. **Provisioner substitution** — both specs and prompts use `{graph_name}` and
+   `{scenario_prefix}` placeholders, replaced at provisioning time:
+   ```python
+   # In _load_openapi_spec():
+   raw = raw.replace("{graph_name}", graph_name)
+
+   # In load_prompt() and load_graph_explorer_prompt():
+   text = text.replace("{graph_name}", graph_name)
+   text = text.replace("{scenario_prefix}", scenario_prefix)
+   ```
+
+**Why both are needed:** The `enum` constraint in the OpenAPI spec gives
+the LLM the correct value in the tool schema. The prompt instruction
+reinforces it in natural language, making it harder for the LLM to choose
+a different value. Either alone may not be sufficient — together they
+provide defense in depth.
+
+**Telemetry database derivation:** The server derives the telemetry database
+from the `X-Graph` header value:
+- `telco-noc-topology` → `rsplit("-", 1)[0]` → `telco-noc` → `telco-noc-telemetry` ✓
+- `topology` (wrong) → no hyphens → falls back to `"telemetry"` → doesn't exist ✗
+
+**Rule:** For critical routing values in OpenApiTool, use defense in depth:
+OpenAPI `enum` + explicit prompt instruction + provisioner substitution.
+Do not rely on any single mechanism alone.

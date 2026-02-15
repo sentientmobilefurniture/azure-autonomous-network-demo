@@ -90,23 +90,21 @@ def get_scenario_context(
     """FastAPI dependency — resolve scenario context from X-Graph header.
 
     If the header is absent, falls back to COSMOS_GREMLIN_GRAPH env var.
+
     Telemetry database is derived from the graph name:
       "cloud-outage-topology" → prefix "cloud-outage" → "cloud-outage-telemetry"
     Falls back to COSMOS_NOSQL_DATABASE if no prefix can be derived.
     """
-    graph = x_graph or COSMOS_GREMLIN_GRAPH
+    graph_name = x_graph or COSMOS_GREMLIN_GRAPH
 
-    # Derive scenario prefix from graph name
-    # "cloud-outage-topology" → "cloud-outage"
-    # "topology" (legacy) → use env var default
-    if "-" in graph:
-        prefix = graph.rsplit("-", 1)[0]
+    if "-" in graph_name:
+        prefix = graph_name.rsplit("-", 1)[0]
         telemetry_db = f"{prefix}-telemetry"
     else:
         telemetry_db = COSMOS_NOSQL_DATABASE
 
     return ScenarioContext(
-        graph_name=graph,
+        graph_name=graph_name,
         gremlin_database=COSMOS_GREMLIN_DATABASE,
         telemetry_database=telemetry_db,
         backend_type=GRAPH_BACKEND,

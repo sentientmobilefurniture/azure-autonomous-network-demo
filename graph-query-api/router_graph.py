@@ -58,8 +58,6 @@ async def query_graph(
             error=f"Backend not implemented: {e}. This backend is not yet available.",
         )
     except HTTPException as e:
-        # Catch HTTPExceptions from backends (GQL errors, rate limits, config errors)
-        # and surface them as 200 + error payload so the agent LLM can read & retry
         logger.warning("Graph query HTTP error (returning 200 with error body): %s %s", e.status_code, e.detail)
         return GraphQueryResponse(
             error=f"Graph query error (HTTP {e.status_code}): {e.detail}. Read the error, fix the query, and retry.",

@@ -120,10 +120,15 @@ def _execute_cosmos_sql(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Endpoint
+# ---------------------------------------------------------------------------
+
+
 @router.post(
     "/query/telemetry",
     response_model=TelemetryQueryResponse,
-    summary="Execute a SQL query against telemetry data in Cosmos DB",
+    summary="Execute a SQL query against telemetry",
     description=(
         "Submits a Cosmos SQL query to a telemetry container in Azure Cosmos "
         "DB NoSQL. The target database is derived from the X-Graph header. "

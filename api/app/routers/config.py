@@ -149,15 +149,32 @@ async def apply_config(req: ConfigApplyRequest):
                         with urllib.request.urlopen(prompts_req, timeout=30) as resp:
                             prompts_data = _json.loads(resp.read())
 
+                        # Substitute placeholders — scenario prompts stored in
+                        # Cosmos may still contain {graph_name} / {scenario_prefix}
+                        # if they originated from template files.
+                        _graph_name = req.graph  # e.g. "telco-noc-topology"
+                        _scenario_pfx = _graph_name.rsplit("-", 1)[0] if "-" in _graph_name else _graph_name
+
                         for p in prompts_data.get("prompts", []):
                             if p.get("is_active") and p.get("content"):
                                 agent_name = p.get("agent", "")
                                 if agent_name and agent_name not in prompts:
-                                    prompts[agent_name] = p["content"]
-                                    on_progress("prompts", f"Loaded {agent_name} prompt ({len(p['content'])} chars)")
+                                    content = p["content"]
+                                    content = content.replace("{graph_name}", _graph_name)
+                                    content = content.replace("{scenario_prefix}", _scenario_pfx)
+                                    prompts[agent_name] = content
+                                    on_progress("prompts", f"Loaded {agent_name} prompt ({len(content)} chars)")
 
                     except Exception as e:
                         on_progress("prompts", f"Could not fetch from Cosmos: {e}")
+
+                # Ensure placeholder substitution for directly-passed prompts too
+                _gn = req.graph
+                _sp = _gn.rsplit("-", 1)[0] if "-" in _gn else _gn
+                prompts = {
+                    k: v.replace("{graph_name}", _gn).replace("{scenario_prefix}", _sp)
+                    for k, v in prompts.items()
+                }
 
                 # Fall back to minimal defaults for any missing agents
                 defaults = {

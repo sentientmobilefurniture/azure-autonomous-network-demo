@@ -77,13 +77,48 @@ about CPU, still include normal-range values for optical power, packet loss, etc
 
 | File | Purpose |
 |------|---------|
-| `orchestrator.md` | Investigation flow, telemetry baselines, alert types for this domain |
-| `graph_explorer/core_schema.md` | Auto-generated from `graph_schema.yaml` — entity types and properties |
-| `graph_explorer/core_instructions.md` | Gremlin traversal patterns using this scenario's edge labels |
-| `telemetry_agent.md` | Cosmos NoSQL container schemas, partition keys, column types, value ranges |
-| `runbook_agent.md` | AI Search index name, query patterns for this domain's runbooks |
-| `ticket_agent.md` | AI Search index name, query patterns for this domain's tickets |
-| `default_alert.md` | A realistic alert message that kicks off the demo investigation |
+| `foundry_orchestrator_agent.md` | Investigation flow, telemetry baselines, alert types, sub-agent descriptions, **Scenario Context with graph name** |
+| `foundry_telemetry_agent_v2.md` | Cosmos NoSQL container schemas, partition keys, column types, value ranges, **X-Graph header CRITICAL RULE** |
+| `foundry_runbook_kb_agent.md` | Domain-specific runbook descriptions |
+| `foundry_historical_ticket_agent.md` | Domain-specific ticket descriptions |
+| `graph_explorer/core_schema.md` | Full entity schema — all instances and relationships |
+| `graph_explorer/core_instructions.md` | Gremlin traversal patterns using this scenario's edge labels, **X-Graph header CRITICAL RULE** |
+| `graph_explorer/description.md` | Agent description for Foundry registration |
+| `graph_explorer/language_gremlin.md` | Gremlin query examples for this scenario's relationships |
+| `graph_explorer/language_mock.md` | Natural language examples for mock mode |
+| `default_alert.md` | A realistic alert CSV that kicks off the demo investigation |
+
+### X-Graph Header Rule (CRITICAL)
+
+Three prompt files **must** contain explicit instructions telling the LLM agent
+to include the `X-Graph` HTTP header with the concrete scenario graph name when
+calling graph or telemetry API tools. This is required because:
+
+1. The Azure AI Foundry `OpenApiTool` does NOT reliably enforce `default` or `enum`
+   constraints from OpenAPI specs — the LLM controls parameter values.
+2. Without the correct header, queries fail with "Resource Not Found" or return empty results.
+
+The defense-in-depth approach uses BOTH:
+- **OpenAPI `enum` constraint**: `enum: ["<scenario>-topology"]` in the spec
+- **Prompt CRITICAL RULE**: Natural language instruction in the agent's system prompt
+
+**Files requiring the rule:**
+
+| File | Section | Example text |
+|------|---------|--------------|
+| `foundry_orchestrator_agent.md` | Scenario Context | "The current active scenario graph is `cloud-outage-topology`." |
+| `foundry_telemetry_agent_v2.md` | CRITICAL RULE #7 | "Always include the X-Graph header with the value `cloud-outage-topology`." |
+| `graph_explorer/core_instructions.md` | CRITICAL RULE #6 | "Always include the X-Graph header with the value `cloud-outage-topology`." |
+
+**Graph name convention:** `<scenario-name>-topology` (e.g., `telco-noc-topology`,
+`cloud-outage-topology`, `customer-recommendation-topology`).
+
+**Telemetry DB derivation:** At runtime, `rsplit("-", 1)[0]` + `-telemetry`
+(e.g., `cloud-outage-topology` → `cloud-outage-telemetry`).
+
+**Use concrete values, not placeholders.** Scenario-specific prompts are uploaded
+to Cosmos DB and used by the API provisioner, which does NOT perform `{graph_name}`
+substitution. Always bake in the actual graph name.
 
 ### Optional custom instructions (zero-cost if unused)
 

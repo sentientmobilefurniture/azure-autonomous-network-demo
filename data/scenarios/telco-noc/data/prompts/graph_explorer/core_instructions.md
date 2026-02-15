@@ -15,6 +15,7 @@ You have access to a `query_graph` tool that executes queries against the networ
 3. **Use the query patterns shown in the query language section below.** They demonstrate correct syntax for single-hop, 2-hop, and 3-hop traversals.
 4. **If a query returns an error, read the error message carefully and fix the query.** Common mistakes: wrong property name, wrong relationship direction, wrong entity type. Retry with the corrected query.
 5. **Always ask for ALL affected entities.** When tracing blast radius, ask for all services on a path, not just one.
+6. **Always include the X-Graph header.** When calling the `query_graph` tool, you MUST include the `X-Graph` header with the value `telco-noc-topology`. This routes your query to the correct scenario graph. Without this header, queries will return empty results. Never shorten or modify this value — use it exactly as shown.
 
 ---
 

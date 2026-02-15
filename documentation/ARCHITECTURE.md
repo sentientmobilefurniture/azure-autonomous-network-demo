@@ -94,8 +94,10 @@ Browser ─── POST /query/upload/graph ──▶ nginx :80 ──▶ graph-q
 | Program | Command | Working Dir | Priority |
 |---------|---------|-------------|----------|
 | nginx | `nginx -g "daemon off;"` | — | 10 |
-| api | `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` | `/app/api` | 20 |
-| graph-query-api | `uv run uvicorn main:app --host 127.0.0.1 --port 8100` | `/app/graph-query-api` | 20 |
+| api | `/usr/local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` | `/app/api` | 20 |
+| graph-query-api | `/usr/local/bin/uv run uvicorn main:app --host 127.0.0.1 --port 8100` | `/app/graph-query-api` | 20 |
+
+All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/run/supervisord.pid`.
 
 ---
 
@@ -420,11 +422,16 @@ by composing from the `graph_explorer/` subdirectory in the upload logic.
 
 Agents are provisioned via `POST /api/config/apply` which:
 1. Receives `{graph, runbooks_index, tickets_index, prompt_scenario}` from frontend
-2. Calls `GET http://127.0.0.1:8100/query/prompts` (localhost loopback) to fetch prompts for the selected `prompt_scenario`
-3. Falls back to minimal placeholder prompts if Cosmos has no prompts for that scenario
+2. Calls `GET http://127.0.0.1:8100/query/prompts?scenario={prefix}&include_content=true` (localhost loopback via `urllib.request`, timeout 30s) to fetch prompts
+3. Falls back to minimal placeholder prompts if Cosmos has no prompts for that scenario:
+   - `orchestrator: "You are an investigation orchestrator."`
+   - `graph_explorer: "You are a graph explorer agent."`
+   - `telemetry: "You are a telemetry analysis agent."`
+   - `runbook: "You are a runbook knowledge base agent."`
+   - `ticket: "You are a historical ticket search agent."`
 4. Imports `AgentProvisioner` from `scripts/agent_provisioner.py` via `sys.path` manipulation
-5. Calls `provisioner.provision_all()` with all bindings
-6. Stores result in memory (`_current_config`) + writes `agent_ids.json`
+5. Calls `provisioner.provision_all()` with `force=True` (deletes existing agents first)
+6. Stores result in memory (`_current_config` protected by `threading.Lock()`) + writes `agent_ids.json`
 7. Streams SSE progress events back to frontend
 
 ### AgentProvisioner — What It Creates
@@ -453,6 +460,18 @@ Replaced at runtime via string replace with `GRAPH_QUERY_API_URI` (Container App
 ```
 
 **Progress callback**: `on_progress(step: str, detail: str)` — steps are: `"cleanup"`, `"graph_explorer"`, `"telemetry"`, `"runbook"`, `"ticket"`, `"orchestrator"`, `"save"`.
+
+**`AlertRequest` validation**: `text: str`, `min_length=1`, `max_length=10_000`.
+
+**Stub mode**: When `is_configured()` returns False, `alert.py` returns a simulated
+investigation with 4 fake agent steps (TelemetryAgent, GraphExplorerAgent,
+RunbookKBAgent, HistoricalTicketAgent) with 0.5s delays. The stub response tells
+the user to provision agents.
+
+**Default alert text** (hardcoded in `useInvestigation.ts`):
+```
+14:31:14.259 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+```
 
 ### Investigation Flow
 
@@ -609,7 +628,14 @@ def get_backend_for_graph(graph_name: str, backend_type: GraphBackendType) -> Gr
 
 async def close_all_backends():
     # Called during app lifespan shutdown — iterates and closes all cached backends
+    # Uses inspect.isawaitable() to dynamically check if backend.close() returns
+    # an awaitable and awaits it if so.
 ```
+
+**graph-query-api has its own SSE log system** (separate from the API’s `logs.py`):
+- Custom `_SSELogHandler` installed in `main.py`, filters only `graph-query-api.*` loggers
+- Ring buffer: `deque(maxlen=100)`, subscriber queues: `maxsize=500`
+- Exposed at `GET /api/logs` on port 8100 (but shadowed by nginx routing `/api/*` → :8000)
 
 ### `graph-query-api/backends/cosmosdb.py` — CosmosDBGremlinBackend
 
@@ -724,6 +750,13 @@ Container: `prompts` with partition key `/agent`.
 }
 ```
 
+**ASYNC VIOLATION WARNING**: `get_prompt`, `create_prompt`, `update_prompt`,
+and `delete_prompt` make synchronous `container.read_item()`, `container.upsert_item()`,
+and `container.query_items()` calls directly in `async def` handlers WITHOUT wrapping
+in `asyncio.to_thread()`. This violates the Critical Pattern #1 rule. Only `list_prompts`
+and `list_prompt_scenarios` correctly use `asyncio.to_thread()`. These sync calls
+block the event loop for the duration of each Cosmos round-trip (~50-200ms each).
+
 **Versioning**: On `POST /query/prompts`, queries existing versions for `(agent, scenario, name)` ordered by `version DESC`. Auto-increments. Deactivates all previous versions (`is_active=False`).
 
 **Sorting**: Cosmos NoSQL requires a composite index for multi-field ORDER BY,
@@ -736,29 +769,44 @@ fetching: `sort(key=lambda x: (agent, scenario, -version))`.
 
 ### `api/app/orchestrator.py` — Agent Bridge
 
-- `is_configured()`: checks `agent_ids.json` exists + `PROJECT_ENDPOINT` + `AI_FOUNDRY_PROJECT_NAME` set + orchestrator ID present
+- `is_configured()`: checks `agent_ids.json` exists + `PROJECT_ENDPOINT` + `AI_FOUNDRY_PROJECT_NAME` set + orchestrator ID present in parsed JSON
 - `_get_project_client()`: builds endpoint as `{PROJECT_ENDPOINT.rstrip('/')}/api/projects/{AI_FOUNDRY_PROJECT_NAME}`
 - `load_agents_from_file()`: reads `agent_ids.json`, returns list of `{name, id, status}` dicts
 - `run_orchestrator(alert_text)`: async generator yielding SSE events via `asyncio.Queue` bridge from sync `AgentEventHandler` running in a daemon thread
 
+**Lazy Azure imports**: All `azure.*` packages are imported inside functions
+(not at module level). This lets the app start even without them installed,
+though it will fail at runtime when called.
+
 **SSEEventHandler callback mapping**:
-- `on_thread_run(run)`: detects `completed` (captures token usage) and `failed` (captures error code + message)
+- `on_thread_run(run)`: detects `completed` (captures token usage from `run.usage.total_tokens`) and `failed` (captures error code + message). Defensively handles both object attributes (`getattr`) and dict access (`.get()`) to cover SDK version variations.
 - `on_run_step(step)`: on `in_progress` emits `step_thinking`; on `completed`+`tool_calls` extracts `connected_agent` details (name, arguments, output) and emits `step_start` + `step_complete`; on `failed`+`tool_calls` logs full error detail and emits failed step
 - `on_message_delta(delta)`: accumulates `response_text` from streaming deltas
 - `on_error(data)`: emits `error` event
+
+**Event ordering quirk**: Both `step_start` AND `step_complete` are emitted
+back-to-back in the `completed` handler — NOT separated by time. The `step_thinking`
+event (emitted on `in_progress`) is the real "in-progress" indicator.
+
+**Tool call parsing**: For `connected_agent` type, extracts `agent_name` from `ca.name`
+or looks up `ca.agent_id` in `agent_names`. Truncation: query at 500 chars, response at 2000 chars.
+Also handles `azure_ai_search` type (sets `agent_name = "AzureAISearch"`).
 
 **Thread-safe queue bridge**: `_put(event, data)` uses `asyncio.run_coroutine_threadsafe(queue.put(...), loop)`.
 
 ### `api/app/routers/config.py` — Agent Provisioning Endpoint
 
-**sys.path manipulation**: Adds both `PROJECT_ROOT/scripts` and `PROJECT_ROOT/../scripts` to handle local dev vs container paths.
+**sys.path manipulation**: Adds both `PROJECT_ROOT/scripts` and `PROJECT_ROOT/../scripts` to handle local dev vs container paths. Uses `sys.path.insert(0, ...)` — checks which exists first and adds only that one.
+
+**Dual `load_dotenv`**: Both `main.py` and `orchestrator.py` call `load_dotenv()`
+with different relative paths — both resolve to the same `azure_config.env`.
 
 **Prompt resolution order** (in `POST /api/config/apply`):
 1. `req.prompts` (explicit content dict, if provided)
 2. Cosmos lookup via `urllib.request` to `http://127.0.0.1:8100/query/prompts?scenario={prompt_scenario}` (localhost loopback to graph-query-api)
 3. Fallback defaults: `{"orchestrator": "You are an investigation orchestrator.", ...}`
 
-**Search connection ID construction**:
+**Search connection ID construction** (constant: `AI_SEARCH_CONNECTION_NAME = "aisearch-connection"`):
 ```python
 search_conn_id = (
     f"/subscriptions/{sub_id}/resourceGroups/{rg}"
@@ -976,6 +1024,18 @@ interface SearchIndex {
 
 7. **SettingsModal `activePromptSet`** is local state only — not persisted to context. Survives across open/close because the modal component is always mounted (hidden via `if (!open) return null`).
 
+8. **ScenarioContext has NO persistence** — all selections (`activeGraph`, `activeRunbooksIndex`, `activeTicketsIndex`) reset on browser refresh. No `localStorage` usage.
+
+9. **UploadBox `onComplete` gap** — After uploading prompts, the Prompt Set dropdown is NOT auto-refreshed. User must close/reopen the modal. Graph upload triggers `fetchScenarios()`, Runbooks/Tickets trigger `fetchIndexes()`, but Prompts and Telemetry trigger nothing.
+
+10. **UploadBox completion detection is heuristic**: `if ('scenario' in d || 'index' in d || 'database' in d || 'graph' in d)`. Fragile if backend response structure changes.
+
+11. **`useScenarios.uploadScenario()` is dead code** — calls the removed `/query/scenario/upload` endpoint. Exported from the hook but never called by `SettingsModal`.
+
+12. **Vite dev proxy has 5 entries**, not 3: `/api/alert` → :8000 (SSE configured), `/api/logs` → :8000 (SSE configured), `/api` → :8000 (plain), `/health` → :8000, `/query` → :8100 (SSE configured). The SSE-configured entries add `cache-control: no-cache` and `x-accel-buffering: no` headers — without these, SSE streams are buffered during local dev.
+
+13. **`useInvestigation` stale closure bug** — `getQueryHeaders` is NOT in the `submitAlert` `useCallback` dependency array. If user switches `activeGraph` without changing alert text, the OLD `X-Graph` header is sent.
+
 ---
 
 ## Data Schema & Generation
@@ -1108,7 +1168,17 @@ edges:
     filter:                          # Optional row filter
       column: link_type
       value: core
+      negate: false                   # Optional (default false). If true, includes rows
+                                      # where column != value (invert filter).
 ```
+
+**Telemetry upload ID fallback**: When neither `id_field` is configured in
+`scenario.yaml` nor an `id` column exists in the CSV, the upload generates
+document IDs from the first two CSV columns: `f"{row[col0]}-{row[col1]}"`.
+
+**Graph explorer prompt recursive fallback**: Upload first checks
+`prompts_dir/graph_explorer/`, then falls back to `tmppath.rglob("graph_explorer")`
+recursive search if the subdirectory isn't at the expected location.
 
 ### Tarball Generation (`data/generate_all.sh`)
 
@@ -1142,7 +1212,7 @@ Workflow: `./data/generate_all.sh [scenario-name]` — iterates scenario dirs, r
 | `location` | (required) | Azure region |
 | `principalId` | — | User principal for role assignments |
 | `gptCapacity` | 300 | In 1K TPM units |
-| `graphBackend` | `"cosmosdb"` | Controls conditional Cosmos deployment |
+| `graphBackend` | `"cosmosdb"` | `@allowed(['cosmosdb'])` — only `cosmosdb` at Bicep level; `mock` is a runtime-only env var override, never a Bicep parameter |
 | `devIpAddress` | — | For local Cosmos firewall rules |
 
 **Modules deployed** (9 total):
@@ -1180,6 +1250,34 @@ EMBEDDING_MODEL=text-embedding-3-small, EMBEDDING_DIMENSIONS=1536
 
 Uses deterministic hash token: `toLower(uniqueString(subscription().id, environmentName, location))` — consistent across deployments, globally unique.
 
+### Bicep Patterns
+
+**`readEnvironmentVariable()` for config**: Bicep parameter files can read environment variables, avoiding hardcoded values:
+```bicepparam
+param cosmosGremlinDatabase = readEnvironmentVariable('COSMOS_GREMLIN_DATABASE', 'networkgraph')
+```
+Combined with `preprovision.sh` syncing values from `azure_config.env` to `azd env`, this creates a single-source-of-truth config pattern.
+
+**Conditional module deployment**: Use boolean parameters to skip expensive modules during iterative development:
+```bicep
+param deployCosmosGremlin bool
+
+module cosmos 'modules/cosmos.bicep' = if (deployCosmosGremlin) {
+  name: 'cosmos'
+  scope: rg
+  params: { ... }
+}
+
+// Downstream modules that depend on cosmos output:
+module privateEndpoints 'modules/private-endpoints.bicep' = if (deployCosmosGremlin) {
+  name: 'privateEndpoints'
+  scope: rg
+  params: {
+    cosmosAccountId: deployCosmosGremlin ? cosmos.outputs.accountId : ''
+  }
+}
+```
+
 ---
 
 ## Dockerfile & Container Build
@@ -1196,6 +1294,10 @@ FROM node:20-alpine AS frontend-build
 ```dockerfile
 FROM python:3.11-slim
 # Installs: nginx, supervisor, uv (from ghcr.io/astral-sh/uv:latest)
+
+# IMPORTANT: Both pyproject.toml AND uv.lock files are copied.
+# `uv sync --frozen` requires uv.lock to exist.
+# If uv.lock is missing, the build fails.
 
 # graph-query-api at /app/graph-query-api
 #   uv sync --frozen --no-dev --no-install-project
@@ -1272,7 +1374,18 @@ All defined in `infra/modules/roles.bicep`.
 Steps 4, 5, old-7 (search indexes, Cosmos data, agent provisioning) were removed.
 All data + agent operations happen through the UI.
 
-**Flags**: `--skip-infra`, `--skip-index`, `--skip-data`, `--skip-agents`, `--skip-local`, `--env NAME`, `--location LOC`, `--yes`
+**Flags**: `--skip-infra`, `--skip-local`, `--env NAME`, `--location LOC`, `--yes`
+
+**Dead flags** (parse but do nothing, steps removed): `--skip-index`, `--skip-data`, `--skip-agents`.
+
+**Default location**: `swedencentral`.
+
+**Health check**: 5 retries, 15s between attempts.
+
+**BUG — Step 7 (local services)**: The automated start only launches API (:8000) and
+frontend (:5173) but does NOT start graph-query-api (:8100). All `/query/*` requests
+fail in automated local mode. The `--skip-local` manual instructions correctly
+mention all 3 services.
 
 ### azd Lifecycle Hooks
 
@@ -1285,7 +1398,8 @@ All data + agent operations happen through the UI.
 - **Fetches Cosmos Gremlin primary key** via `az cosmosdb keys list`
 - **Derives Gremlin endpoint** from account name: `{account}.gremlin.cosmos.azure.com`
 - **Queries separate NoSQL account** (`{account}-nosql`) for NoSQL endpoint
-- RBAC retry helper: 6 attempts, 30s wait between (RBAC propagation)
+- Contains a dead `upload_with_retry` function (6 attempts, 30s wait) — defined but never called
+- `DEFAULT_SCENARIO` and `LOADED_SCENARIOS` vars synced in preprovision.sh are vestigial — not defined in azure_config.env template
 
 **Config bidirectional flow**:
 ```
@@ -1306,6 +1420,17 @@ azure_config.env ← postprovision ← Bicep outputs
 
 For code changes without infra changes: `azd deploy app` (rebuilds container, ~60-90s).
 Uses `remoteBuild: true` in `azure.yaml` — Docker images built in ACR, not locally.
+This avoids cross-platform issues (e.g., building on ARM Mac for Linux amd64):
+
+```yaml
+# azure.yaml
+services:
+  app:
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      remoteBuild: true
+```
 
 | Change Type | Command | Time |
 |-------------|---------|------|
@@ -1373,6 +1498,16 @@ The Gremlin wire protocol (WSS) does **not support Azure AD / Managed Identity**
 
 Sub-agents using `ConnectedAgentTool` run **server-side inside Foundry**. They cannot execute client-side callbacks. This means `FunctionTool` does NOT work — use `OpenApiTool` (HTTP endpoint) instead.
 
+| Tool Type | Execution | Works with ConnectedAgentTool? |
+|-----------|-----------|-------------------------------|
+| `FunctionTool` | Client-side callback | **No** — no client process to call back to |
+| `OpenApiTool` | Server-side REST call | **Yes** — Foundry calls the HTTP endpoint directly |
+| `AzureAISearchTool` | Server-side | **Yes** — Foundry has native integration |
+| `BingGroundingTool` | Server-side | **Yes** |
+| `CodeInterpreterTool` | Server-side sandbox | **Yes** |
+
+**Lesson:** If a sub-agent needs to access a database or custom service, you must expose it as an HTTP API and use `OpenApiTool`. There is no way to run arbitrary Python callbacks from a ConnectedAgentTool sub-agent.
+
 ### 6. OpenApiTool — HTTP Errors Are Fatal
 
 Foundry's `OpenApiTool` treats HTTP 4xx/5xx as fatal. The LLM never sees the error message. Solution: return HTTP 200 with error in the response body + instructional description in the OpenAPI spec.
@@ -1383,14 +1518,41 @@ Bicep only sets the *initial* state. Azure Policy evaluates continuously and can
 
 ### 8. Private Endpoints Pattern
 
-When any Azure service needs VNet connectivity:
-- Requires 3 resources: Private Endpoint + Private DNS Zone + DNS Zone Group
-- Cosmos DB needs **separate endpoints per API** (Gremlin `groupId: Gremlin`, NoSQL `groupId: Sql`)
-- Container Apps Environment VNet config is **immutable after creation** — can't add VNet in-place
+When any Azure service needs VNet connectivity, the standard pattern requires **3 resources per endpoint**:
+1. **Private Endpoint** — NIC attached to subnet, linked to target resource with API-specific `groupId`
+2. **Private DNS Zone** — resolves service FQDN to private IP (e.g., `privatelink.documents.azure.com`)
+3. **DNS Zone Group** — attaches DNS zone to endpoint for automatic A-record registration
+
+A **VNet Link** connects the Private DNS Zone to the VNet so DNS resolution works from within.
+
+Cosmos DB needs **separate endpoints per API**:
+
+| Cosmos DB API | groupId | Private DNS Zone |
+|---------------|---------|------------------|
+| NoSQL (SQL) | `Sql` | `privatelink.documents.azure.com` |
+| Gremlin | `Gremlin` | `privatelink.gremlin.cosmos.azure.com` |
+| MongoDB | `MongoDB` | `privatelink.mongo.cosmos.azure.com` |
+| Cassandra | `Cassandra` | `privatelink.cassandra.cosmos.azure.com` |
+| Table | `Table` | `privatelink.table.cosmos.azure.com` |
+
+Full DNS zone mapping for all Azure services: [Private endpoint DNS zone values](https://learn.microsoft.com/azure/private-link/private-endpoint-dns)
+
+**Keep Public Access Enabled During Provisioning:** If provisioning scripts run from your dev machine (outside VNet), keep `publicNetworkAccess: 'Enabled'` in Bicep. The private endpoint provides a parallel path — it doesn't require disabling public access. If policy later disables the public path, VNet-connected services still work; only external scripts break.
 
 ### 9. Container Apps VNet + External Ingress
 
 Must use `internal: false` in VNet config for the Container App because AI Foundry's `OpenApiTool` calls the app from **outside** the VNet. This preserves the public FQDN while routing outbound traffic through VNet + private endpoints.
+
+**Subnet sizing:**
+
+| Environment Type | Minimum Subnet | API Version |
+|-----------------|----------------|-------------|
+| Consumption-only (legacy) | `/23` (512 addresses) | `2023-05-01` |
+| Workload profiles | `/27` (32 addresses) | `2023-05-01` and later |
+
+Consumption-only requires delegation to `Microsoft.App/environments`. Workload profiles are more subnet-efficient.
+
+**Container Apps Environment VNet config is immutable after creation.** Cannot add VNet to existing CAE. Recovery: `azd down && azd up` (full teardown + reprovision), or manually delete just the CAE resource then `azd provision && azd deploy`.
 
 ### 10. Two Cosmos Accounts
 
@@ -1460,7 +1622,7 @@ This returns everything in a single request. Also set `timeout=30` (not 10) for 
 
 When agents call `/query/graph` or `/query/telemetry` via `OpenApiTool`, Foundry's server-side HTTP client sends the request. If the OpenAPI spec doesn't define an `X-Graph` header parameter, the agent can't send it. The graph-query-api falls back to the default graph from `COSMOS_GREMLIN_GRAPH` env var (typically just `topology`), not the scenario-specific graph. Queries return empty results.
 
-**Fix:** Add `X-Graph` header to the OpenAPI spec with a `default` value substituted at provisioning:
+**Fix:** Add `X-Graph` header to the OpenAPI spec with a single-value `enum` substituted at provisioning:
 ```yaml
 parameters:
   - name: X-Graph
@@ -1468,8 +1630,10 @@ parameters:
     required: true
     schema:
       type: string
-      default: "{graph_name}"  # Replaced at provisioning time
+      enum: ["{graph_name}"]  # Replaced at provisioning time — single-value enum CONSTRAINS the LLM
 ```
+
+**CRITICAL — Use `enum`, NOT `default`:** LLM agents ignore `default` values (they're advisory hints). The LLM will see a parameter named `X-Graph`, infer it needs a graph name, and choose a plausible but wrong value like `"topology"`. A single-value `enum` constrains the LLM to exactly one valid value — it has no choice but to send the correct graph name. This applies to ANY OpenAPI parameter consumed by an LLM agent that MUST have a specific value (routing headers, API keys, fixed config values).
 
 The provisioner replaces `{graph_name}` with the actual graph name (e.g., `telco-noc-topology`) via `raw.replace("{graph_name}", graph_name)`.
 
@@ -1523,7 +1687,100 @@ if not graph_query_uri:
 - `DocumentDB Account Contributor` on both Cosmos accounts (management plane — ARM create db/container)
 - `Cosmos DB Built-in Data Contributor` SQL role on the NoSQL account (data plane — upsert/query)
 
+Cosmos DB NoSQL has its **own RBAC system** separate from ARM:
+
+| Role | GUID | Scope |
+|------|------|-------|
+| Cosmos DB Built-in Data Reader | `00000000-0000-0000-0000-000000000001` | Data plane read |
+| Cosmos DB Built-in Data Contributor | `00000000-0000-0000-0000-000000000002` | Data plane read/write |
+
+These are assigned via `Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments` (NOT `Microsoft.Authorization/roleAssignments`). The ARM role `DocumentDB Account Contributor` controls management plane only.
+
 **Critical:** Create a **fresh** `DefaultAzureCredential()` inside the `asyncio.to_thread()` sync function for ARM calls. Do NOT reuse a credential instance created in the async event loop context — it may have an incompatible transport.
+
+### 19. OpenAPI Tool Headers — Use `enum`, Not `default`
+
+When Foundry's `OpenApiTool` sends HTTP requests on behalf of an agent, the LLM decides parameter values. A `default` value is only a hint — the LLM can and does ignore it, choosing plausible but wrong values (e.g., `X-Graph: topology` instead of `X-Graph: telco-noc-topology`).
+
+**Fix:** Use a single-value `enum` to constrain the LLM:
+```yaml
+# BAD — LLM ignores default
+schema:
+  type: string
+  default: "telco-noc-topology"
+
+# GOOD — LLM has no choice
+schema:
+  type: string
+  enum: ["telco-noc-topology"]
+```
+
+In template form: `enum: ["{graph_name}"]`. The provisioner substitutes the actual value.
+
+**Rule:** When an OpenAPI parameter consumed by an LLM agent MUST have a specific value, use `enum` with a single entry — never `default`. `default` is advisory; `enum` is a constraint. Applies to routing headers, API keys, fixed config values — any parameter where the LLM should not be making a choice.
+
+### 20. Debugging Azure Connectivity Issues
+
+**Diagnostic checklist** when a service returns 403 or connection refused:
+
+1. **Check actual deployed network settings** (not what Bicep says):
+   ```bash
+   az cosmosdb show -n <name> -g <rg> --query "publicNetworkAccess"
+   az cosmosdb show -n <name> -g <rg> --query "ipRules"
+   ```
+
+2. **Check for Azure Policy overrides:**
+   ```bash
+   az monitor activity-log list --resource-group <rg> \
+     --query "[?authorization.action=='Microsoft.DocumentDB/databaseAccounts/write'].{caller:caller, time:eventTimestamp, status:status.value}" \
+     --output table
+   ```
+
+3. **Check RBAC assignments** (for AAD-authed services):
+   ```bash
+   az role assignment list --scope <resource-id> --output table
+   ```
+
+4. **Check private endpoint connection status:**
+   ```bash
+   az network private-endpoint-connection list --id <resource-id> --output table
+   # Status should be "Approved"
+   ```
+
+5. **Check DNS resolution from within the VNet:**
+   ```bash
+   # From a Container App console or VM in the VNet:
+   nslookup <account>.documents.azure.com
+   # Should resolve to 10.x.x.x (private IP), not a public IP
+   ```
+
+**`az cosmosdb update` PreconditionFailed:** Usually means another operation is in progress (wait and retry), a policy is actively enforcing state, or the account has a resource lock. Check activity log to identify the conflicting operation.
+
+### 21. General Deployment Principles
+
+1. **Verify deployed state, not intended state.** Bicep is declarative but not authoritative — policies, manual edits, and drift happen.
+2. **Defense in depth for networking.** Private endpoints are the most robust path. Public access + IP rules is fragile (IPs change, policies override).
+3. **Design APIs for LLM consumers.** If an agent calls your API, errors must be in the response body (not HTTP status codes), and error messages must contain enough context for the LLM to self-correct.
+4. **Understand where your code runs.** Server-side agent tools can't call back to your process. Container Apps in a VNet route outbound through the VNet. Bicep runs at deployment time, but policies run continuously.
+5. **Use a single config file.** A dotenv file synced bidirectionally via azd hooks prevents config drift across Bicep, scripts, and runtime.
+6. **Immutable infrastructure choices.** Some settings (VNet on CAE, Cosmos DB partition keys) can't be changed after creation. Know which ones before deploying.
+7. **Test with `azd deploy` before `azd up`.** Code-only redeployment is 10× faster than full infra provisioning. Structure your workflow to iterate on code separately from infra.
+
+### 22. Two Separate Log Broadcasting Systems
+
+API (:8000) and graph-query-api (:8100) each have their own SSE log endpoint at
+`GET /api/logs` with **independent** ring buffers, subscriber queues, and filters:
+- API: captures `app.*`, `azure.*`, `uvicorn.*` loggers
+- graph-query-api: captures only `graph-query-api.*` loggers
+
+nginx routes `/api/logs` to port 8000 (API), so the graph-query-api's log stream
+is only reachable directly at `:8100/api/logs` (useful for local debugging).
+
+### 23. No Authentication on Any Endpoint
+
+Neither the API nor graph-query-api implements authentication or authorization.
+All endpoints are publicly accessible when exposed via Container App with external
+ingress. Security relies on the Container App's network configuration.
 
 ---
 
@@ -1532,6 +1789,30 @@ if not graph_query_uri:
 ### Dead Code in router_ingest.py
 Lines ~120-600 contain OLD commented-out monolithic upload code + old list_scenarios.
 Active per-type upload endpoints start after ~line 760. Should be removed in cleanup.
+
+### Edge Topology f-String Bug (cosmosdb.py)
+The filtered edge query in `get_topology()` has an f-string continuation bug:
+the `.where(otherV().hasLabel({label_csv}))` line is NOT an f-string, so `{label_csv}`
+is passed as a literal. Vertex-label-filtered topology requests will fail with a
+Gremlin syntax error on the cosmosdb backend. Fix: add `f` prefix to the second
+string segment.
+
+### Prompts CRUD Blocks Event Loop
+`get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt` in `router_prompts.py`
+make synchronous Cosmos SDK calls directly in `async def` handlers without
+`asyncio.to_thread()`. Only `list_prompts` and `list_prompt_scenarios` are correct.
+
+### deploy.sh Step 7 Missing graph-query-api
+Automated local mode starts API (:8000) and frontend (:5173) but NOT graph-query-api
+(:8100). All `/query/*` requests fail. Manual instructions are correct.
+
+### Dead Code in Frontend
+- `useScenarios.uploadScenario()` calls the removed `/query/scenario/upload` endpoint
+- `AlertChart` and `MetricCard` exist but are not imported by any component
+
+### `useInvestigation` Stale Closure
+`getQueryHeaders` is not in `submitAlert`'s `useCallback` dep array. If user switches
+`activeGraph` without editing alert text, the old `X-Graph` header is sent.
 
 ### Agent Provisioning Dependencies
 - `GRAPH_QUERY_API_URI` must point to the Container App's public URL (set in `azure_config.env` by postprovision.sh as `APP_URI`)
@@ -1587,6 +1868,8 @@ All config lives in `azure_config.env`. Key variables:
 | `EMBEDDING_MODEL` | Bicep (default: text-embedding-3-small) | Search vectorizer |
 | `EMBEDDING_DIMENSIONS` | Bicep (default: 1536) | Vector field dimensions |
 | `CORS_ORIGINS` | Bicep (default: *) / user (local: http://localhost:5173) | CORS allowed origins |
+
+**Note**: graph-query-api defaults `CORS_ORIGINS` to `http://localhost:5173,http://localhost:3000` (two origins) when the env var is not set.
 | `AGENT_IDS_PATH` | Bicep (default: /app/scripts/agent_ids.json) | Path to provisioned agent IDs |
 | `CONTAINER_APP_HOSTNAME` | runtime (if set) | Fallback for `GRAPH_QUERY_API_URI` |
 
@@ -1629,11 +1912,21 @@ cd frontend && npm run dev
 | Cosmos policy override | Check `az cosmosdb show --query publicNetworkAccess`; use private endpoints |
 | VNet connectivity issues | Check private endpoint status + DNS resolution from within VNet |
 | Prompts listing slow | Use `?scenario=X` filter to avoid iterating all databases |
-| Agent queries return empty results | OpenAPI spec missing `X-Graph` header default. Check `openapi/cosmosdb.yaml` |
+| Agent queries return empty results | OpenAPI spec `X-Graph` header using `default` instead of `enum`. Check `openapi/cosmosdb.yaml`, use single-value `enum` |
+| Topology viewer crashes on label filter | f-string bug in `cosmosdb.py` `get_topology()` edge query. Add `f` prefix. |
 | Agents get placeholder prompts | `_get_prompts_container` ensure_created=True on reads blocks event loop; check timeout |
 | Config var not reaching container | Add to `infra/main.bicep` `env:[]`, NOT to `azure_config.env` in Dockerfile |
 | `GRAPH_QUERY_API_URI` empty in container | Falls back to `CONTAINER_APP_HOSTNAME`. Check `agent_provisioner.py` |
+| Prompt CRUD slow / blocks other requests | Sync Cosmos calls in async handlers. Wrap in `asyncio.to_thread()` |
+| Local dev `/query/*` fails after `deploy.sh` step 7 | Step 7 doesn't start graph-query-api. Start manually on :8100 |
+| Prompt dropdown not refreshed after upload | UploadBox for prompts has no `onComplete` callback. Close/reopen modal |
+| Scenario context lost on page refresh | `ScenarioContext` has no `localStorage` persistence |
 | New scenario data pack | Follow `scenarios/telco-noc/` structure; create `scenario.yaml` + `graph_schema.yaml` |
+| Cosmos 403 after successful deploy | Azure Policy override. Run `az cosmosdb show --query publicNetworkAccess`. See Lesson #20 diagnostic checklist |
+| Need to debug VNet DNS issues | Run `nslookup <account>.documents.azure.com` from within VNet. Should resolve to `10.x.x.x`. See Lesson #20 |
+| LLM agent sends wrong header value | OpenAPI spec uses `default` — change to single-value `enum`. See Lessons #15 and #19 |
+| CAE needs VNet but already deployed | VNet is immutable on CAE. Must `azd down && azd up`. See Lesson #9 |
+| Sub-agent tool not executing | `FunctionTool` doesn't work with `ConnectedAgentTool`. Must use `OpenApiTool`. See Lesson #5 |
 
 ---
 
@@ -1651,12 +1944,18 @@ cd frontend && npm run dev
 | `fastapi` | `>=0.115` | ASGI framework |
 | `sse-starlette` | `>=1.6` | SSE streaming |
 | `react` | 18.x | UI framework |
-| `react-force-graph-2d` | — | Graph visualization (canvas-based) |
-| `@microsoft/fetch-event-source` | — | POST-based SSE client |
-| `framer-motion` | — | Animation (tooltips) |
-| `react-markdown` | — | Diagnosis panel rendering |
-| `react-resizable-panels` | — | Layout panels |
-| `tailwindcss` | — | Styling |
+| `react-force-graph-2d` | ^1.29.1 | Graph visualization (canvas-based) |
+| `@microsoft/fetch-event-source` | ^2.0.1 | POST-based SSE client |
+| `framer-motion` | ^11.12.0 | Animation (tooltips) |
+| `react-markdown` | ^10.1.0 | Diagnosis panel rendering |
+| `react-resizable-panels` | ^4.6.2 | Layout panels |
+| `tailwindcss` | ^3.4.15 | Styling |
+| `clsx` | ^2.1.1 | Conditional CSS class composition |
+| `@tailwindcss/typography` | ^0.5.19 | Prose markdown styling |
+| `vite` | ^5.4.11 | Build tool |
+| `typescript` | ^5.6.3 | Type checking |
+| `python-multipart` | (in graph-query-api) | Required for file uploads |
+| `pyyaml` | >=6.0 | scenario.yaml parsing |
 
 ---
 
