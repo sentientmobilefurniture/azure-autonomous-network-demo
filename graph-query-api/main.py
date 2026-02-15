@@ -37,7 +37,10 @@ from starlette.responses import StreamingResponse
 from config import GRAPH_BACKEND, GraphBackendType, BACKEND_REQUIRED_VARS, TELEMETRY_REQUIRED_VARS
 from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router, close_telemetry_backend
+from backends import close_all_backends
 from router_topology import router as topology_router
+from router_ingest import router as ingest_router
+from router_prompts import router as prompts_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -124,6 +127,8 @@ async def log_requests(request: Request, call_next):
 app.include_router(graph_router)
 app.include_router(telemetry_router)
 app.include_router(topology_router)
+app.include_router(ingest_router)
+app.include_router(prompts_router)
 
 
 # ---------------------------------------------------------------------------

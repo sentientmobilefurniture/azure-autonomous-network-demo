@@ -1,0 +1,30 @@
+Incident: INC-2025-07-15-0018
+Title: Campaign targeting wrong segment — VIP offers sent to casual
+Severity: P2
+Root Cause: CAMP-VIP-EXCLUS
+Root Cause Type: SEGMENT_MISMATCH
+Created: 2025-07-15T16:00:00Z
+Resolved: 2025-07-15T17:30:00Z
+SLA Breached: No
+
+Description:
+Campaign CAMP-VIP-EXCLUS sent 12% VIP discount codes to SEG-CASUAL users due to segment boundary overlap in the targeting query. 340 casual users received VIP pricing.
+
+Detection Method:
+Automated campaign spend anomaly alert
+
+Resolution:
+Fixed segment query to use exclusive boundaries. Issued credit to affected casual users and honored VIP pricing for fulfilled orders.
+
+Customer Impact:
+- SEG-CASUAL
+- SEG-VIP
+
+Services Affected: 1
+Alerts Generated: 23
+Alerts Suppressed: 15
+Time to Detect: 45 seconds
+Time to Resolve: 90 minutes
+
+Lessons Learned:
+Add segment-campaign eligibility validation to campaign targeting pipeline. Log segment membership snapshot at targeting time for audit trail.

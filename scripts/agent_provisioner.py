@@ -1,0 +1,276 @@
+"""
+AgentProvisioner — importable agent creation logic.
+
+Extracted from provision_agents.py for use by both:
+  - CLI (provision_agents.py --force)
+  - API (POST /api/config/apply)
+
+Prompts are passed as strings (not read from disk), enabling Cosmos-backed
+prompt management and runtime reconfiguration.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from pathlib import Path
+
+import yaml
+from azure.identity import DefaultAzureCredential
+from azure.ai.projects import AIProjectClient
+from azure.ai.agents.models import (
+    AzureAISearchTool,
+    AzureAISearchQueryType,
+    ConnectedAgentTool,
+    OpenApiTool,
+    OpenApiAnonymousAuthDetails,
+)
+
+logger = logging.getLogger("agent-provisioner")
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+OPENAPI_DIR = PROJECT_ROOT / "graph-query-api" / "openapi"
+AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
+
+AI_SEARCH_CONNECTION_NAME = "aisearch-connection"
+
+OPENAPI_SPEC_MAP = {
+    "cosmosdb": OPENAPI_DIR / "cosmosdb.yaml",
+    "mock": OPENAPI_DIR / "mock.yaml",
+}
+
+GRAPH_TOOL_DESCRIPTIONS = {
+    "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore topology and relationships.",
+    "mock": "Query the topology graph (offline mock mode).",
+}
+
+AGENT_NAMES = [
+    "GraphExplorerAgent",
+    "TelemetryAgent",
+    "RunbookKBAgent",
+    "HistoricalTicketAgent",
+    "Orchestrator",
+]
+
+
+def _build_connection_id(
+    subscription_id: str,
+    resource_group: str,
+    foundry_name: str,
+    project_name: str,
+    connection_name: str,
+) -> str:
+    return (
+        f"/subscriptions/{subscription_id}"
+        f"/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.CognitiveServices"
+        f"/accounts/{foundry_name}"
+        f"/projects/{project_name}"
+        f"/connections/{connection_name}"
+    )
+
+
+def _load_openapi_spec(
+    graph_query_api_uri: str,
+    graph_backend: str = "cosmosdb",
+    keep_path: str | None = None,
+) -> dict:
+    spec_file = OPENAPI_SPEC_MAP.get(graph_backend, OPENAPI_DIR / "cosmosdb.yaml")
+    raw = spec_file.read_text(encoding="utf-8")
+    raw = raw.replace("{base_url}", graph_query_api_uri.rstrip("/"))
+    spec = yaml.safe_load(raw)
+    if keep_path and "paths" in spec:
+        spec["paths"] = {k: v for k, v in spec["paths"].items() if k == keep_path}
+    return spec
+
+
+class AgentProvisioner:
+    """Runtime agent provisioning — importable from CLI or API."""
+
+    def __init__(
+        self,
+        project_endpoint: str,
+        credential: DefaultAzureCredential | None = None,
+    ):
+        self.project_endpoint = project_endpoint
+        self.credential = credential or DefaultAzureCredential()
+        self._project_client: AIProjectClient | None = None
+
+    def _get_client(self) -> AIProjectClient:
+        if self._project_client is None:
+            self._project_client = AIProjectClient(
+                endpoint=self.project_endpoint,
+                credential=self.credential,
+            )
+        return self._project_client
+
+    def cleanup_existing(self) -> int:
+        """Delete all agents with known names. Returns count deleted."""
+        client = self._get_client()
+        agents_client = client.agents
+        deleted = 0
+        for agent in agents_client.list_agents():
+            if agent.name in AGENT_NAMES:
+                logger.info("Deleting %s (%s)", agent.name, agent.id)
+                agents_client.delete_agent(agent.id)
+                deleted += 1
+        return deleted
+
+    def provision_all(
+        self,
+        model: str,
+        prompts: dict[str, str],
+        graph_query_api_uri: str,
+        graph_backend: str,
+        runbooks_index: str,
+        tickets_index: str,
+        search_connection_id: str,
+        force: bool = True,
+        on_progress: callable | None = None,
+    ) -> dict:
+        """Provision all 5 agents and return agent_ids structure.
+
+        Args:
+            model: Model deployment name (e.g. "gpt-4.1")
+            prompts: {agent_name: prompt_content} for all 5 agents
+              Keys: "orchestrator", "graph_explorer", "telemetry", "runbook", "ticket"
+            graph_query_api_uri: Base URL for OpenAPI tools
+            graph_backend: "cosmosdb" or "mock"
+            runbooks_index: AI Search index name for RunbookKB
+            tickets_index: AI Search index name for HistoricalTicket
+            search_connection_id: Foundry connection ID for AI Search
+            force: Delete existing agents before creating
+            on_progress: Optional callback(step: str, detail: str)
+
+        Returns:
+            Dict matching agent_ids.json structure
+        """
+        def emit(step: str, detail: str):
+            logger.info("[%s] %s", step, detail)
+            if on_progress:
+                on_progress(step, detail)
+
+        client = self._get_client()
+        agents_client = client.agents
+
+        if force:
+            emit("cleanup", "Deleting existing agents...")
+            self.cleanup_existing()
+
+        # Create sub-agents
+        sub_agents = []
+
+        # 1. GraphExplorer
+        emit("graph_explorer", "Creating GraphExplorerAgent...")
+        ge_tools = []
+        if graph_query_api_uri:
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/graph")
+            tool = OpenApiTool(
+                name="query_graph",
+                spec=spec,
+                description=GRAPH_TOOL_DESCRIPTIONS.get(graph_backend, GRAPH_TOOL_DESCRIPTIONS["cosmosdb"]),
+                auth=OpenApiAnonymousAuthDetails(),
+            )
+            ge_tools = tool.definitions
+
+        ge = agents_client.create_agent(
+            model=model,
+            name="GraphExplorerAgent",
+            instructions=prompts.get("graph_explorer", "You are a graph explorer agent."),
+            tools=ge_tools,
+        )
+        sub_agents.append({"id": ge.id, "name": ge.name, "description": "Graph topology explorer"})
+        emit("graph_explorer", f"Created: {ge.id}")
+
+        # 2. Telemetry
+        emit("telemetry", "Creating TelemetryAgent...")
+        tel_tools = []
+        if graph_query_api_uri:
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/telemetry")
+            tool = OpenApiTool(
+                name="query_telemetry",
+                spec=spec,
+                description="Execute a Cosmos SQL query against telemetry data.",
+                auth=OpenApiAnonymousAuthDetails(),
+            )
+            tel_tools = tool.definitions
+
+        tel = agents_client.create_agent(
+            model=model,
+            name="TelemetryAgent",
+            instructions=prompts.get("telemetry", "You are a telemetry agent."),
+            tools=tel_tools,
+        )
+        sub_agents.append({"id": tel.id, "name": tel.name, "description": "Telemetry and alert analyst"})
+        emit("telemetry", f"Created: {tel.id}")
+
+        # 3. RunbookKB
+        emit("runbook", "Creating RunbookKBAgent...")
+        search_tool = AzureAISearchTool(
+            index_connection_id=search_connection_id,
+            index_name=runbooks_index,
+            query_type=AzureAISearchQueryType.SEMANTIC,
+            top_k=5,
+        )
+        rb = agents_client.create_agent(
+            model=model,
+            name="RunbookKBAgent",
+            instructions=prompts.get("runbook", "You are a runbook knowledge base agent."),
+            tools=search_tool.definitions,
+            tool_resources=search_tool.resources,
+        )
+        sub_agents.append({"id": rb.id, "name": rb.name, "description": "Operational runbook searcher"})
+        emit("runbook", f"Created: {rb.id}")
+
+        # 4. HistoricalTicket
+        emit("ticket", "Creating HistoricalTicketAgent...")
+        ticket_search = AzureAISearchTool(
+            index_connection_id=search_connection_id,
+            index_name=tickets_index,
+            query_type=AzureAISearchQueryType.SEMANTIC,
+            top_k=5,
+        )
+        tk = agents_client.create_agent(
+            model=model,
+            name="HistoricalTicketAgent",
+            instructions=prompts.get("ticket", "You are a historical ticket agent."),
+            tools=ticket_search.definitions,
+            tool_resources=ticket_search.resources,
+        )
+        sub_agents.append({"id": tk.id, "name": tk.name, "description": "Historical incident searcher"})
+        emit("ticket", f"Created: {tk.id}")
+
+        # 5. Orchestrator
+        emit("orchestrator", "Creating Orchestrator...")
+        connected_tools = []
+        for sa in sub_agents:
+            ct = ConnectedAgentTool(
+                id=sa["id"], name=sa["name"], description=sa["description"],
+            )
+            connected_tools.extend(ct.definitions)
+
+        orch = agents_client.create_agent(
+            model=model,
+            name="Orchestrator",
+            instructions=prompts.get("orchestrator", "You are an orchestrator agent."),
+            tools=connected_tools,
+        )
+        emit("orchestrator", f"Created: {orch.id}")
+
+        result = {
+            "orchestrator": {"id": orch.id, "name": orch.name},
+            "sub_agents": {
+                sa["name"]: {"id": sa["id"], "name": sa["name"]}
+                for sa in sub_agents
+            },
+        }
+
+        # Save to file as well (for backwards compat)
+        try:
+            AGENT_IDS_FILE.write_text(json.dumps(result, indent=2) + "\n")
+            emit("save", f"Agent IDs saved to {AGENT_IDS_FILE.name}")
+        except Exception as e:
+            logger.warning("Failed to save agent_ids.json: %s", e)
+
+        return result

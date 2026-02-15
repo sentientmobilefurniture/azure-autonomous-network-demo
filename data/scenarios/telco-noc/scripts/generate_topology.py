@@ -15,7 +15,7 @@ Outputs 8 CSV files:
 import csv
 import os
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "network")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "entities")
 
 
 def write_csv(filename: str, headers: list[str], rows: list[list]) -> None:

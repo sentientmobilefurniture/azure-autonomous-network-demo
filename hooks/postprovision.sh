@@ -55,33 +55,18 @@ upload_with_retry() {
 }
 
 # --------------------------------------------------------------------------
-# 1. Upload runbook markdown files to blob storage
+# 1. Data uploads — SKIPPED (V8: data loaded via UI scenario upload)
+#    The primary path for all data (graph, telemetry, runbooks, tickets)
+#    is now via the UI Settings page: POST /query/scenario/upload
+#    which handles blob upload + AI Search indexing automatically.
 # --------------------------------------------------------------------------
 echo ""
-echo "Uploading runbooks to blob container 'runbooks'..."
-upload_with_retry "runbooks" "$PROJECT_ROOT/data/runbooks"
+echo "Skipping blob uploads — data is loaded via UI Settings page (⚙ → Upload Scenario)"
+echo "  To upload a scenario: tar czf scenario.tar.gz -C data/scenarios <name>"
+echo "  Then upload via the app's Settings modal."
 
 # --------------------------------------------------------------------------
-# 2. Upload historical ticket .txt files to blob storage
-# --------------------------------------------------------------------------
-echo ""
-echo "Uploading tickets to blob container 'tickets'..."
-upload_with_retry "tickets" "$PROJECT_ROOT/data/tickets"
-
-# --------------------------------------------------------------------------
-# 2b. Upload telemetry CSVs to blob storage (enables --from-blob ingestion
-#     and future Azure Data Factory / native connector pipelines)
-# --------------------------------------------------------------------------
-echo ""
-echo "Uploading telemetry CSVs to blob container 'telemetry-data'..."
-upload_with_retry "telemetry-data" "$PROJECT_ROOT/data/telemetry"
-
-echo ""
-echo "Uploading network CSVs to blob container 'network-data'..."
-upload_with_retry "network-data" "$PROJECT_ROOT/data/network"
-
-# --------------------------------------------------------------------------
-# 3. Populate azure_config.env for downstream scripts
+# 2. Populate azure_config.env for downstream scripts
 # --------------------------------------------------------------------------
 echo ""
 echo "Populating azure_config.env..."

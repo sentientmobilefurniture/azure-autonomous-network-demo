@@ -1,0 +1,29 @@
+Incident: INC-2025-09-02-0005
+Title: Disk full on monitoring VM — observability blackout
+Severity: P2
+Root Cause: VM-USE-A-0301-01
+Root Cause Type: DISK_FULL
+Created: 2025-09-02T08:30:00Z
+Resolved: 2025-09-02T09:45:00Z
+SLA Breached: No
+
+Description:
+Log volume spike from a noisy deployment filled the monitoring VM disk. Metrics ingestion stopped, creating a 75-minute observability blind spot.
+
+Detection Method:
+Manual discovery — team noticed missing dashboards
+
+Resolution:
+Cleared old log files, expanded disk, implemented log rotation with max file size limits.
+
+Customer Impact:
+- SVC-MONITORING
+
+Services Affected: 1
+Alerts Generated: 3
+Alerts Suppressed: 0
+Time to Detect: 2700 seconds
+Time to Resolve: 75 minutes
+
+Lessons Learned:
+The monitoring system must monitor itself. Add disk usage alerts for observability infrastructure. Implement aggressive log rotation defaults.

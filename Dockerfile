@@ -44,10 +44,12 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY api/app/ ./app/
 
-# Copy agent_ids.json (may not exist on first deploy)
+# Copy scripts needed at runtime
 RUN mkdir -p /app/scripts
-COPY scripts/agent_ids.json* /app/scripts/
 COPY scripts/scenario_loader.py /app/scripts/
+COPY scripts/agent_provisioner.py /app/scripts/
+# agent_ids.json is created post-deploy by provision_agents.py (CLI or UI)
+# The API falls back to stub responses when it doesn't exist
 
 # Copy scenario manifests for runtime resolution (YAML files only)
 # Prompts (.md) are excluded by .dockerignore (*.md) — they're only needed

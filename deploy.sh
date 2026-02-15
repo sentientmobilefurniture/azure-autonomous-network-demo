@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Autonomous Network NOC Demo — End-to-End Deployment Script (Cosmos DB Flow)
+# AI Incident Investigator — End-to-End Deployment Script
 # ============================================================================
 #
-# Deploys the full Cosmos DB-backed pipeline:
+# Deploys the full pipeline:
 #   1. Azure infrastructure (AI Foundry, AI Search, Storage, Cosmos DB, Container Apps)
-#   2. Data uploads (runbooks → blob, tickets → blob)
+#   2. Data uploads (runbooks → blob, tickets → blob — for AI Search indexing)
 #   3. Search indexes (runbooks-index, tickets-index)
-#   4. Cosmos DB graph data (vertices + edges from graph_schema.yaml)
-#   5. Unified Container App deployment (nginx + API + graph-query-api)
-#   6. AI Foundry agents (5 agents: orchestrator + 4 specialists)
-#   7. Local services (optional — all services deployed to Azure)
+#   4. Unified Container App deployment (nginx + API + graph-query-api)
+#   5. AI Foundry agents (5 agents: orchestrator + 4 specialists)
+#   6. Local services (optional — all services deployed to Azure)
+#
+# Graph & telemetry data is loaded via the UI Settings page (⚙ → Upload Scenario)
+# instead of from this script. See documentation/v8datamanagementplane.md.
 #
 # Usage:
 #   chmod +x deploy.sh && ./deploy.sh
@@ -46,7 +48,7 @@ step()  { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${NC}\n"; }
 banner() {
   echo -e "\n${BOLD}${CYAN}"
   echo "╔════════════════════════════════════════════════════════════════╗"
-  echo "║  Autonomous Network NOC Demo — Cosmos DB Deployment          ║"
+  echo "║  AI Incident Investigator — Deployment                       ║"
   echo "╚════════════════════════════════════════════════════════════════╝"
   echo -e "${NC}"
 }
@@ -534,158 +536,8 @@ else
   info "App URI:            $APP_URI"
 fi
 
-# (Step 3b removed — firewall logic moved into Step 5 to avoid Azure Policy race)
-
-# ── Step 4: Create search indexes ───────────────────────────────────
-
-if $SKIP_INDEX; then
-  step "Step 4: Search indexes (SKIPPED)"
-  info "Keeping existing search indexes."
-else
-  step "Step 4: Creating search indexes"
-
-  info "Creating runbooks-index..."
-  if uv run python scripts/create_runbook_indexer.py 2>&1; then
-    ok "Runbooks index created"
-  else
-    fail "Runbook indexer failed. Check output above."
-    fail "Common fix: ensure blob data was uploaded (check Storage Account containers)."
-    exit 1
-  fi
-
-  echo ""
-  info "Creating tickets-index..."
-  if uv run python scripts/create_tickets_indexer.py 2>&1; then
-    ok "Tickets index created"
-  else
-    fail "Tickets indexer failed. Check output above."
-    exit 1
-  fi
-fi
-
-# ── Step 5: Load Cosmos DB graph data ───────────────────────────────
-
-if $SKIP_DATA; then
-  step "Step 5: Cosmos DB graph data (SKIPPED)"
-  info "Keeping existing graph data in Cosmos DB."
-else
-  step "Step 5: Loading graph data into Cosmos DB"
-
-  # ── Open Cosmos DB firewall for local dev IP ────────────────────────
-  # Moved here from Step 3b: Azure Policy can re-disable publicNetworkAccess
-  # after infra deploy, so we force-enable it right before data loading.
-  DEV_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 api.ipify.org 2>/dev/null || echo "")
-  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ENDPOINT%%.*}"
-  COSMOS_GREMLIN_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT#*//}"
-  RG_NAME="${AZURE_RESOURCE_GROUP:-rg-${AZD_ENV_NAME:-$AZURE_ENV_NAME}}"
-  COSMOS_NOSQL_ACCOUNT="${COSMOS_GREMLIN_ACCOUNT}-nosql"
-
-  if [[ -z "$DEV_IP" ]]; then
-    warn "Could not detect public IP. If data loading fails with 403, add your IP manually."
-  else
-    info "Detected dev IP: $DEV_IP — ensuring Cosmos DB firewall is open"
-
-    _open_cosmos_firewall() {
-      local ACCOUNT="$1" LABEL="$2"
-      if ! az cosmosdb show --name "$ACCOUNT" --resource-group "$RG_NAME" -o none 2>/dev/null; then
-        return 0
-      fi
-
-      local CURRENT_IPS PUB_ACCESS HAS_IP NEW_IPS
-      CURRENT_IPS=$(az cosmosdb show --name "$ACCOUNT" --resource-group "$RG_NAME" --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-      PUB_ACCESS=$(az cosmosdb show --name "$ACCOUNT" --resource-group "$RG_NAME" --query "publicNetworkAccess" -o tsv 2>/dev/null)
-      HAS_IP=false
-      echo "$CURRENT_IPS" | grep -q "$DEV_IP" && HAS_IP=true
-
-      if $HAS_IP && [[ "$PUB_ACCESS" == "Enabled" ]]; then
-        ok "$LABEL: firewall OK (IP present, public access enabled)"
-        return 0
-      fi
-
-      NEW_IPS="${CURRENT_IPS:+$CURRENT_IPS,}$DEV_IP"
-      $HAS_IP && NEW_IPS="$CURRENT_IPS"
-
-      info "Updating $LABEL: public-network-access=ENABLED, ensuring dev IP in firewall..."
-      if az cosmosdb update --name "$ACCOUNT" --resource-group "$RG_NAME" \
-           --public-network-access ENABLED --ip-range-filter "$NEW_IPS" -o none 2>&1; then
-        ok "$LABEL: firewall updated"
-      else
-        warn "Failed to update $LABEL firewall. You may need to update it manually."
-        warn "  az cosmosdb update --name $ACCOUNT --resource-group $RG_NAME --public-network-access ENABLED"
-      fi
-    }
-
-    _open_cosmos_firewall "$COSMOS_GREMLIN_ACCOUNT" "Gremlin"
-    _open_cosmos_firewall "$COSMOS_NOSQL_ACCOUNT"   "NoSQL"
-  fi
-
-  # Verify Cosmos credentials are set
-  if [[ -z "${COSMOS_GREMLIN_ENDPOINT:-}" ]] || [[ -z "${COSMOS_GREMLIN_PRIMARY_KEY:-}" ]]; then
-    fail "Cosmos DB credentials not set in azure_config.env."
-    fail "Ensure azd up completed successfully and postprovision.sh ran."
-    echo ""
-    info "Manual fix: check your Cosmos DB account in Azure Portal and set:"
-    echo "   COSMOS_GREMLIN_ENDPOINT=<account>.gremlin.cosmos.azure.com"
-    echo "   COSMOS_GREMLIN_PRIMARY_KEY=<key>"
-    exit 1
-  fi
-
-  info "Loading graph schema from data/graph_schema.yaml"
-  info "Cosmos DB: $COSMOS_GREMLIN_ENDPOINT / $COSMOS_GREMLIN_DATABASE / $COSMOS_GREMLIN_GRAPH"
-  info "This will DROP existing graph data and reload."
-  echo ""
-
-  # provision_cosmos_gremlin.py reads os.environ, NOT load_dotenv
-  # So we must have the env vars in the shell already (sourced above)
-  if uv run python scripts/cosmos/provision_cosmos_gremlin.py 2>&1; then
-    ok "Graph data loaded into Cosmos DB"
-  else
-    fail "Cosmos DB graph loading failed."
-    fail "Common issues:"
-    echo "   • 401: Check COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY"
-    echo "   • 429: Cosmos DB throttling — increase maxThroughput or wait and retry"
-    echo "   • Connection refused: Check Cosmos DB firewall settings"
-    echo ""
-    echo "   To retry this step only: source azure_config.env && uv run python scripts/cosmos/provision_cosmos_gremlin.py"
-    exit 1
-  fi
-fi
-
-# ── Step 5b: Load Cosmos DB telemetry data ──────────────────────────
-
-if $SKIP_DATA; then
-  step "Step 5b: Cosmos DB telemetry data (SKIPPED)"
-  info "Keeping existing telemetry data in Cosmos DB."
-else
-  step "Step 5b: Loading telemetry data into Cosmos DB"
-
-  # Verify Cosmos NoSQL endpoint is set
-  if [[ -z "${COSMOS_NOSQL_ENDPOINT:-}" ]]; then
-    fail "COSMOS_NOSQL_ENDPOINT not set in azure_config.env."
-    fail "Ensure azd up completed successfully and postprovision.sh ran."
-    echo ""
-    info "Manual fix: check your Cosmos DB account in Azure Portal and set:"
-    echo "   COSMOS_NOSQL_ENDPOINT=https://<account>.documents.azure.com:443/"
-    exit 1
-  fi
-
-  info "Loading telemetry data from data/telemetry/"
-  info "Cosmos DB: $COSMOS_NOSQL_ENDPOINT / $COSMOS_NOSQL_DATABASE"
-  info "Containers: AlertStream (pk: /SourceNodeType), LinkTelemetry (pk: /LinkId)"
-  echo ""
-
-  if uv run python scripts/cosmos/provision_cosmos_telemetry.py 2>&1; then
-    ok "Telemetry data loaded into Cosmos DB"
-  else
-    fail "Cosmos DB telemetry loading failed."
-    fail "Common issues:"
-    echo "   • 401/403: Check RBAC — your identity needs Cosmos DB Data Contributor on the account"
-    echo "   • 429: Cosmos DB throttling — increase maxThroughput or wait and retry"
-    echo ""
-    echo "   To retry: source azure_config.env && uv run python scripts/cosmos/provision_cosmos_telemetry.py"
-    exit 1
-  fi
-fi
+# (Steps 4, 5, 7 removed — data loading, indexing, and agent provisioning
+#  are all handled via the UI Settings page after deployment)
 
 # ── Step 6: Verify unified app health ───────────────────────────────
 
@@ -713,8 +565,7 @@ for attempt in 1 2 3 4 5; do
 done
 
 if $HEALTH_OK; then
-  HEALTH_BODY=$(curl -s "$GQ_URI/health" 2>/dev/null)
-  ok "App is healthy: $HEALTH_BODY"
+  ok "App is healthy"
 else
   fail "App not responding after 5 attempts."
   fail "The Container App may still be starting or the image build may have failed."
@@ -725,68 +576,10 @@ else
   warn "Continuing anyway — agent provisioning may fail if the API is down."
 fi
 
-# ── Step 7: Provision AI agents ─────────────────────────────────────
-
-if $SKIP_AGENTS; then
-  step "Step 7: Agent provisioning (SKIPPED)"
-  info "Using existing agents."
-else
-  step "Step 7: Provisioning AI Foundry agents"
-
-  info "Creating 5 agents (orchestrator + 4 specialists) with --force"
-  info "Graph backend: cosmosdb (Gremlin queries)"
-  echo ""
-
-  # Re-export to ensure provision_agents.py sees them via load_dotenv
-  export GRAPH_BACKEND=cosmosdb
-
-  if uv run python scripts/provision_agents.py --force 2>&1; then
-    ok "All agents provisioned"
-  else
-    fail "Agent provisioning failed."
-    fail "Common issues:"
-    echo "   • 401/403: Azure credential issue — run 'az login'"
-    echo "   • 404: AI Foundry project not found — check AI_FOUNDRY_PROJECT_NAME"
-    echo "   • 429: Rate limited — wait a minute and re-run"
-    echo ""
-    echo "   To retry: source azure_config.env && GRAPH_BACKEND=cosmosdb uv run python scripts/provision_agents.py --force"
-    exit 1
-  fi
-
-  # Verify agent_ids.json was created
-  if [[ -f "$AGENT_IDS_FILE" ]]; then
-    ORCH_ID=$(python3 -c "import json; print(json.load(open('$AGENT_IDS_FILE'))['orchestrator']['id'])" 2>/dev/null || echo "")
-    if [[ -n "$ORCH_ID" ]]; then
-      ok "Orchestrator agent: $ORCH_ID"
-    fi
-  else
-    fail "agent_ids.json not created — agents may have failed to provision."
-  fi
-fi
-
-# ── Step 7b: Redeploy API with agent_ids.json ──────────────────────
-
-step "Step 7b: Redeploying app with agent_ids.json"
-
-if [[ -f "$AGENT_IDS_FILE" ]]; then
-  info "agent_ids.json exists — rebuilding app container to include it..."
-
-  if azd deploy app 2>&1; then
-    ok "App redeployed with agent_ids.json"
-  else
-    fail "App redeploy failed."
-    echo "   To retry: azd deploy app"
-    warn "Continuing — the API container may not have agent IDs yet."
-  fi
-else
-  warn "Skipping app redeploy — agent_ids.json not found."
-  warn "You can redeploy later: azd deploy app"
-fi
-
-# ── Step 8: Start local services (optional — all services deployed to Azure) ──
+# ── Step 7: Start local services (optional — all services deployed to Azure) ──
 
 if $SKIP_LOCAL; then
-  step "Step 8: Local services (SKIPPED)"
+  step "Step 7: Local services (SKIPPED)"
   echo ""
   ok "Deployment complete! All services are running in Azure."
   echo ""
@@ -804,7 +597,7 @@ if $SKIP_LOCAL; then
   echo ""
   echo "   Open http://localhost:5173"
 else
-  step "Step 8: Starting local API + Frontend"
+  step "Step 7: Starting local API + Frontend"
 
   # Kill any existing processes on our ports
   lsof -ti:8000,5173 2>/dev/null | xargs -r kill -9 2>/dev/null || true
@@ -864,6 +657,7 @@ echo -e "${NC}"
 
 echo -e "  ${BOLD}Environment:${NC}      $USE_ENV"
 echo -e "  ${BOLD}Graph Backend:${NC}    cosmosdb (Gremlin)"
+echo -e "  ${BOLD}Data Loading:${NC}     Via UI Settings page (⚙ → Upload Scenario)"
 echo -e "  ${BOLD}Location:${NC}         ${AZURE_LOC}"
 echo -e "  ${BOLD}Resource Group:${NC}   ${AZURE_RESOURCE_GROUP:-<pending>}"
 echo ""
@@ -909,4 +703,8 @@ echo -e "  ${BOLD}Useful commands:${NC}"
 echo "    azd deploy app                     # Redeploy unified app after code changes"
 echo "    source azure_config.env && uv run python scripts/provision_agents.py --force  # Re-provision agents"
 echo "    azd down --force --purge           # Tear down all Azure resources"
+echo ""
+echo -e "  ${BOLD}Upload scenario data:${NC}"
+echo "    tar czf telco-noc.tar.gz -C data/scenarios telco-noc"
+echo "    # Then upload via UI Settings page (⚙ icon in header)"
 echo ""

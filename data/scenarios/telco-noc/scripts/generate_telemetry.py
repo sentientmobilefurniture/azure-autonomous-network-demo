@@ -11,7 +11,7 @@ import os
 import random
 from datetime import datetime, timedelta, timezone
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "telemetry")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "telemetry")
 
 # Incident start time
 INCIDENT_START = datetime(2026, 2, 6, 14, 30, 0, tzinfo=timezone.utc)

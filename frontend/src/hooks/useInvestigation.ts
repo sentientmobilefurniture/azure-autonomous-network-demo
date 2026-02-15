@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
+import { useScenarioContext } from '../context/ScenarioContext';
 import type { StepEvent, ThinkingState, RunMeta } from '../types';
 
 const DEFAULT_ALERT =
@@ -14,6 +15,7 @@ export function useInvestigation() {
   const [running, setRunning] = useState(false);
   const [runStarted, setRunStarted] = useState(false);
   const [runMeta, setRunMeta] = useState<RunMeta | null>(null);
+  const { getQueryHeaders } = useScenarioContext();
 
   const abortRef = useRef<AbortController | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -43,7 +45,7 @@ export function useInvestigation() {
     try {
       await fetchEventSource('/api/alert', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getQueryHeaders() },
         body: JSON.stringify({ text: alert }),
         signal: ctrl.signal,
 

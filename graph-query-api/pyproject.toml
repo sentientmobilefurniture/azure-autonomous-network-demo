@@ -9,6 +9,12 @@ dependencies = [
     "azure-identity>=1.19.0",
     "azure-cosmos>=4.9.0",
     "gremlinpython>=3.7.0",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6.0",
+    "azure-mgmt-cosmosdb>=9.0.0",
+    "sse-starlette>=1.6.0",
+    "azure-storage-blob>=12.19.0",
+    "azure-search-documents>=11.6.0",
 ]
 
 [dependency-groups]

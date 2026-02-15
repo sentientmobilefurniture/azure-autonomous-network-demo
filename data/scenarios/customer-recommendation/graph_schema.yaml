@@ -1,0 +1,198 @@
+# ============================================================================
+# Graph Schema Manifest — Customer Recommendation Engine
+# ============================================================================
+# Declarative definition of vertices and edges for customer recommendation.
+# Used by scripts/cosmos/provision_cosmos_gremlin.py to load data from CSVs.
+# ============================================================================
+
+# Directory containing CSV files (relative to this schema file's directory)
+data_dir: data/entities
+
+# ---------------------------------------------------------------------------
+# Vertices — 8 entity types
+# ---------------------------------------------------------------------------
+
+vertices:
+  - label: CustomerSegment
+    csv_file: DimCustomerSegment.csv
+    id_column: SegmentId
+    partition_key: segment
+    properties: [SegmentId, SegmentName, Description, MinSpendUSD, MaxSpendUSD]
+
+  - label: Customer
+    csv_file: DimCustomer.csv
+    id_column: CustomerId
+    partition_key: customer
+    properties: [CustomerId, CustomerName, SegmentId, Region, JoinDate, LifetimeSpendUSD]
+
+  - label: ProductCategory
+    csv_file: DimProductCategory.csv
+    id_column: CategoryId
+    partition_key: category
+    properties: [CategoryId, CategoryName, ParentCategoryId, MarginPct]
+
+  - label: Product
+    csv_file: DimProduct.csv
+    id_column: ProductId
+    partition_key: product
+    properties: [ProductId, ProductName, CategoryId, SupplierId, PriceUSD, StockQty, Rating]
+
+  - label: Campaign
+    csv_file: DimCampaign.csv
+    id_column: CampaignId
+    partition_key: campaign
+    properties: [CampaignId, CampaignName, CampaignType, TargetSegmentId, StartDate, EndDate, BudgetUSD]
+
+  - label: Supplier
+    csv_file: DimSupplier.csv
+    id_column: SupplierId
+    partition_key: supplier
+    properties: [SupplierId, SupplierName, Country, LeadTimeDays, ReliabilityScore]
+
+  - label: Warehouse
+    csv_file: DimWarehouse.csv
+    id_column: WarehouseId
+    partition_key: warehouse
+    properties: [WarehouseId, WarehouseName, Region, CapacityUnits, CurrentUtilPct]
+
+  - label: SLAPolicy
+    csv_file: DimSLAPolicy.csv
+    id_column: SLAId
+    partition_key: sla
+    properties: [SLAId, SLAName, SegmentId, MaxDeliveryDays, ReturnWindowDays, SupportTier]
+
+# ---------------------------------------------------------------------------
+# Edges — 14 edge definitions
+# ---------------------------------------------------------------------------
+
+edges:
+  # Customer → belongs_to → CustomerSegment
+  - label: belongs_to
+    csv_file: DimCustomer.csv
+    source:
+      label: Customer
+      property: CustomerId
+      column: CustomerId
+    target:
+      label: CustomerSegment
+      property: SegmentId
+      column: SegmentId
+
+  # Product → in_category → ProductCategory
+  - label: in_category
+    csv_file: DimProduct.csv
+    source:
+      label: Product
+      property: ProductId
+      column: ProductId
+    target:
+      label: ProductCategory
+      property: CategoryId
+      column: CategoryId
+
+  # ProductCategory → subcategory_of → ProductCategory (parent)
+  - label: subcategory_of
+    csv_file: DimProductCategory.csv
+    filter:
+      column: ParentCategoryId
+      value: ""
+      negate: true
+    source:
+      label: ProductCategory
+      property: CategoryId
+      column: CategoryId
+    target:
+      label: ProductCategory
+      property: CategoryId
+      column: ParentCategoryId
+
+  # Product → supplied_by → Supplier
+  - label: supplied_by
+    csv_file: DimProduct.csv
+    source:
+      label: Product
+      property: ProductId
+      column: ProductId
+    target:
+      label: Supplier
+      property: SupplierId
+      column: SupplierId
+
+  # Campaign → targets → CustomerSegment
+  - label: targets
+    csv_file: DimCampaign.csv
+    source:
+      label: Campaign
+      property: CampaignId
+      column: CampaignId
+    target:
+      label: CustomerSegment
+      property: SegmentId
+      column: TargetSegmentId
+
+  # SLAPolicy → governs_segment → CustomerSegment
+  - label: governs_segment
+    csv_file: DimSLAPolicy.csv
+    source:
+      label: SLAPolicy
+      property: SLAId
+      column: SLAId
+    target:
+      label: CustomerSegment
+      property: SegmentId
+      column: SegmentId
+
+  # Customer → purchased → Product (from FactPurchaseHistory)
+  - label: purchased
+    csv_file: FactPurchaseHistory.csv
+    source:
+      label: Customer
+      property: CustomerId
+      column: CustomerId
+    target:
+      label: Product
+      property: ProductId
+      column: ProductId
+    properties:
+      - name: purchase_date
+        column: PurchaseDate
+      - name: quantity
+        column: Quantity
+      - name: revenue_usd
+        column: RevenueUSD
+      - name: returned
+        column: ReturnedFlag
+
+  # Campaign → promotes → Product (from FactCampaignTargeting)
+  - label: promotes
+    csv_file: FactCampaignTargeting.csv
+    source:
+      label: Campaign
+      property: CampaignId
+      column: CampaignId
+    target:
+      label: Product
+      property: ProductId
+      column: ProductId
+    properties:
+      - name: discount_pct
+        column: DiscountPct
+      - name: priority
+        column: Priority
+
+  # Product → stocked_at → Warehouse (from FactProductWarehouse)
+  - label: stocked_at
+    csv_file: FactProductWarehouse.csv
+    source:
+      label: Product
+      property: ProductId
+      column: ProductId
+    target:
+      label: Warehouse
+      property: WarehouseId
+      column: WarehouseId
+    properties:
+      - name: stock_qty
+        column: StockQty
+      - name: reorder_point
+        column: ReorderPoint

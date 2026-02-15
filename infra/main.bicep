@@ -173,6 +173,13 @@ module app 'modules/container-app.bicep' = {
       { name: 'COSMOS_GREMLIN_PRIMARY_KEY', secretRef: 'cosmos-gremlin-key' }
       { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosGremlin!.outputs.cosmosNoSqlEndpoint }
       { name: 'COSMOS_NOSQL_DATABASE', value: cosmosGremlin!.outputs.telemetryDatabaseName }
+      { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+      { name: 'AZURE_RESOURCE_GROUP', value: rg.name }
+      { name: 'AI_SEARCH_NAME', value: search.outputs.name }
+      { name: 'STORAGE_ACCOUNT_NAME', value: storage.outputs.name }
+      { name: 'AI_FOUNDRY_NAME', value: aiFoundry.outputs.foundryName }
+      { name: 'EMBEDDING_MODEL', value: 'text-embedding-3-small' }
+      { name: 'EMBEDDING_DIMENSIONS', value: '1536' }
     ] : [])
     secrets: deployCosmosGremlin ? [
       { name: 'cosmos-gremlin-key', value: cosmosGremlin!.outputs.primaryKey }
@@ -190,6 +197,7 @@ module roles 'modules/roles.bicep' = {
     searchPrincipalId: search.outputs.principalId
     foundryPrincipalId: aiFoundry.outputs.foundryPrincipalId
     cosmosNoSqlAccountName: deployCosmosGremlin ? 'cosmos-gremlin-${resourceToken}-nosql' : ''
+    cosmosGremlinAccountName: deployCosmosGremlin ? cosmosGremlin!.outputs.cosmosAccountName : ''
     containerAppPrincipalId: app.outputs.principalId
     apiContainerAppPrincipalId: app.outputs.principalId
   }

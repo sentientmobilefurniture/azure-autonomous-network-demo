@@ -7,12 +7,17 @@ with GraphSON v2 serializer over WSS.
 
 Auth: Primary key based (Gremlin wire protocol does NOT support
 DefaultAzureCredential — unlike the Cosmos DB NoSQL API).
+
+Supports multiple graph targets via the graph_name constructor parameter.
+Each CosmosDBGremlinBackend instance manages its own Gremlin client
+targeting a specific /dbs/{db}/colls/{graph} path.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 
 from gremlin_python.driver import client, serializer
@@ -27,39 +32,6 @@ from config import (
 )
 
 logger = logging.getLogger("graph-query-api")
-
-# ---------------------------------------------------------------------------
-# Singleton Gremlin client (thread-safe lazy init)
-# ---------------------------------------------------------------------------
-
-import threading
-
-_gremlin_lock = threading.Lock()
-_gremlin_client: client.Client | None = None
-
-
-def _get_client() -> client.Client:
-    """Get or create the singleton Gremlin client for Cosmos DB (thread-safe)."""
-    global _gremlin_client
-    with _gremlin_lock:
-        if _gremlin_client is None:
-            if not COSMOS_GREMLIN_ENDPOINT or not COSMOS_GREMLIN_PRIMARY_KEY:
-                raise RuntimeError(
-                    "COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY must be set "
-                    "when GRAPH_BACKEND=cosmosdb"
-                )
-            url = f"wss://{COSMOS_GREMLIN_ENDPOINT}:443/"
-            username = f"/dbs/{COSMOS_GREMLIN_DATABASE}/colls/{COSMOS_GREMLIN_GRAPH}"
-            logger.info("Connecting to Cosmos DB Gremlin: %s (db=%s, graph=%s)",
-                         COSMOS_GREMLIN_ENDPOINT, COSMOS_GREMLIN_DATABASE, COSMOS_GREMLIN_GRAPH)
-            _gremlin_client = client.Client(
-                url=url,
-                traversal_source="g",
-                username=username,
-                password=COSMOS_GREMLIN_PRIMARY_KEY,
-                message_serializer=serializer.GraphSONSerializersV2d0(),
-            )
-    return _gremlin_client
 
 
 # ---------------------------------------------------------------------------
@@ -131,89 +103,102 @@ def _normalise_results(raw_results: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Sync query execution (called via asyncio.to_thread)
-# ---------------------------------------------------------------------------
-
-
-def _submit_query(query: str, max_retries: int = 3) -> list:
-    """Submit a Gremlin query with retry on 429 / transient / connection errors.
-
-    If the WebSocket connection drops (idle timeout, DNS change, etc.) the
-    singleton client is discarded and a fresh connection is established on
-    the next attempt.
-    """
-    global _gremlin_client
-    for attempt in range(1, max_retries + 1):
-        gremlin_client = _get_client()           # may create a fresh client
-        t0 = time.time()
-        try:
-            callback = gremlin_client.submit(message=query, bindings={})
-            results = callback.all().result()
-            elapsed_ms = (time.time() - t0) * 1000
-            logger.info(
-                "Gremlin OK: %d results in %.0fms (attempt %d/%d)  query=%.200s",
-                len(results), elapsed_ms, attempt, max_retries, query,
-            )
-            return results
-        except WSServerHandshakeError as e:
-            # 401 — auth failure (bad key / endpoint / username path)
-            elapsed_ms = (time.time() - t0) * 1000
-            logger.error(
-                "Gremlin auth failure (401) in %.0fms: %s  — check "
-                "COSMOS_GREMLIN_ENDPOINT, COSMOS_GREMLIN_PRIMARY_KEY, "
-                "and /dbs/{db}/colls/{graph} username path",
-                elapsed_ms, e,
-            )
-            raise RuntimeError(
-                f"Cosmos DB Gremlin authentication failed: {e}. "
-                "Verify COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY."
-            ) from e
-        except GremlinServerError as e:
-            elapsed_ms = (time.time() - t0) * 1000
-            status = getattr(e, "status_code", 0)
-            logger.warning(
-                "GremlinServerError %s in %.0fms (attempt %d/%d): %s",
-                status, elapsed_ms, attempt, max_retries, e,
-            )
-            # 429 rate-limit or 408 timeout — retry with backoff
-            if status in (429, 408) and attempt < max_retries:
-                backoff = 2 ** attempt
-                logger.info("Retrying in %ds...", backoff)
-                time.sleep(backoff)
-                continue
-            raise  # non-retryable or final attempt
-        except Exception as e:
-            # Connection/transport error (WebSocket dropped, DNS failure, etc.)
-            # Discard the dead client so the next attempt opens a fresh connection.
-            elapsed_ms = (time.time() - t0) * 1000
-            logger.warning(
-                "Gremlin connection error in %.0fms (attempt %d/%d): %s: %s",
-                elapsed_ms, attempt, max_retries, type(e).__name__, e,
-            )
-            with _gremlin_lock:
-                if _gremlin_client is gremlin_client:   # guard against races
-                    try:
-                        gremlin_client.close()
-                    except Exception:
-                        pass
-                    _gremlin_client = None
-            if attempt < max_retries:
-                backoff = 2 ** attempt
-                logger.info("Reconnecting in %ds...", backoff)
-                time.sleep(backoff)
-                continue
-            raise
-    # Should not reach here
-    raise RuntimeError("Exhausted retries for Gremlin query")
-
-
-# ---------------------------------------------------------------------------
 # Backend class
 # ---------------------------------------------------------------------------
 
 
 class CosmosDBGremlinBackend:
-    """Graph backend using Azure Cosmos DB for Apache Gremlin."""
+    """Graph backend using Azure Cosmos DB for Apache Gremlin.
+
+    Each instance targets a specific graph via its own Gremlin client.
+    Supports parameterized graph_name for multi-scenario routing.
+    """
+
+    def __init__(self, graph_name: str | None = None):
+        self._graph_name = graph_name or COSMOS_GREMLIN_GRAPH
+        self._lock = threading.Lock()
+        self._client: client.Client | None = None
+        logger.info("CosmosDBGremlinBackend created for graph '%s'", self._graph_name)
+
+    def _get_client(self) -> client.Client:
+        """Get or create the Gremlin client for this backend's graph (thread-safe)."""
+        with self._lock:
+            if self._client is None:
+                if not COSMOS_GREMLIN_ENDPOINT or not COSMOS_GREMLIN_PRIMARY_KEY:
+                    raise RuntimeError(
+                        "COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY must be set "
+                        "when GRAPH_BACKEND=cosmosdb"
+                    )
+                url = f"wss://{COSMOS_GREMLIN_ENDPOINT}:443/"
+                username = f"/dbs/{COSMOS_GREMLIN_DATABASE}/colls/{self._graph_name}"
+                logger.info("Connecting to Cosmos DB Gremlin: %s (db=%s, graph=%s)",
+                            COSMOS_GREMLIN_ENDPOINT, COSMOS_GREMLIN_DATABASE, self._graph_name)
+                self._client = client.Client(
+                    url=url,
+                    traversal_source="g",
+                    username=username,
+                    password=COSMOS_GREMLIN_PRIMARY_KEY,
+                    message_serializer=serializer.GraphSONSerializersV2d0(),
+                )
+        return self._client
+
+    def _submit_query(self, query: str, max_retries: int = 3) -> list:
+        """Submit a Gremlin query with retry on 429 / transient / connection errors."""
+        for attempt in range(1, max_retries + 1):
+            gremlin_client = self._get_client()
+            t0 = time.time()
+            try:
+                callback = gremlin_client.submit(message=query, bindings={})
+                results = callback.all().result()
+                elapsed_ms = (time.time() - t0) * 1000
+                logger.info(
+                    "Gremlin OK [%s]: %d results in %.0fms (attempt %d/%d)  query=%.200s",
+                    self._graph_name, len(results), elapsed_ms, attempt, max_retries, query,
+                )
+                return results
+            except WSServerHandshakeError as e:
+                elapsed_ms = (time.time() - t0) * 1000
+                logger.error(
+                    "Gremlin auth failure (401) [%s] in %.0fms: %s",
+                    self._graph_name, elapsed_ms, e,
+                )
+                raise RuntimeError(
+                    f"Cosmos DB Gremlin authentication failed: {e}. "
+                    "Verify COSMOS_GREMLIN_ENDPOINT and COSMOS_GREMLIN_PRIMARY_KEY."
+                ) from e
+            except GremlinServerError as e:
+                elapsed_ms = (time.time() - t0) * 1000
+                status = getattr(e, "status_code", 0)
+                logger.warning(
+                    "GremlinServerError %s [%s] in %.0fms (attempt %d/%d): %s",
+                    status, self._graph_name, elapsed_ms, attempt, max_retries, e,
+                )
+                if status in (429, 408) and attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.info("Retrying in %ds...", backoff)
+                    time.sleep(backoff)
+                    continue
+                raise
+            except Exception as e:
+                elapsed_ms = (time.time() - t0) * 1000
+                logger.warning(
+                    "Gremlin connection error [%s] in %.0fms (attempt %d/%d): %s: %s",
+                    self._graph_name, elapsed_ms, attempt, max_retries, type(e).__name__, e,
+                )
+                with self._lock:
+                    if self._client is gremlin_client:
+                        try:
+                            gremlin_client.close()
+                        except Exception:
+                            pass
+                        self._client = None
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.info("Reconnecting in %ds...", backoff)
+                    time.sleep(backoff)
+                    continue
+                raise
+        raise RuntimeError("Exhausted retries for Gremlin query")
 
     async def execute_query(self, query: str, **kwargs) -> dict:
         """Execute a Gremlin query against Cosmos DB.
@@ -224,7 +209,7 @@ class CosmosDBGremlinBackend:
         Returns:
             dict with "columns" and "data" matching GraphQueryResponse.
         """
-        raw_results = await asyncio.to_thread(_submit_query, query)
+        raw_results = await asyncio.to_thread(self._submit_query, query)
         return _normalise_results(raw_results)
 
     # ----- topology endpoint support -----------------------------------
@@ -279,8 +264,8 @@ class CosmosDBGremlinBackend:
             )
 
         raw_vertices, raw_edges = await asyncio.gather(
-            asyncio.to_thread(_submit_query, v_query),
-            asyncio.to_thread(_submit_query, e_query),
+            asyncio.to_thread(self._submit_query, v_query),
+            asyncio.to_thread(self._submit_query, e_query),
         )
 
         # Flatten Gremlin valueMap lists inside properties
@@ -307,13 +292,12 @@ class CosmosDBGremlinBackend:
         return {"nodes": nodes, "edges": edges}
 
     def close(self) -> None:
-        """Close the singleton Gremlin client (thread-safe)."""
-        global _gremlin_client
-        with _gremlin_lock:
-            if _gremlin_client is not None:
-                logger.info("Closing Cosmos DB Gremlin client")
+        """Close this backend's Gremlin client (thread-safe)."""
+        with self._lock:
+            if self._client is not None:
+                logger.info("Closing Cosmos DB Gremlin client for graph '%s'", self._graph_name)
                 try:
-                    _gremlin_client.close()
+                    self._client.close()
                 except Exception:
                     pass
-                _gremlin_client = None
+                self._client = None

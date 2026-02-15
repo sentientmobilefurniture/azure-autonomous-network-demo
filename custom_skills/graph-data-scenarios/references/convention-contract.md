@@ -13,7 +13,7 @@ and investigate it without code changes.
 - ID convention: `{TYPE_PREFIX}-{LOCATION}-{SEQUENCE}` (e.g. `CORE-SYD-01`, `HOST-AZ1-RACK3-01`)
 - IDs are referenced by edges, telemetry, and tickets — spelling must match exactly
 - All rows are inline/deterministic — no randomization in topology data
-- Output directory: `data/entities/` (or `data/network/` in the current flat layout)
+- Output directory: `data/entities/` (inside the scenario's `data/` subdirectory)
 
 ### Junction/Edge CSVs (`Fact*.csv`)
 

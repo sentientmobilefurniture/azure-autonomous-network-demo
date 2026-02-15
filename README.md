@@ -1,9 +1,20 @@
-# Autonomous Network NOC Demo
+# AI Incident Investigator — Multi-Scenario Demo
 
-An AI-powered autonomous Network Operations Centre that diagnoses fibre cuts and
-network incidents using multi-agent orchestration on Azure. Five specialist agents
-collaborate to perform root-cause analysis, assess blast radius, retrieve operating
-procedures, and produce actionable situation reports — without human intervention.
+An AI-powered incident investigation platform that diagnoses operational issues
+using multi-agent orchestration on Azure. Five specialist agents collaborate to
+perform root-cause analysis, assess blast radius, retrieve operating procedures,
+and produce actionable situation reports — without human intervention.
+
+The platform is **scenario-agnostic** — it supports multiple investigation domains.
+New scenarios are added as self-contained data packs; no code changes required.
+
+### Available Scenarios
+
+| Scenario | Domain | Incident |
+|----------|--------|----------|
+| **telco-noc** | Telecommunications | Fibre cut triggers cascading alert storm across routers, switches, and services |
+| **cloud-outage** | Cloud Infrastructure | Cooling failure causes thermal shutdown cascade across hosts, VMs, and services |
+| **customer-recommendation** | E-Commerce | Recommendation model bias spikes return rates across customer segments |
 
 > **See also:** [ARCHITECTURE.md](documentation/ARCHITECTURE.md) for detailed
 > architecture, data flow diagrams, and design decisions.
@@ -12,12 +23,12 @@ procedures, and produce actionable situation reports — without human intervent
 
 ## How It Works
 
-A simulated alert storm enters the system. An **Orchestrator** agent in Azure AI
-Foundry delegates to four specialists:
+An alert storm enters the system (simulated or real). An **Orchestrator** agent in
+Azure AI Foundry delegates to four specialists:
 
 | Agent | Data Source | Tool |
 |-------|-----------|------|
-| **GraphExplorer** | Network topology graph | `OpenApiTool` → `graph-query-api /query/graph` |
+| **GraphExplorer** | Topology/dependency graph | `OpenApiTool` → `graph-query-api /query/graph` |
 | **Telemetry** | Metrics & alerts in Cosmos DB NoSQL | `OpenApiTool` → `graph-query-api /query/telemetry` |
 | **RunbookKB** | Operational procedures | `AzureAISearchTool` → `runbooks-index` |
 | **HistoricalTicket** | Past incident records | `AzureAISearchTool` → `tickets-index` |
@@ -89,28 +100,26 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
-`deploy.sh` runs the full deployment pipeline: infra → data → indexes → agents → local services.
+`deploy.sh` provisions Azure infrastructure and deploys the container. Data loading
+and agent configuration happen via the UI after deployment.
 
 ```bash
 # Skip infrastructure (reuse existing Azure resources)
 ./deploy.sh --skip-infra
-
-# Skip specific steps
-./deploy.sh --skip-data --skip-index
 
 # Target a specific azd environment and location
 ./deploy.sh --env myenv --location eastus2
 
 # Non-interactive (skip all prompts)
 ./deploy.sh --yes
+
+# Skip starting local dev servers
+./deploy.sh --skip-local
 ```
 
 | Flag | Effect |
 |------|--------|
 | `--skip-infra` | Skip `azd up` (reuse existing Azure resources) |
-| `--skip-index` | Skip AI Search index creation (keeps existing indexes) |
-| `--skip-data` | Skip Cosmos DB graph + telemetry loading |
-| `--skip-agents` | Skip AI Foundry agent provisioning |
 | `--skip-local` | Skip starting local API + frontend |
 | `--env NAME` | azd environment name |
 | `--location LOC` | Azure location (default: swedencentral) |
@@ -122,60 +131,43 @@ chmod +x deploy.sh
 
 ```bash
 cp azure_config.env.template azure_config.env
-# Edit azure_config.env — set GRAPH_BACKEND, etc.
 ```
 
 #### 2. Deploy infrastructure
 
 ```bash
-azd up -e <env-name>
+./deploy.sh
+# or: azd up -e <env-name>
 ```
 
-`azd up` provisions all Azure resources, builds and deploys the **unified
-container** (nginx + API + graph-query-api), uploads data to blob storage,
-and populates `azure_config.env` with deployment outputs.
+This provisions all Azure resources and deploys the unified container.
 
-Resources deployed:
-- VNet (Container Apps + Private Endpoints subnets)
-- AI Foundry (account + project + GPT-4.1 deployment)
-- Azure AI Search
-- Storage Account + blob containers (runbooks, tickets)
-- Container Apps Environment (ACR + Log Analytics)
-- **Unified Container App** (nginx + API + graph-query-api, system-assigned managed identity)
-- Cosmos DB Gremlin account + database + graph
-- Cosmos DB NoSQL account (telemetry)
-- Cosmos DB Private Endpoints
-- RBAC role assignments (5 roles for container app identity)
+#### 3. Upload scenario data
 
-#### 3. Load Cosmos DB data
+Generate tarballs from the included scenarios:
 
 ```bash
-source azure_config.env
-uv run python scripts/cosmos/provision_cosmos_gremlin.py
-uv run python scripts/cosmos/provision_cosmos_telemetry.py
+./data/generate_all.sh
 ```
 
-#### 4. Create search indices
+This creates:
+- `data/scenarios/telco-noc.tar.gz`
+- `data/scenarios/cloud-outage.tar.gz`
+- `data/scenarios/customer-recommendation.tar.gz`
 
-```bash
-uv run python scripts/create_runbook_indexer.py
-uv run python scripts/create_tickets_indexer.py
-```
+Open the app, click ⚙ Settings → Upload tab, and upload a `.tar.gz` file.
+The Container App loads graph data into Cosmos DB, telemetry into NoSQL,
+runbooks/tickets into AI Search — all inside the VNet, no firewall issues.
 
-#### 5. Provision AI agents
+#### 4. Configure agents
 
-```bash
-uv run python scripts/provision_agents.py
-```
+In Settings → Data Sources tab, select which graph and search indexes
+each agent should use, then click Apply Changes. This provisions 5 AI
+Foundry agents with the correct data bindings.
 
-Creates 5 Foundry agents: Orchestrator + GraphExplorer + Telemetry + RunbookKB +
-HistoricalTicket.
+#### 5. Run an investigation
 
-#### 6. Run the demo
-
-**Production (Azure):** After `deploy.sh` or `azd up` completes, the app is live at
-the Container App URL (printed as `APP_URI` in `azure_config.env`). No local
-services needed.
+Paste an alert into the input panel and watch the agents investigate.
 
 **Local development:**
 
@@ -195,71 +187,70 @@ Open http://localhost:5173
 
 ```
 .
-├── azure.yaml                  # azd service definitions & hooks (1 unified service)
-├── azure_config.env            # Symlink → envs/{active-env}.env (gitignored)
-├── azure_config.env.template   # Template for per-environment config files
-├── deploy.sh                   # Automated deployment script
-├── envs/                       # Per-environment config files (gitignored)
-│   ├── cosmosprod5.env         #   Created by deploy_app.sh
-│   └── cosmosgraphstable3.env  #   One file per azd environment
+├── azure.yaml                  # azd service definitions & hooks
+├── azure_config.env            # Runtime config (gitignored, auto-populated)
+├── azure_config.env.template   # Config template
+├── deploy.sh                   # Automated deployment (infra + container)
 ├── Dockerfile                  # Unified container: nginx + API + graph-query-api
-├── nginx.conf                  # Reverse proxy config (hardcoded localhost)
+├── nginx.conf                  # Reverse proxy (localhost routing)
 ├── supervisord.conf            # Process manager for unified container
-├── .dockerignore               # Build context exclusions
-├── pyproject.toml              # Python deps for scripts/ (uv-managed)
 │
 ├── api/                        # FastAPI backend (port 8000)
 │   └── app/
 │       ├── main.py             # App factory, CORS, router mounting
-│       ├── orchestrator.py     # Agent orchestrator bridge
-│       └── routers/            # REST endpoints (alert, agents, logs)
+│       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE)
+│       └── routers/
+│           ├── alert.py        # POST /api/alert → SSE investigation stream
+│           ├── agents.py       # GET /api/agents
+│           ├── config.py       # POST /api/config/apply → re-provision agents
+│           └── logs.py         # GET /api/logs → SSE log stream
 │
-├── graph-query-api/            # Graph & telemetry microservice (port 8100)
-│   ├── main.py                 # FastAPI app with lifespan management
-│   ├── config.py               # Env var loading, backend selector enum
-│   ├── router_graph.py         # POST /query/graph
-│   ├── router_telemetry.py     # POST /query/telemetry (SQL)
-│   ├── backends/
-│   │   ├── cosmosdb.py         # Cosmos DB Gremlin (gremlinpython)
-│   │   └── mock.py             # Static JSON responses
-│   └── openapi/                # Backend-specific OpenAPI specs
+├── graph-query-api/            # Graph, telemetry & data management (port 8100)
+│   ├── config.py               # ScenarioContext, env vars, X-Graph header routing
+│   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin dispatch)
+│   ├── router_telemetry.py     # POST /query/telemetry (scenario-aware SQL)
+│   ├── router_topology.py      # POST /query/topology (graph visualization)
+│   ├── router_ingest.py        # POST /query/scenario/upload (data ingestion)
+│   ├── router_prompts.py       # CRUD /query/prompts (Cosmos-backed prompts)
+│   ├── search_indexer.py       # AI Search indexer pipeline (blob → vectorize)
+│   └── backends/               # Per-graph client cache
+│       ├── cosmosdb.py         # Cosmos DB Gremlin (parameterised)
+│       └── mock.py             # Static responses (offline demos)
 │
-├── frontend/                   # React/Vite NOC dashboard
+├── frontend/                   # React/Vite dashboard
 │   └── src/
-│       ├── App.tsx             # Main app component
-│       ├── components/         # AlertPanel, AgentTimeline, etc.
-│       └── hooks/              # SSE streaming hook
-│
-├── infra/                      # Bicep IaC (azd up)
-│   ├── main.bicep              # Orchestrator (subscription-scoped, 1 Container App)
-│   ├── main.bicepparam         # Parameter file (reads env vars)
-│   └── modules/                # AI Foundry, Search, Storage, Cosmos, VNet, Roles
+│       ├── context/ScenarioContext.tsx  # Active graph/index state
+│       ├── hooks/
+│       │   ├── useInvestigation.ts     # SSE alert investigation
+│       │   ├── useTopology.ts          # Graph topology data
+│       │   └── useScenarios.ts         # Scenario upload + listing
+│       └── components/
+│           ├── Header.tsx              # Branding + ⚙ Settings button
+│           ├── SettingsModal.tsx        # Data Sources + Upload tabs
+│           └── graph/                  # Force-directed graph viewer
 │
 ├── data/
-│   ├── graph_schema.yaml       # Declarative graph schema manifest
-│   ├── network/                # CSV topology data (vertices & edges)
-│   ├── runbooks/               # Markdown operating procedures
-│   ├── tickets/                # Historical incident tickets
-│   ├── prompts/                # Agent system prompts
-│   └── scripts/                # Data generation scripts
+│   ├── generate_all.sh         # Generate + tarball all scenarios
+│   └── scenarios/
+│       ├── telco-noc/          # Telco — fibre cut
+│       ├── cloud-outage/       # Cloud DC — cooling cascade
+│       └── customer-recommendation/  # E-commerce — model bias
 │
 ├── scripts/
-│   ├── provision_agents.py     # Create/update Foundry agents
-│   ├── create_runbook_indexer.py
-│   ├── create_tickets_indexer.py
-│   ├── cosmos/                 # Cosmos DB-specific scripts
-│   │   ├── provision_cosmos_gremlin.py   # YAML-manifest-driven graph loader
-│   │   └── provision_cosmos_telemetry.py # CSV telemetry data → Cosmos NoSQL
-│   └── testing_scripts/        # Smoke tests & CLI orchestrator
+│   ├── scenario_loader.py      # ScenarioLoader — resolves paths/config
+│   ├── agent_provisioner.py    # AgentProvisioner class (importable)
+│   ├── provision_agents.py     # CLI agent provisioning (fallback)
+│   └── testing_scripts/        # Smoke tests & CLI tools
 │
-├── hooks/
-│   ├── preprovision.sh         # Resolves principal ID, syncs env → Bicep
-│   └── postprovision.sh        # Uploads blobs, writes azure_config.env, fetches Cosmos key
+├── infra/                      # Bicep IaC (azd up)
+│   ├── main.bicep              # Subscription-scoped orchestrator
+│   └── modules/                # AI Foundry, Search, Storage, Cosmos, VNet, Roles
+│
+├── deprecated/                 # Superseded scripts (kept for reference)
 │
 └── documentation/
     ├── ARCHITECTURE.md         # Full architecture reference
-    ├── SCENARIO.md             # Demo scenario narrative
-    └── ...
+    └── v8datamanagementplane.md # V8 data management design
 ```
 
 ---
@@ -279,50 +270,31 @@ cd frontend && npm run dev
 cd graph-query-api && source ../azure_config.env && uv run uvicorn main:app --host 0.0.0.0 --port 8100 --reload
 ```
 
-> **Note:** When running locally, the API talks to **remote** Azure resources
-> (Foundry agents, Cosmos DB). The agents' `OpenApiTool` calls go to the
-> **deployed** Container App URL (set in `GRAPH_QUERY_API_URI`).
-> Running graph-query-api locally is for direct endpoint testing only.
+### Generating scenario data
+
+```bash
+./data/generate_all.sh                    # All scenarios
+./data/generate_all.sh cloud-outage       # Single scenario
+```
+
+Tarballs are created at `data/scenarios/<name>.tar.gz` ready for upload.
 
 ### Redeploying the app
 
 ```bash
-azd deploy app    # Rebuilds unified container in ACR, creates new Container App revision
+azd deploy app    # Rebuilds container, creates new revision (~60s)
 ```
 
-### Reprovisioning agents
+### CLI agent provisioning (fallback)
 
 ```bash
-uv run python scripts/provision_agents.py    # Deletes old agents, creates fresh ones
-azd deploy app                                # Rebake container with new agent_ids.json
+source azure_config.env && uv run python scripts/provision_agents.py --force
 ```
 
 ### CLI testing (no UI)
 
 ```bash
-# Default alert scenario
 uv run python scripts/testing_scripts/test_orchestrator.py
-
-# Custom alert
-uv run python scripts/testing_scripts/test_orchestrator.py "08:15:00 MAJOR ROUTER-SYD-01 BGP_FLAP BGP session down"
-```
-
-### Container App management
-
-```bash
-source azure_config.env
-# Container App name format: ca-app-<resourceToken>
-CA_NAME=$(az containerapp list --resource-group $AZURE_RESOURCE_GROUP --query "[?contains(name,'ca-app')].name" -o tsv)
-
-# View logs
-az containerapp logs show --name $CA_NAME --resource-group $AZURE_RESOURCE_GROUP --type console --tail 50
-
-# Stream logs
-az containerapp logs show --name $CA_NAME --resource-group $AZURE_RESOURCE_GROUP --type console --follow
-
-# Check status
-az containerapp show --name $CA_NAME --resource-group $AZURE_RESOURCE_GROUP \
-  --query "{fqdn:properties.configuration.ingress.fqdn, revision:properties.latestRevisionName}" -o table
 ```
 
 ---

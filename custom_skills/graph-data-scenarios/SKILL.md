@@ -20,28 +20,39 @@ Use this skill when:
 
 ## Reference Implementation
 
-The `telco-noc` scenario in `data/scripts/` is the canonical reference:
+The `telco-noc` scenario in `data/scenarios/telco-noc/` is the canonical reference:
 
 | Script | Output | Purpose |
-|--------|--------|---------|
-| `generate_topology_data.py` | 8 entity CSVs → `data/network/` | Vertices: routers, switches, base stations, links, BGP sessions, MPLS paths, services, SLA policies |
-| `generate_routing_data.py` | 2 junction CSVs → `data/network/` | Edges: MPLS path hops, service dependencies |
-| `generate_alert_stream.py` | 2 telemetry CSVs → `data/telemetry/` | AlertStream (~5k rows: 54h baseline + 90s cascade), LinkTelemetry (~8.6k rows: 72h 5-min samples) |
-| `generate_tickets.py` | 10 `.txt` files → `data/tickets/` | Historical incident tickets for AI Search RAG |
+|--------|--------|----------|
+| `scripts/generate_topology.py` | 8 entity CSVs → `data/entities/` | Vertices: routers, switches, base stations, links, BGP sessions, MPLS paths, services, SLA policies |
+| `scripts/generate_routing.py` | 2 junction CSVs → `data/entities/` | Edges: MPLS path hops, service dependencies |
+| `scripts/generate_telemetry.py` | 2 telemetry CSVs → `data/telemetry/` | AlertStream (~5k rows: 54h baseline + 90s cascade), LinkTelemetry (~8.6k rows: 72h 5-min samples) |
+| `scripts/generate_tickets.py` | 10 `.txt` files → `data/knowledge/tickets/` | Historical incident tickets for AI Search RAG |
 
-Supporting manifest:
-- `data/graph_schema.yaml` — 266-line declarative schema defining 8 vertex types, 11 edge types, CSV file mappings, and property definitions
+Two additional scenarios (`cloud-outage`, `customer-recommendation`) demonstrate
+non-telco domains: cloud infrastructure and e-commerce.
+
+Supporting manifests:
+- `graph_schema.yaml` — at scenario root, declarative schema defining vertex types, edge types, CSV file mappings
+- `scenario.yaml` — scenario manifest with Cosmos mapping, search indexes, graph styles, telemetry baselines
 
 ## Output Structure
 
-A complete scenario produces this file tree:
+A complete scenario lives under `data/scenarios/<scenario-name>/` and produces:
 
 ```
-data/scenarios/<scenario-name>/data/
-├── entities/                     # Vertex + edge CSVs
+data/scenarios/<scenario-name>/
+├── scenario.yaml                 # Scenario manifest (metadata + cosmos/search config)
+├── graph_schema.yaml             # Graph ontology manifest (at scenario root)
+├── scripts/                      # Data generation scripts
+│   ├── generate_topology.py
+│   ├── generate_routing.py
+│   ├── generate_telemetry.py
+│   └── generate_tickets.py
+└── data/                         # Generated output (entities/telemetry gitignored)
+    ├── entities/                  # Vertex + edge CSVs
 │   ├── Dim*.csv                  # One per vertex type (Dim = dimension/entity)
 │   └── Fact*.csv                 # One per junction/edge table (Fact = relationship)
-├── graph_schema.yaml             # Graph ontology manifest
 ├── telemetry/                    # Time-series CSVs for Cosmos NoSQL
 │   ├── AlertStream.csv           # Alert events (required)
 │   └── <OtherMetrics>.csv        # Additional telemetry containers

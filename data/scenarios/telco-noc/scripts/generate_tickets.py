@@ -7,7 +7,7 @@ Outputs:
 
 import os
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "tickets")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "knowledge", "tickets")
 
 
 def generate_tickets() -> list[dict]:

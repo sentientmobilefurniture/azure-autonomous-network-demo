@@ -1,0 +1,32 @@
+Incident: INC-2025-10-22-0038
+Title: Payment gateway timeout — 15% checkout failures
+Severity: P1
+Root Cause: CUST-002
+Root Cause Type: PAYMENT_GATEWAY_TIMEOUT
+Created: 2025-10-22T19:00:00Z
+Resolved: 2025-10-22T20:15:00Z
+SLA Breached: No
+
+Description:
+Payment provider experienced intermittent timeouts during peak shopping hours. 15% of checkout attempts failed. Cart recovery emails sent to affected users.
+
+Detection Method:
+Automated payment success rate alert
+
+Resolution:
+Payment provider resolved their infrastructure issue. Implemented retry with exponential backoff and fallback to secondary payment provider.
+
+Customer Impact:
+- CUST-001
+- CUST-002
+- CUST-003
+- CUST-006
+
+Services Affected: 1
+Alerts Generated: 234
+Alerts Suppressed: 200
+Time to Detect: 15 seconds
+Time to Resolve: 75 minutes
+
+Lessons Learned:
+Configure automatic failover to secondary payment provider when primary error rate exceeds 5%. Add cart recovery automation for payment-failed checkouts.
