@@ -341,6 +341,16 @@ async def upload_graph(
             schema = yaml.safe_load((scenario_dir / "graph_schema.yaml").read_text())
             sc_name = scenario_name or manifest["name"]
 
+            # Extract metadata for frontend passthrough
+            scenario_metadata = {
+                "display_name": manifest.get("display_name"),
+                "description": manifest.get("description"),
+                "use_cases": manifest.get("use_cases"),
+                "example_questions": manifest.get("example_questions"),
+                "graph_styles": manifest.get("graph_styles"),
+                "domain": manifest.get("domain"),
+            }
+
             if scenario_name:
                 gremlin_graph = f"{sc_name}-topology"
             else:
@@ -450,6 +460,7 @@ async def upload_graph(
                 "graph": gremlin_graph,
                 "vertices": total_v,
                 "edges": total_e,
+                "scenario_metadata": scenario_metadata,
             })
 
     return sse_upload_response(work, error_label="graph upload")
@@ -751,6 +762,14 @@ async def upload_prompts(
                 container = _get_prompts_container(sc_name, ensure_created=True)
                 stored = []
 
+                # Derive graph name for placeholder substitution
+                # Same logic as provision_agents.py: {graph_name} → "sc_name-topology"
+                graph_name = f"{sc_name}-topology"
+
+                def _sub(text: str) -> str:
+                    """Replace {graph_name} and {scenario_prefix} placeholders."""
+                    return text.replace("{graph_name}", graph_name).replace("{scenario_prefix}", sc_name)
+
                 # Find prompts dir (parent of graph_explorer/ or where prompt .md files live)
                 prompts_dir = None
                 for md in all_md:
@@ -767,7 +786,7 @@ async def upload_prompts(
                     agent = PROMPT_AGENT_MAP.get(md_file.name)
                     if not agent:
                         continue
-                    txt = md_file.read_text()
+                    txt = _sub(md_file.read_text())
                     existing = list(container.query_items(
                         query=(
                             "SELECT c.version FROM c "
@@ -814,7 +833,7 @@ async def upload_prompts(
                         if pf.exists():
                             parts.append(pf.read_text())
                     if parts:
-                        composed = "\n\n---\n\n".join(parts)
+                        composed = _sub("\n\n---\n\n".join(parts))
                         existing = list(container.query_items(
                             query=(
                                 "SELECT c.version FROM c "

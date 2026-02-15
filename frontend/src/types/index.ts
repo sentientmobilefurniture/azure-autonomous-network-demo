@@ -42,6 +42,12 @@ export interface SavedScenario {
     timestamp: string;
     [key: string]: unknown;
   }>;
+  graph_styles?: {
+    node_types?: Record<string, { color: string; size: number; icon?: string }>;
+  };
+  use_cases?: string[];
+  example_questions?: string[];
+  domain?: string;
 }
 
 export type SlotKey = 'graph' | 'telemetry' | 'runbooks' | 'tickets' | 'prompts';

@@ -1,4 +1,4 @@
-import { NODE_COLORS } from './graphConstants';
+import { useNodeColor } from '../../hooks/useNodeColor';
 import type { TopologyMeta } from '../../hooks/useTopology';
 
 interface GraphToolbarProps {
@@ -13,13 +13,15 @@ interface GraphToolbarProps {
   onZoomToFit: () => void;
   isPaused?: boolean;
   onTogglePause?: () => void;
+  nodeColorOverride: Record<string, string>;
 }
 
 export function GraphToolbar({
   meta, loading, availableLabels, activeLabels,
   onToggleLabel, searchQuery, onSearchChange, onRefresh, onZoomToFit,
-  isPaused, onTogglePause,
+  isPaused, onTogglePause, nodeColorOverride,
 }: GraphToolbarProps) {
+  const getColor = useNodeColor(nodeColorOverride);
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 shrink-0">
       {/* Title */}
@@ -41,7 +43,7 @@ export function GraphToolbar({
             >
               <span
                 className="h-2 w-2 rounded-full shrink-0"
-                style={{ backgroundColor: NODE_COLORS[label] ?? '#6B7280' }}
+                style={{ backgroundColor: getColor(label) }}
               />
               {label}
             </button>

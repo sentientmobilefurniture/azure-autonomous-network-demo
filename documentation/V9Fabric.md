@@ -18,8 +18,15 @@
 4. Read all available eventhouses and provide as a list for telemetry agent
 5. Query graph to retrieve topology and display it using the graph visualizer module
 6. Graph Explorer and Graph telemetry agent will be bound with Fabric data connection — So a connection to the fabric workspace must be created
-7. In Data sources settings menu... Have a checkbox. Add a first tab basically to choose which backend will be used. To choose whether using a cosmosDB backend or fabric backend. Clicking it will grey out the cosmosDB tabs and ungrey the fabric tab. In total there are four tabs now.
+7. ~~In Data sources settings menu... Have a checkbox. Add a first tab basically to choose which backend will be used. To choose whether using a cosmosDB backend or fabric backend. Clicking it will grey out the cosmosDB tabs and ungrey the fabric tab. In total there are four tabs now.~~ **Revised (UI/UX audit):** A backend dropdown at the top of Settings modal selects CosmosDB or Fabric. The tab bar **adapts contextually** — `[Scenarios] [Data Sources] [Upload]` for CosmosDB, `[Scenarios] [Fabric Setup] [Upload]` for Fabric. No greyed-out tabs (poor UX). See Decision 5 for rationale.
 8. Agents will be able to query the fabric ontology freely.
+
+### Requirements Added (UI/UX Audit)
+
+9. **Fabric resource provisioning from UI:** The UI can provision Fabric capacity, Lakehouse, Eventhouse, and Ontology via SSE-streamed API endpoints wrapping the reference scripts in `fabric_implementation_references/scripts/fabric/`. Same progress-bar UX as CosmosDB data uploads. This replaces the requirement to run provisioning scripts manually.
+10. **Adaptive "Add Scenario" modal:** When the Fabric backend is selected, the AddScenarioModal changes its upload slots from CosmosDB-specific formats (.tar.gz for graph/telemetry) to Fabric-specific formats (CSVs for Lakehouse tables, CSVs for Eventhouse tables). Shared slots (runbooks, tickets, prompts) remain the same regardless of backend.
+11. **Manual Fabric data upload:** The Upload tab adapts to show Lakehouse CSV upload + Eventhouse CSV upload when Fabric is selected, mirroring the CosmosDB upload pattern with the same drag-and-drop, progress-bar UX.
+12. **One-click Fabric bootstrapping:** A "Provision Fabric Resources" button on the Fabric Setup tab runs the full provisioning pipeline (capacity attach → workspace create → lakehouse create + populate → eventhouse create + ingest → ontology create) with step-by-step SSE progress, so the user can go from zero to a working Fabric backend in a single action.
 
 ---
 
@@ -30,8 +37,9 @@
 | **Phase 1:** Backend plumbing — config & enum | ⬜ Not started | `config.py`, `backends/__init__.py`, `azure_config.env.template` |
 | **Phase 2:** Fabric graph backend | ⬜ Not started | `backends/fabric.py` (NEW) |
 | **Phase 3:** Fabric discovery endpoints | ⬜ Not started | `router_fabric.py` (NEW), `main.py` |
+| **Phase 3.5:** Fabric provisioning API | ⬜ Not started | `api/app/routers/fabric_provision.py` (NEW), wraps reference scripts |
 | **Phase 4:** Fabric OpenAPI spec & agent provisioner | ⬜ Not started | `openapi/fabric.yaml` (NEW), `agent_provisioner.py`, `api/app/routers/config.py` |
-| **Phase 5:** Frontend — backend toggle & Fabric settings tab | ⬜ Not started | `SettingsModal.tsx`, `ScenarioContext.tsx`, `useFabric.ts` (NEW) |
+| **Phase 5:** Frontend — adaptive backend UI | ⬜ Not started | `SettingsModal.tsx`, `AddScenarioModal.tsx`, `ScenarioContext.tsx`, `useFabric.ts` (NEW) |
 | **Phase 6:** End-to-end integration testing | ⬜ Not started | Manual verification, mock Fabric mode |
 
 ### Deviations From Plan
@@ -55,8 +63,9 @@
 - [Item 1: Backend Plumbing](#item-1-backend-plumbing)
 - [Item 2: Fabric Graph Backend](#item-2-fabric-graph-backend)
 - [Item 3: Fabric Discovery Endpoints](#item-3-fabric-discovery-endpoints)
+- [Item 3.5: Fabric Provisioning API](#item-35-fabric-provisioning-api)
 - [Item 4: Agent Provisioner Changes](#item-4-agent-provisioner-changes)
-- [Item 5: Frontend Backend Toggle & Fabric Tab](#item-5-frontend-backend-toggle--fabric-tab)
+- [Item 5: Frontend — Adaptive Backend UI](#item-5-frontend--adaptive-backend-ui)
 - [Implementation Phases](#implementation-phases)
 - [File Change Inventory](#file-change-inventory)
 - [Edge Cases & Validation](#edge-cases--validation)
@@ -70,11 +79,11 @@
 
 | URL prefix | Proxied to | Config |
 |------------|-----------|--------|
-| `/api/*` | API service on `:8000` | `vite.config.ts` L31-36 (dev), `nginx.conf.template` L17-27 (prod) |
-| `/query/*` | graph-query-api on `:8100` | `vite.config.ts` L41-51 (dev), `nginx.conf.template` L17-27 (prod — same `/api/` proxy covers both in prod via unified container) |
-| `/health` | API service on `:8000` | `vite.config.ts` L37-40 |
+| `/api/*` | API service on `:8000` | `vite.config.ts` L33-36 (dev), `nginx.conf.template` L16-28 (prod) |
+| `/query/*` | graph-query-api on `:8100` | `vite.config.ts` L41-52 (dev) — **no prod proxy** (see ⚠️ below) |
+| `/health` | API service on `:8000` | `vite.config.ts` L37-40 (dev), `nginx.conf.template` L31-34 (prod) |
 
-> **⚠️ Production routing:** In the deployed container, nginx proxies **all** `/api/` traffic to the API backend. The graph-query-api is accessed internally by `OpenApiTool` agents using `GRAPH_QUERY_API_URI` env var (e.g., `https://<container-app-hostname>`). Frontend calls to `/query/*` go through the **same** nginx → API backend path. New Fabric endpoints at `/query/fabric/*` must follow this pattern.
+> **⚠️ Production routing:** In the deployed container, nginx proxies **only** `/api/` and `/health` traffic to the API backend. **There is no `/query/*` proxy in `nginx.conf.template`.** The graph-query-api is accessed internally by `OpenApiTool` agents using `GRAPH_QUERY_API_URI` env var (e.g., `https://<container-app-hostname>`). Frontend calls to `/query/*` **do not work in prod** unless an nginx proxy rule is added for `/query/`. New Fabric endpoints at `/query/fabric/*` also require this missing proxy. **This is a pre-existing gap that must be addressed in Phase 3 or earlier** (add a `/query/` location block to `nginx.conf.template` proxying to the graph-query-api).
 
 ### Naming Conventions
 
@@ -130,8 +139,9 @@ def get_credential():
 | 1 | Backend plumbing (config, enum, env vars) | Backend | High — foundation for everything | Small |
 | 2 | `FabricGraphBackend` — `execute_query()` + `get_topology()` via Fabric GQL REST | Backend | High — core query path | Large |
 | 3 | Fabric discovery endpoints (ontologies, eventhouses) | Backend | Medium — enables UI dropdowns | Medium |
+| 3.5 | Fabric provisioning API (wrap reference scripts as SSE endpoints) | Backend | High — one-click bootstrapping | Medium |
 | 4 | Fabric OpenAPI spec + agent provisioner changes | Backend | High — agents can query Fabric | Medium |
-| 5 | Frontend backend toggle + Fabric settings tab | Frontend | High — user-facing backend switch | Large |
+| 5 | Frontend adaptive backend UI + scenario modal adaptation | Frontend | High — user-facing backend switch | Large |
 
 ### Dependency Graph
 
@@ -143,24 +153,30 @@ Phase 1 (config/enum) ──┐
                          │       │
                          ├──▶ Phase 3 (discovery endpoints)
                          │       │
+                         ├──▶ Phase 3.5 (provisioning API) ◀── depends on Phase 3
+                         │       │
                          └───────┴──▶ Phase 5 (frontend)
                                           │
                                           └──▶ Phase 6 (E2E testing)
 ```
 
 Phase 1 is prerequisite for all others. Phases 2 and 3 can be parallelized.
-Phase 4 depends on Phase 2 (needs working backend). Phase 5 depends on Phase 3
-(needs discovery endpoints) and Phase 1 (needs config types). Phase 6 is final.
+Phase 3.5 depends on Phase 3 (reuses discovery helpers). Phase 4 depends on
+Phase 2 (needs working backend). Phase 5 depends on Phases 3 and 3.5 (needs
+discovery and provisioning endpoints). Phase 6 is final.
 
 ### UX Audit Summary
 
 | Area | Finding | Severity |
 |------|---------|----------|
-| Backend toggle | No existing UI for switching backends — must be added to Data Sources tab | High |
+| Backend toggle | No existing UI for switching backends — a backend dropdown at top of Settings modal is the cleanest approach | High |
+| ~~Greyed-out tabs~~ | ~~Inactive backend's controls must be visually disabled, not hidden (per req 7)~~ **Revised:** Greyed-out tabs are poor UX — the tab bar should **adapt contextually** (different tabs for each backend). Simpler, cleaner, no dead UI elements. | **Revised → N/A** |
 | Fabric settings | No ontology/eventhouse selectors exist — must be built from scratch | High |
+| Add Scenario modal | **Not adapted for Fabric.** CosmosDB uploads .tar.gz archives; Fabric uploads CSVs to Lakehouse/Eventhouse. Upload slots must change based on selected backend. | **High (was missing)** |
+| Fabric provisioning | Reference scripts exist but require CLI execution. Wrapping them as SSE API endpoints enables one-click provisioning from the UI with progress feedback. | **High (was missing)** |
+| Upload tab | Upload tab shows CosmosDB-specific upload boxes. Must adapt to show Lakehouse/Eventhouse CSV uploads when Fabric is selected. | **High (was missing)** |
 | Loading states | Ontology/eventhouse listing can be slow (Fabric REST) — needs loading spinner | Medium |
 | Error feedback | Fabric auth failures need clear messaging (credential scope, workspace access) | Medium |
-| Greyed-out tabs | Inactive backend's controls must be visually disabled, not hidden (per requirement) | Medium |
 
 ---
 
@@ -215,20 +231,85 @@ class ScenarioContext:
     fabric_kql_uri: str | None = None
 ```
 
-### Decision 5: Frontend tab structure — 4 tabs with backend selector in Data Sources
+### Decision 5: Frontend tab structure — context-adaptive 3-tab layout (**REVISED**)
 
-Per requirement 7: The Data Sources tab will have a backend toggle (CosmosDB / Fabric radio) at the top. Below the toggle, the active backend's settings render and the inactive backend's settings are visually greyed. Tab bar becomes: **Scenarios | Data Sources | Fabric | Upload**.
+> **Original requirement 7** called for 4 tabs with greyed-out inactive tabs.
+> After UI/UX audit, this is **rejected** in favour of context-adaptive tabs.
 
-Alternatively (simpler): Keep 3 tabs but sub-divide Data Sources with a toggle. The requirement says "four tabs" so we'll add a dedicated **Fabric** tab that greys out when CosmosDB is selected, and the existing **Data Sources** tab greys out when Fabric is selected.
+**Problem with greyed tabs:** Users see UI they can't interact with. It creates visual noise, invites confusion ("why is this greyed?"), and wastes space. A disabled tab that does nothing when clicked is a dead UI element — its only purpose is to tell you what you *can't* do, which is poor UX.
 
-**Final tab structure:**
+**Chosen: Context-adaptive 3-tab layout with backend dropdown.**
+
+A backend dropdown (styled as a segmented control) sits at the top of the Settings modal, above the tab bar. The tab bar structure **changes based on the selected backend**:
+
 ```
-[ Scenarios ] [ Data Sources ] [ Fabric ] [ Upload ]
-                  ↑ greyed if        ↑ greyed if
-                  Fabric active     CosmosDB active
+Backend: [ CosmosDB ▾ ]                        Backend: [ Fabric ▾ ]
+
+[ Scenarios ] [ Data Sources ] [ Upload ]      [ Scenarios ] [ Fabric Setup ] [ Upload ]
+       ↓              ↓             ↓                ↓              ↓              ↓
+  Scenario list   CosmosDB      CosmosDB        Scenario list  Workspace ID    Lakehouse CSV
+  + Add button    dropdowns     .tar.gz          + Add button   Ontology sel.   Eventhouse CSV
+  (shared)        (graph,       archives         (ADAPTED -     Eventhouse sel. Prompts upload
+                  runbooks,                      different      Provision btn   Runbooks/Tickets
+                  tickets,                       upload slots)  Agent binding   (shared with Cosmos)
+                  prompts)
 ```
 
-A backend selector appears at the very top of the modal content area (above the tabs or as a global toggle), determining which of the two data tabs is active.
+**Key UX principles:**
+1. **No dead UI** — every visible element is interactive
+2. **Tab labels change** — "Data Sources" becomes "Fabric Setup" (clear labelling)
+3. **Shared Scenarios tab** — scenarios are metadata; the **AddScenarioModal adapts** its upload slots based on the selected backend
+4. **Upload tab adapts** — shows Lakehouse/Eventhouse CSV uploads for Fabric, .tar.gz uploads for CosmosDB
+5. **Backend selection persists** — stored in localStorage, survives page refresh
+
+**AddScenarioModal adaptation:**
+
+| Upload Slot | CosmosDB Mode | Fabric Mode |
+|-------------|---------------|-------------|
+| Graph Data | `.tar.gz` → graph-query-api Gremlin ingest | Lakehouse CSVs (Dim*.csv) → OneLake + delta tables |
+| Telemetry | `.tar.gz` → Cosmos NoSQL containers | Eventhouse CSVs (AlertStream, LinkTelemetry) → KQL ingest |
+| Runbooks | `.tar.gz` → AI Search index | `.tar.gz` → AI Search index *(unchanged)* |
+| Tickets | `.tar.gz` → AI Search index | `.tar.gz` → AI Search index *(unchanged)* |
+| Prompts | `.tar.gz` → Cosmos prompts DB | `.tar.gz` → Cosmos prompts DB *(unchanged — prompts stay in Cosmos even in Fabric mode)* |
+
+> **Rationale:** Runbooks, tickets, and prompts are AI Search / Cosmos resources, not graph data. They are backend-agnostic and use the same upload path regardless of whether the graph backend is CosmosDB or Fabric. Only graph topology data and telemetry data change based on backend.
+
+### Decision 6: Fabric provisioning from UI
+
+**Chosen:** Wrap reference provisioning scripts as SSE-streamed API endpoints.
+
+**Rationale:**
+- Reference scripts in `fabric_implementation_references/scripts/fabric/` already implement the full provisioning pipeline (lakehouse, eventhouse, ontology)
+- The app already has an established SSE progress pattern (`event: progress\ndata: {...}`) used by upload endpoints
+- Running provisioning from the UI with progress feedback is dramatically better UX than requiring CLI execution
+- The provisioning logic can be extracted into a shared Python module imported by both the API router and the standalone scripts
+
+**Provisioning flow exposed via UI:**
+
+```
+┌─ Fabric Setup tab ──────────────────────────────────────────┐
+│                                                              │
+│  ❶ Capacity ID:  [___________________________] (or from env)│
+│  ❷ Workspace:    [___________________________] (name/ID)    │
+│                                                              │
+│  [ 🚀 Provision Fabric Resources ]                           │
+│     ├── Creating workspace...              ✓                 │
+│     ├── Creating Lakehouse...              ✓                 │
+│     ├── Uploading CSVs to OneLake...       ✓ (10/10 tables)  │
+│     ├── Loading delta tables...            ▶ (7/10)          │
+│     ├── Creating Eventhouse...             ○                 │
+│     ├── Creating KQL tables...             ○                 │
+│     ├── Ingesting telemetry CSVs...        ○                 │
+│     └── Creating Ontology...               ○                 │
+│                                                              │
+│  ❸ Ontology:     [▼ NetworkTopologyOntology    ] [🔄]       │
+│  ❹ Eventhouse:   [▼ NetworkTelemetryEH         ] [🔄]       │
+│                                                              │
+│  [ Load Topology ]  [ Provision Agents ]                     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+After provisioning completes, the ontology/eventhouse dropdowns auto-populate. The user selects their resources and clicks "Provision Agents" to bind agents to Fabric.
 
 ---
 
@@ -236,10 +317,10 @@ A backend selector appears at the very top of the modal content area (above the 
 
 ### Current State
 
-- `GraphBackendType` enum in `config.py` (line 27-29) has only `COSMOSDB` and `MOCK`
+- `GraphBackendType` enum in `config.py` (lines 25-29) has only `COSMOSDB` and `MOCK`
 - `GRAPH_BACKEND` global reads `GRAPH_BACKEND` env var, defaults to `"cosmosdb"`
-- `ScenarioContext` dataclass (lines 80-95) has no Fabric fields
-- `BACKEND_REQUIRED_VARS` (lines 126-133) maps only `COSMOSDB` and `MOCK`
+- `ScenarioContext` dataclass (lines 73-92) has no Fabric fields
+- `BACKEND_REQUIRED_VARS` (lines 125-131) maps only `COSMOSDB` and `MOCK`
 - `backends/__init__.py` factory functions handle only `COSMOSDB` and `MOCK`
 - `azure_config.env.template` has no Fabric variables
 
@@ -553,7 +634,7 @@ class FabricGraphBackend:
 >
 > This is the single hardest piece of the implementation. Start with a simple hard-coded query for a known ontology, then generalize.
 
-> **⚠️ Implementation note:** `httpx` is used for async HTTP (already in `pyproject.toml` via other dependencies). If not present, add `httpx>=0.27.0` to `graph-query-api/pyproject.toml`.
+> **⚠️ Implementation note:** `httpx` is used for async HTTP. It is **not** currently in any project `pyproject.toml` and **must be added** to `graph-query-api/pyproject.toml` as `httpx>=0.27.0`.
 
 ---
 
@@ -563,7 +644,7 @@ class FabricGraphBackend:
 
 - No endpoints exist for browsing Fabric workspace contents
 - Requirements 2 and 4 demand listing ontologies and eventhouses for dropdown selectors
-- The reference has provisioning scripts in `scripts/fabric/` that call `GET /v1/workspaces/{id}/items` but no API endpoints
+- The reference codebase (`fabric_implementation_references/scripts/fabric/`) has provisioning scripts that call `GET /v1/workspaces/{id}/items` but no API endpoints exist in the main project
 
 **Problem:** Frontend needs to discover available Fabric ontologies and eventhouses to populate selectors.
 
@@ -722,6 +803,195 @@ from router_fabric import router as fabric_router
 
 # Add to app includes (after other routers):
 app.include_router(fabric_router)
+```
+
+---
+
+## Item 3.5: Fabric Provisioning API
+
+### Current State
+
+- Reference provisioning scripts exist at `fabric_implementation_references/scripts/fabric/`:
+  - `provision_lakehouse.py` — creates workspace, lakehouse, uploads CSVs via OneLake, loads delta tables
+  - `provision_eventhouse.py` — creates eventhouse, KQL tables, ingests CSV data via queued ingestion
+  - `provision_ontology.py` — creates ontology with entity types, relationships, data bindings
+  - `populate_fabric_config.py` — discovers Fabric items and writes IDs to `azure_config.env`
+  - `_config.py` — shared configuration (paths, Fabric API constants)
+- These scripts are standalone CLI tools — they cannot be called from the UI
+- They use `requests` (sync) and `azure.identity.DefaultAzureCredential`
+- They write progress to stdout with `print()` statements
+
+**Problem:** Users must SSH/CLI into the machine to provision Fabric resources. The existing upload UX (drag-drop + SSE progress) sets expectations for a similar experience with Fabric provisioning.
+
+### Target State
+
+New API router `api/app/routers/fabric_provision.py` that exposes the provisioning pipeline as SSE-streamed endpoints, plus CSV upload endpoints for Lakehouse and Eventhouse data.
+
+### Backend Changes
+
+#### `api/app/routers/fabric_provision.py` — **NEW** (~300 lines)
+
+Wraps the provisioning logic from the reference scripts into FastAPI SSE endpoints:
+
+```python
+"""
+Router: /api/fabric/* — Fabric resource provisioning and data upload.
+
+Provides:
+  POST /api/fabric/provision        — Full provisioning pipeline (SSE)
+  POST /api/fabric/upload-lakehouse — Upload CSVs to Lakehouse delta tables (SSE)
+  POST /api/fabric/upload-eventhouse — Upload CSVs to Eventhouse KQL tables (SSE)
+
+All endpoints stream progress via SSE using the same event format as
+existing upload endpoints (event: progress, event: error, event: complete).
+"""
+
+from __future__ import annotations
+
+import logging
+from fastapi import APIRouter, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
+
+logger = logging.getLogger("api.fabric_provision")
+
+router = APIRouter(prefix="/api/fabric", tags=["fabric-provision"])
+
+
+@router.post("/provision")
+async def provision_fabric_resources(
+    capacity_id: str = Form(...),
+    workspace_name: str = Form(default="AutonomousNetworkDemo"),
+    scenario_name: str = Form(default="cloud-outage"),
+):
+    """
+    Full Fabric provisioning pipeline with SSE progress streaming.
+
+    Steps:
+    1. Create/find workspace (attach to capacity)
+    2. Create Lakehouse
+    3. Upload scenario CSVs to OneLake (from data/lakehouse/)
+    4. Load CSVs as managed delta tables
+    5. Create Eventhouse
+    6. Create KQL tables (AlertStream, LinkTelemetry)
+    7. Ingest scenario CSVs from data/eventhouse/
+    8. Create Ontology with entity types + data bindings
+    9. Update azure_config.env with discovered IDs
+
+    Returns SSE stream with progress events.
+    """
+    async def generate():
+        # Each step emits: event: progress\ndata: {"step": "...", "detail": "...", "pct": N}\n\n
+        # On error: event: error\ndata: {"error": "..."}\n\n
+        # On completion: event: complete\ndata: {"workspace_id": "...", ...}\n\n
+        ...
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/upload-lakehouse")
+async def upload_lakehouse_csvs(
+    files: list[UploadFile] = File(...),
+    scenario_name: str = Form(default=""),
+    workspace_id: str = Form(default=""),
+    lakehouse_id: str = Form(default=""),
+):
+    """
+    Upload CSV files to Lakehouse → OneLake → delta tables.
+
+    Accepts multiple CSV files (Dim*.csv, Fact*.csv).
+    Each file is:
+    1. Uploaded to OneLake Files via DataLakeServiceClient
+    2. Loaded as a managed delta table via Lakehouse Tables API
+
+    Returns SSE stream with per-file progress.
+
+    Implementation note: Reuses logic from provision_lakehouse.py
+    FabricClient._upload_to_onelake() and _load_table().
+    """
+    async def generate():
+        ...
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/upload-eventhouse")
+async def upload_eventhouse_csvs(
+    files: list[UploadFile] = File(...),
+    scenario_name: str = Form(default=""),
+    workspace_id: str = Form(default=""),
+    eventhouse_id: str = Form(default=""),
+):
+    """
+    Upload CSV files to Eventhouse KQL tables.
+
+    Accepts CSV files matching known table schemas (AlertStream, LinkTelemetry).
+    Each file is ingested via azure-kusto-ingest QueuedIngestClient.
+
+    Returns SSE stream with per-file progress.
+
+    Implementation note: Reuses logic from provision_eventhouse.py
+    _create_table_if_not_exists() and _ingest_csv().
+    """
+    async def generate():
+        ...
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+```
+
+> **⚠️ Implementation note — Shared provisioning module:**
+> Rather than duplicating the provisioning logic from the reference scripts, extract the core logic into a shared module importable by both the API router and the standalone scripts:
+>
+> ```
+> scripts/fabric/
+>   _config.py            ← existing shared config
+>   _provisioner.py       ← NEW: extracted provisioning logic (classes, no CLI)
+>   provision_lakehouse.py  ← CLI wrapper: imports from _provisioner.py
+>   provision_eventhouse.py ← CLI wrapper: imports from _provisioner.py
+>   provision_ontology.py   ← CLI wrapper: imports from _provisioner.py
+> ```
+>
+> The API router imports from `_provisioner.py` and wraps each step in SSE event emission.
+> This avoids code duplication and keeps the standalone scripts functional for CLI use.
+
+> **⚠️ Implementation note — Dependencies:**
+> The provisioning endpoints require additional packages in `api/pyproject.toml`:
+> - `azure-storage-file-datalake` (OneLake upload)
+> - `azure-kusto-data` + `azure-kusto-ingest` (Eventhouse KQL ingest)
+> - `requests` (already present)
+>
+> These are the same packages used by the standalone provisioning scripts.
+
+#### `api/app/main.py` — Register provisioning router
+
+```python
+from app.routers.fabric_provision import router as fabric_provision_router
+app.include_router(fabric_provision_router)
+```
+
+### Provisioning Flow Diagram
+
+```
+User clicks "🚀 Provision All Resources" on Fabric Setup tab
+                    │
+                    ▼
+        POST /api/fabric/provision
+          { capacity_id, workspace_name, scenario_name }
+                    │
+                    ▼ SSE stream
+    ┌───────────────────────────────────┐
+    │ Step 1: Create/find workspace     │ → event: progress {step: "workspace", pct: 10}
+    │ Step 2: Create Lakehouse          │ → event: progress {step: "lakehouse", pct: 20}
+    │ Step 3: Upload CSVs to OneLake    │ → event: progress {step: "onelake-upload", pct: 30-50}
+    │ Step 4: Load delta tables         │ → event: progress {step: "delta-tables", pct: 50-65}
+    │ Step 5: Create Eventhouse         │ → event: progress {step: "eventhouse", pct: 70}
+    │ Step 6: Create KQL tables         │ → event: progress {step: "kql-tables", pct: 75}
+    │ Step 7: Ingest Eventhouse CSVs    │ → event: progress {step: "kql-ingest", pct: 80-90}
+    │ Step 8: Create Ontology           │ → event: progress {step: "ontology", pct: 95}
+    │ Step 9: Update config             │ → event: complete {workspace_id, lakehouse_id, ...}
+    └───────────────────────────────────┘
+                    │
+                    ▼
+    Frontend auto-populates workspace ID, fetches ontologies/eventhouses
 ```
 
 ---
@@ -906,53 +1176,135 @@ class ConfigApplyRequest(BaseModel):
 
 ---
 
-## Item 5: Frontend Backend Toggle & Fabric Tab
+## Item 5: Frontend — Adaptive Backend UI
 
 ### Current State
 
-- `SettingsModal.tsx` (745 lines) has 3 tabs: `scenarios`, `datasources`, `upload`
+- `SettingsModal.tsx` (673 lines) has 3 tabs: `scenarios`, `datasources`, `upload`
 - Tab type is `type Tab = 'scenarios' | 'datasources' | 'upload'`
 - Data Sources tab shows Cosmos-specific dropdowns (graph, runbooks index, tickets index, prompt set)
+- `AddScenarioModal.tsx` (683 lines) has 5 fixed upload slots: graph, telemetry, runbooks, tickets, prompts — all `.tar.gz` files uploaded to CosmosDB/AI Search endpoints
 - `ScenarioContext.tsx` manages `activeGraph`, `activeRunbooksIndex`, `activeTicketsIndex`, `activePromptSet`
 - No concept of backend type in frontend state
 
-**Problem:** No way to toggle between CosmosDB and Fabric, no Fabric settings UI, no ontology/eventhouse discovery.
+**Problems:**
+1. No way to toggle between CosmosDB and Fabric
+2. No Fabric settings UI, no ontology/eventhouse discovery
+3. AddScenarioModal upload slots are CosmosDB-specific — Fabric needs Lakehouse CSVs + Eventhouse CSVs
+4. Upload tab is CosmosDB-specific
+5. No provisioning UI for Fabric resources
 
-### Target State
+### Target State — Context-Adaptive Settings Modal
+
+The Settings modal adapts its tab bar and tab content based on backend selection:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Settings                                                  ✕  │
 │                                                              │
-│ Backend: ○ CosmosDB  ● Fabric                                │
+│ Backend: [▾ Fabric    ]  ← dropdown / segmented control      │
 │                                                              │
-│ [ Scenarios ] [ Data Sources ] [ Fabric ] [ Upload ]         │
-│                 (greyed out)      (active)                    │
+│ [ Scenarios ] [ Fabric Setup ] [ Upload ]                    │
+│                   (active)                                    │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│ ┌─ Fabric Settings ────────────────────────────────────────┐ │
+│ ┌─ Fabric Setup ───────────────────────────────────────────┐ │
 │ │                                                          │ │
-│ │ Workspace ID                                             │ │
-│ │ ┌──────────────────────────────────────────────────────┐ │ │
-│ │ │ abc12345-...                                         │ │ │
+│ │ Capacity ID  [env: FABRIC_CAPACITY_ID or manual]         │ │
+│ │ Workspace    [env: FABRIC_WORKSPACE_ID or manual]        │ │
+│ │                                                          │ │
+│ │ ┌─ Provision Fabric Resources ─────────────────────────┐ │ │
+│ │ │  ✓ Creating workspace                                │ │ │
+│ │ │  ✓ Creating Lakehouse                                │ │ │
+│ │ │  ✓ Uploading CSVs to OneLake (10/10 tables)          │ │ │
+│ │ │  ▶ Loading delta tables (7/10)                       │ │ │
+│ │ │  ○ Creating Eventhouse                               │ │ │
+│ │ │  ○ Creating KQL tables + ingesting CSVs              │ │ │
+│ │ │  ○ Creating Ontology                                 │ │ │
+│ │ │  [ 🚀 Provision ]                                    │ │ │
 │ │ └──────────────────────────────────────────────────────┘ │ │
 │ │                                                          │ │
-│ │ Ontology                              [🔄 Refresh]      │ │
-│ │ ┌──────────────────────────────────────────────────────┐ │ │
-│ │ │ ▼ telco-network-ontology                             │ │ │
-│ │ └──────────────────────────────────────────────────────┘ │ │
-│ │                                                          │ │
-│ │ Eventhouse                            [🔄 Refresh]      │ │
-│ │ ┌──────────────────────────────────────────────────────┐ │ │
-│ │ │ ▼ telco-eventhouse                                   │ │ │
-│ │ └──────────────────────────────────────────────────────┘ │ │
+│ │ Ontology      [▼ NetworkTopologyOntology     ] [🔄]     │ │
+│ │ Eventhouse    [▼ NetworkTelemetryEH           ] [🔄]     │ │
+│ │ Prompt Set    [▼ cloud-outage                 ]          │ │
 │ │                                                          │ │
 │ │ [ Load Topology ]  [ Provision Agents ]                  │ │
-│ │                                                          │ │
 │ └──────────────────────────────────────────────────────────┘ │
 │                                                              │
 │                                                   [ Close ]  │
 └──────────────────────────────────────────────────────────────┘
+```
+
+**When CosmosDB is selected** (existing behaviour, unchanged):
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Settings                                                  ✕  │
+│                                                              │
+│ Backend: [▾ CosmosDB  ]                                      │
+│                                                              │
+│ [ Scenarios ] [ Data Sources ] [ Upload ]                    │
+│                                                              │
+│   ... exactly the same as current implementation ...         │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Target State — Adaptive AddScenarioModal
+
+When the user clicks "+" (Add Scenario), the modal detects `activeBackendType` and shows different upload slots:
+
+```
+┌─ New Scenario (Fabric) ─────────────────────────────────────┐
+│                                                              │
+│  Scenario Name: [cloud-outage________________]               │
+│                                                              │
+│  ┌─ Upload Slots ─────────────────────────────────────────┐  │
+│  │                                                        │  │
+│  │  🔗 Graph Data (Lakehouse CSVs)           [Drop CSVs]  │  │
+│  │     DimCoreRouter.csv  ✓                               │  │
+│  │     DimTransportLink.csv  ✓                            │  │
+│  │     DimAggSwitch.csv  ✓                                │  │
+│  │     ... (all Dim*.csv + FactMPLSPathHops.csv, etc.)    │  │
+│  │                                                        │  │
+│  │  📊 Telemetry (Eventhouse CSVs)           [Drop CSVs]  │  │
+│  │     AlertStream.csv  ✓                                 │  │
+│  │     LinkTelemetry.csv  ✓                               │  │
+│  │                                                        │  │
+│  │  📋 Runbooks (.tar.gz)    ← same as CosmosDB           │  │
+│  │  🎫 Tickets (.tar.gz)     ← same as CosmosDB           │  │
+│  │  📝 Prompts (.tar.gz)     ← same as CosmosDB           │  │
+│  │                                                        │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│                              [ Cancel ]  [ Upload & Save ]   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Key differences from CosmosDB AddScenarioModal:**
+
+| Aspect | CosmosDB Mode | Fabric Mode |
+|--------|---------------|-------------|
+| Graph slot | Single `.tar.gz` → `/query/upload/graph` | Multiple CSVs → `/api/fabric/upload-lakehouse` |
+| Telemetry slot | Single `.tar.gz` → `/query/upload/telemetry` | Multiple CSVs → `/api/fabric/upload-eventhouse` |
+| Graph slot accepts | `.tar.gz` | `.csv` (multiple files) |
+| Telemetry slot accepts | `.tar.gz` | `.csv` (multiple files) |
+| Runbooks | `.tar.gz` → AI Search *(unchanged)* | `.tar.gz` → AI Search *(unchanged)* |
+| Tickets | `.tar.gz` → AI Search *(unchanged)* | `.tar.gz` → AI Search *(unchanged)* |
+| Prompts | `.tar.gz` → Cosmos prompts DB *(unchanged)* | `.tar.gz` → Cosmos prompts DB *(unchanged)* |
+| Upload endpoint | `/query/upload/{slot}` | Graph/Telemetry: `/api/fabric/upload-{target}`, rest unchanged |
+
+### Target State — Adaptive Upload Tab
+
+The standalone Upload tab (for loading data into an existing scenario) also adapts:
+
+**CosmosDB mode** (unchanged):
+```
+[ Graph .tar.gz ]  [ Telemetry .tar.gz ]  [ Runbooks ]  [ Tickets ]
+```
+
+**Fabric mode:**
+```
+[ Lakehouse CSVs ]  [ Eventhouse CSVs ]  [ Runbooks ]  [ Tickets ]
 ```
 
 ### Frontend Changes
@@ -974,12 +1326,15 @@ interface ScenarioState {
   fabricGraphModelId: string;
   /** Fabric eventhouse ID */
   fabricEventhouseId: string;
+  /** Fabric capacity ID (for provisioning) */
+  fabricCapacityId: string;
   /** Setters */
   setActiveBackendType: (type: 'cosmosdb' | 'fabric') => void;
   setFabricWorkspaceId: (id: string) => void;
   setFabricOntologyId: (id: string) => void;
   setFabricGraphModelId: (id: string) => void;
   setFabricEventhouseId: (id: string) => void;
+  setFabricCapacityId: (id: string) => void;
 }
 ```
 
@@ -1000,6 +1355,9 @@ const [fabricGraphModelId, setFabricGraphModelId] = useState(
 const [fabricEventhouseId, setFabricEventhouseId] = useState(
   () => localStorage.getItem('fabricEventhouseId') || '',
 );
+const [fabricCapacityId, setFabricCapacityId] = useState(
+  () => localStorage.getItem('fabricCapacityId') || '',
+);
 
 // Persist to localStorage on change
 useEffect(() => {
@@ -1008,13 +1366,14 @@ useEffect(() => {
 // ... repeat for each fabric field ...
 ```
 
-#### `hooks/useFabric.ts` — **NEW** (~80 lines)
+#### `hooks/useFabric.ts` — **NEW** (~120 lines, expanded from original 80)
 
 ```tsx
 /**
- * Hook for Fabric workspace discovery — fetching ontologies and eventhouses.
+ * Hook for Fabric workspace discovery AND provisioning.
  */
 import { useState, useCallback } from 'react';
+import { consumeSSE } from '../utils/sseStream';
 
 interface FabricItem {
   id: string;
@@ -1023,11 +1382,19 @@ interface FabricItem {
   description?: string;
 }
 
+interface ProvisionStep {
+  step: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  detail?: string;
+}
+
 export function useFabric() {
   const [ontologies, setOntologies] = useState<FabricItem[]>([]);
   const [eventhouses, setEventhouses] = useState<FabricItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [provisionSteps, setProvisionSteps] = useState<ProvisionStep[]>([]);
+  const [provisioning, setProvisioning] = useState(false);
 
   const fetchOntologies = useCallback(async (workspaceId: string) => {
     setLoading(true);
@@ -1065,178 +1432,199 @@ export function useFabric() {
     }
   }, []);
 
-  return { ontologies, eventhouses, loading, error, fetchOntologies, fetchEventhouses };
+  /** SSE-streamed provisioning: capacity → workspace → lakehouse → eventhouse → ontology */
+  const provisionAll = useCallback(async (capacityId: string, workspaceName?: string) => {
+    setProvisioning(true);
+    setProvisionSteps([]);
+    setError(null);
+    try {
+      const res = await fetch('/api/fabric/provision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          capacity_id: capacityId,
+          workspace_name: workspaceName || 'AutonomousNetworkDemo',
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await consumeSSE(res, {
+        onProgress: (d) => {
+          setProvisionSteps(prev => {
+            const updated = [...prev];
+            const existing = updated.findIndex(s => s.step === d.step);
+            if (existing >= 0) {
+              updated[existing] = { ...updated[existing], status: 'done', detail: d.detail };
+            } else {
+              // Mark previous as done, add new as running
+              if (updated.length) updated[updated.length - 1].status = 'done';
+              updated.push({ step: d.step, status: 'running', detail: d.detail });
+            }
+            return updated;
+          });
+        },
+        onError: (d) => { setError(d.error); },
+        onComplete: () => {
+          setProvisionSteps(prev => prev.map(s => ({ ...s, status: 'done' as const })));
+        },
+      });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setProvisioning(false);
+    }
+  }, []);
+
+  return {
+    ontologies, eventhouses, loading, error,
+    fetchOntologies, fetchEventhouses,
+    provisionSteps, provisioning, provisionAll,
+  };
 }
 ```
 
-#### `SettingsModal.tsx` — Add backend toggle, Fabric tab, 4-tab layout
+#### `SettingsModal.tsx` — Context-adaptive tab layout
 
 ```tsx
-// Change Tab type:
-type Tab = 'scenarios' | 'datasources' | 'fabric' | 'upload';
+// Tab type adapts based on backend:
+type CosmosTab = 'scenarios' | 'datasources' | 'upload';
+type FabricTab = 'scenarios' | 'fabricsetup' | 'upload';
+type Tab = CosmosTab | FabricTab;
 
-// Add backend toggle above tab bar (inside header):
-<div className="flex items-center gap-4 px-6 mt-2">
+// Compute visible tabs based on backend:
+const visibleTabs: { key: Tab; label: string }[] =
+  activeBackendType === 'fabric'
+    ? [
+        { key: 'scenarios', label: 'Scenarios' },
+        { key: 'fabricsetup', label: 'Fabric Setup' },
+        { key: 'upload', label: 'Upload' },
+      ]
+    : [
+        { key: 'scenarios', label: 'Scenarios' },
+        { key: 'datasources', label: 'Data Sources' },
+        { key: 'upload', label: 'Upload' },
+      ];
+
+// Backend dropdown above tab bar:
+<div className="flex items-center gap-3 px-6 mt-2">
   <span className="text-xs text-text-muted">Backend:</span>
-  {(['cosmosdb', 'fabric'] as const).map((bt) => (
-    <label key={bt} className="flex items-center gap-1.5 cursor-pointer">
-      <input
-        type="radio"
-        name="backend"
-        value={bt}
-        checked={activeBackendType === bt}
-        onChange={() => setActiveBackendType(bt)}
-        className="accent-brand"
-      />
-      <span className={`text-sm ${activeBackendType === bt ? 'text-text-primary' : 'text-text-muted'}`}>
-        {bt === 'cosmosdb' ? 'CosmosDB' : 'Fabric'}
-      </span>
-    </label>
-  ))}
+  <select
+    value={activeBackendType}
+    onChange={(e) => {
+      const bt = e.target.value as 'cosmosdb' | 'fabric';
+      setActiveBackendType(bt);
+      // Auto-switch to the appropriate settings tab
+      setTab(bt === 'fabric' ? 'fabricsetup' : 'datasources');
+    }}
+    className="bg-neutral-bg1 border border-white/10 rounded px-2 py-1 text-sm text-text-primary"
+  >
+    <option value="cosmosdb">CosmosDB</option>
+    <option value="fabric">Fabric</option>
+  </select>
 </div>
 
-// Tab bar — grey out inactive backend's tab:
-{(['scenarios', 'datasources', 'fabric', 'upload'] as Tab[]).map((t) => {
-  const disabled =
-    (t === 'datasources' && activeBackendType === 'fabric') ||
-    (t === 'fabric' && activeBackendType === 'cosmosdb');
-  return (
+// Tab bar — render only visible tabs (no greyed-out dead UI):
+<div className="flex px-6 mt-3 gap-1">
+  {visibleTabs.map(({ key, label }) => (
     <button
-      key={t}
-      onClick={() => !disabled && setTab(t)}
-      disabled={disabled}
+      key={key}
+      onClick={() => setTab(key)}
       className={`px-4 py-2 text-sm rounded-t-md transition-colors ${
-        tab === t
+        tab === key
           ? 'bg-neutral-bg1 text-text-primary border-t border-x border-white/10'
-          : disabled
-          ? 'text-text-muted/40 cursor-not-allowed'
           : 'text-text-muted hover:text-text-secondary'
       }`}
     >
-      {t === 'scenarios' ? 'Scenarios' :
-       t === 'datasources' ? 'Data Sources' :
-       t === 'fabric' ? 'Fabric' : 'Upload'}
+      {label}
     </button>
-  );
-})}
+  ))}
+</div>
+```
 
-// Fabric tab content:
-{tab === 'fabric' && (
+**Fabric Setup tab content** (replaces the old "Fabric tab"):
+
+```tsx
+{tab === 'fabricsetup' && (
   <>
-    {/* Workspace ID input */}
+    {/* Capacity + Workspace inputs */}
     <div className="bg-neutral-bg1 rounded-lg border border-white/5 p-4 space-y-3">
+      <label className="text-xs text-text-muted block mb-1">Fabric Capacity ID</label>
+      <input
+        type="text"
+        value={fabricCapacityId}
+        onChange={(e) => setFabricCapacityId(e.target.value)}
+        placeholder="From azure_config.env or enter manually..."
+        className="w-full bg-neutral-bg2 border border-white/10 rounded px-3 py-1.5 text-sm"
+      />
       <label className="text-xs text-text-muted block mb-1">Fabric Workspace ID</label>
       <input
         type="text"
         value={fabricWorkspaceId}
         onChange={(e) => setFabricWorkspaceId(e.target.value)}
-        placeholder="Enter Fabric workspace ID..."
-        className="w-full bg-neutral-bg2 border border-white/10 rounded px-3 py-1.5 text-sm text-text-primary"
+        placeholder="Enter workspace ID or provision below..."
+        className="w-full bg-neutral-bg2 border border-white/10 rounded px-3 py-1.5 text-sm"
       />
     </div>
 
-    {/* Ontology selector */}
+    {/* Provisioning section — one-click Fabric bootstrapping */}
     <div className="bg-neutral-bg1 rounded-lg border border-white/5 p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-blue-400" />
-          <span className="text-sm font-medium text-text-primary">Ontology</span>
-        </div>
-        <button
-          onClick={() => fabricWorkspaceId && fetchOntologies(fabricWorkspaceId)}
-          disabled={!fabricWorkspaceId || fabricLoading}
-          className="text-xs text-brand hover:text-brand/80 disabled:text-text-muted/40"
-        >
-          🔄 Refresh
-        </button>
+        <span className="text-sm font-medium text-text-primary">Provision Fabric Resources</span>
+        <span className="text-xs text-text-muted">Workspace → Lakehouse → Eventhouse → Ontology</span>
       </div>
-      <select
-        value={fabricOntologyId}
-        onChange={(e) => setFabricOntologyId(e.target.value)}
-        className="w-full bg-neutral-bg2 border border-white/10 rounded px-3 py-1.5 text-sm text-text-primary"
+
+      {provisionSteps.length > 0 && (
+        <div className="space-y-1.5">
+          {provisionSteps.map((s, i) => (
+            <div key={i} className="flex items-center gap-2 text-xs">
+              <span>{s.status === 'done' ? '✓' : s.status === 'running' ? '▶' : '○'}</span>
+              <span className={s.status === 'done' ? 'text-status-success' : 'text-text-secondary'}>
+                {s.step}
+              </span>
+              {s.detail && <span className="text-text-muted ml-auto">{s.detail}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button
+        onClick={() => provisionAll(fabricCapacityId)}
+        disabled={!fabricCapacityId || provisioning}
+        className="w-full px-4 py-2 text-sm bg-brand/20 text-brand rounded hover:bg-brand/30
+                   disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
-        <option value="">Select ontology...</option>
-        {ontologies.map((o) => (
-          <option key={o.id} value={o.id}>{o.display_name}</option>
-        ))}
-      </select>
+        {provisioning ? 'Provisioning...' : '🚀 Provision All Resources'}
+      </button>
     </div>
 
-    {/* Eventhouse selector */}
+    {/* Ontology + Eventhouse selectors (from discovery) */}
+    {/* ... same ontology/eventhouse dropdowns as before, with auto-fetch ... */}
+
+    {/* Prompt set selector — shared with CosmosDB path */}
     <div className="bg-neutral-bg1 rounded-lg border border-white/5 p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-purple-400" />
-          <span className="text-sm font-medium text-text-primary">Eventhouse</span>
-        </div>
-        <button
-          onClick={() => fabricWorkspaceId && fetchEventhouses(fabricWorkspaceId)}
-          disabled={!fabricWorkspaceId || fabricLoading}
-          className="text-xs text-brand hover:text-brand/80 disabled:text-text-muted/40"
-        >
-          🔄 Refresh
-        </button>
+      <div className="flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full bg-green-400" />
+        <span className="text-sm font-medium text-text-primary">Prompt Set</span>
       </div>
       <select
-        value={fabricEventhouseId}
-        onChange={(e) => setFabricEventhouseId(e.target.value)}
-        className="w-full bg-neutral-bg2 border border-white/10 rounded px-3 py-1.5 text-sm text-text-primary"
+        value={activePromptSet}
+        onChange={(e) => setActivePromptSet(e.target.value)}
+        className="w-full bg-neutral-bg2 border border-white/10 rounded px-3 py-1.5 text-sm"
       >
-        <option value="">Select eventhouse...</option>
-        {eventhouses.map((e) => (
-          <option key={e.id} value={e.id}>{e.display_name}</option>
+        <option value="">Select prompt set...</option>
+        {promptScenarios.map((p) => (
+          <option key={p.scenario} value={p.scenario}>{p.scenario} ({p.prompt_count})</option>
         ))}
       </select>
     </div>
 
     {/* Action buttons */}
     <div className="flex gap-3">
-      <ActionButton
-        label="Load Topology"
-        icon="🔗"
+      <ActionButton label="Load Topology" icon="🔗"
         description="Fetch graph from Fabric ontology"
-        onClick={async () => {
-          // POST to /query/topology with Fabric context
-          const res = await fetch('/query/topology', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Graph': fabricOntologyId || 'fabric',
-            },
-            body: JSON.stringify({}),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          return `${data.meta?.node_count ?? '?'} nodes, ${data.meta?.edge_count ?? '?'} edges`;
-        }}
-      />
-      <ActionButton
-        label="Provision Agents"
-        icon="🤖"
+        onClick={async () => { /* ... POST /query/topology with Fabric headers ... */ }} />
+      <ActionButton label="Provision Agents" icon="🤖"
         description="Bind agents to Fabric data sources"
-        onClick={async () => {
-          const res = await fetch('/api/config/apply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              graph: fabricOntologyId || 'fabric',
-              runbooks_index: activeRunbooksIndex,
-              tickets_index: activeTicketsIndex,
-              backend_type: 'fabric',
-              fabric_workspace_id: fabricWorkspaceId,
-              fabric_ontology_id: fabricOntologyId,
-              fabric_graph_model_id: fabricGraphModelId,
-            }),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          let lastMsg = '';
-          await consumeSSE(res, {
-            onProgress: (d) => { lastMsg = d.detail; },
-            onError: (d) => { throw new Error(d.error); },
-          });
-          return lastMsg || 'Agents provisioned (Fabric)';
-        }}
-      />
+        onClick={async () => { /* ... POST /api/config/apply with backend_type=fabric ... */ }} />
     </div>
 
     {fabricError && <p className="text-xs text-status-error">{fabricError}</p>}
@@ -1244,11 +1632,89 @@ type Tab = 'scenarios' | 'datasources' | 'fabric' | 'upload';
 )}
 ```
 
-> **⚠️ Implementation note:** When the user toggles from CosmosDB to Fabric:
-> 1. Auto-switch to the Fabric tab (force `setTab('fabric')`)
+> **⚠️ Implementation note:** When the user changes the backend dropdown:
+> 1. Auto-switch to the corresponding settings tab (`fabricsetup` or `datasources`)
 > 2. Persist `activeBackendType` to localStorage
 > 3. Existing scenario-derived bindings remain but are ignored when Fabric is active
-> 4. The Scenarios tab still works for both backends (scenarios are metadata, not backend-specific)
+> 4. The Scenarios tab still works for both backends — but the AddScenarioModal adapts (see below)
+> 5. If the current tab doesn't exist in the new backend's tab set (e.g., user was on `fabricsetup` and switched to CosmosDB), auto-redirect to the first settings tab
+
+#### `AddScenarioModal.tsx` — Adapt upload slots based on backend
+
+```tsx
+// Import backend type from context:
+const { activeBackendType } = useScenarioContext();
+
+// Define slot configurations per backend:
+const COSMOS_SLOTS: SlotDef[] = [
+  { key: 'graph', label: 'Graph Data', icon: '🔗', endpoint: '/query/upload/graph', accept: '.tar.gz,.tgz' },
+  { key: 'telemetry', label: 'Telemetry', icon: '📊', endpoint: '/query/upload/telemetry', accept: '.tar.gz,.tgz' },
+  { key: 'runbooks', label: 'Runbooks', icon: '📋', endpoint: '/query/upload/runbooks', accept: '.tar.gz,.tgz' },
+  { key: 'tickets', label: 'Tickets', icon: '🎫', endpoint: '/query/upload/tickets', accept: '.tar.gz,.tgz' },
+  { key: 'prompts', label: 'Prompts', icon: '📝', endpoint: '/query/upload/prompts', accept: '.tar.gz,.tgz' },
+];
+
+const FABRIC_SLOTS: SlotDef[] = [
+  { key: 'graph', label: 'Lakehouse (Graph CSVs)', icon: '🔗',
+    endpoint: '/api/fabric/upload-lakehouse', accept: '.csv',
+    hint: 'Drop Dim*.csv and Fact*.csv files for Lakehouse delta tables',
+    multiFile: true },
+  { key: 'telemetry', label: 'Eventhouse (Telemetry CSVs)', icon: '📊',
+    endpoint: '/api/fabric/upload-eventhouse', accept: '.csv',
+    hint: 'Drop AlertStream.csv, LinkTelemetry.csv for KQL ingest',
+    multiFile: true },
+  { key: 'runbooks', label: 'Runbooks', icon: '📋', endpoint: '/query/upload/runbooks', accept: '.tar.gz,.tgz' },
+  { key: 'tickets', label: 'Tickets', icon: '🎫', endpoint: '/query/upload/tickets', accept: '.tar.gz,.tgz' },
+  { key: 'prompts', label: 'Prompts', icon: '📝', endpoint: '/query/upload/prompts', accept: '.tar.gz,.tgz' },
+];
+
+// Select active slots:
+const SLOT_DEFS = activeBackendType === 'fabric' ? FABRIC_SLOTS : COSMOS_SLOTS;
+```
+
+> **Key UX detail:** The Fabric graph/telemetry slots accept **multiple CSV files** (not a single archive). The drop zone shows a file list with individual status indicators. The upload endpoint receives all CSVs for a category, uploads them to OneLake, and creates/loads delta tables (lakehouse) or ingests into KQL tables (eventhouse) with SSE progress.
+
+#### `SettingsModal.tsx` Upload tab — adapt based on backend
+
+```tsx
+{tab === 'upload' && (
+  activeBackendType === 'fabric' ? (
+    // Fabric upload boxes: Lakehouse + Eventhouse + Runbooks + Tickets
+    <div className="space-y-3">
+      <UploadBox
+        label="Lakehouse Data (Graph CSVs)"
+        icon="🔗"
+        hint="Dim*.csv, Fact*.csv → Lakehouse delta tables"
+        endpoint="/api/fabric/upload-lakehouse"
+        accept=".csv"
+      />
+      <UploadBox
+        label="Eventhouse Data (Telemetry CSVs)"
+        icon="📊"
+        hint="AlertStream.csv, LinkTelemetry.csv → KQL tables"
+        endpoint="/api/fabric/upload-eventhouse"
+        accept=".csv"
+      />
+      <UploadBox label="Runbooks" icon="📋" hint="Upload .tar.gz"
+        endpoint="/query/upload/runbooks" accept=".tar.gz,.tgz" />
+      <UploadBox label="Tickets" icon="🎫" hint="Upload .tar.gz"
+        endpoint="/query/upload/tickets" accept=".tar.gz,.tgz" />
+    </div>
+  ) : (
+    // CosmosDB upload boxes (existing — unchanged)
+    <div className="space-y-3">
+      <UploadBox label="Graph Data" icon="🔗" hint="Upload .tar.gz"
+        endpoint="/query/upload/graph" accept=".tar.gz,.tgz" />
+      <UploadBox label="Telemetry" icon="📊" hint="Upload .tar.gz"
+        endpoint="/query/upload/telemetry" accept=".tar.gz,.tgz" />
+      <UploadBox label="Runbooks" icon="📋" hint="Upload .tar.gz"
+        endpoint="/query/upload/runbooks" accept=".tar.gz,.tgz" />
+      <UploadBox label="Tickets" icon="🎫" hint="Upload .tar.gz"
+        endpoint="/query/upload/tickets" accept=".tar.gz,.tgz" />
+    </div>
+  )
+)}
+```
 
 ### UX Enhancements
 
@@ -1260,7 +1726,7 @@ type Tab = 'scenarios' | 'datasources' | 'fabric' | 'upload';
 
 ```tsx
 useEffect(() => {
-  if (fabricWorkspaceId.length === 36 && tab === 'fabric') {
+  if (fabricWorkspaceId.length === 36 && tab === 'fabricsetup') {
     const timer = setTimeout(() => {
       fetchOntologies(fabricWorkspaceId);
       fetchEventhouses(fabricWorkspaceId);
@@ -1286,20 +1752,40 @@ useEffect(() => {
 
 **Why:** Prevents users from thinking the UI is frozen.
 
-#### 5c. Backend toggle auto-tab-switch
+#### 5c. Backend dropdown auto-tab-switch
 
-**Problem:** User toggles to Fabric but is still looking at the (now greyed) Data Sources tab.
+**Problem:** User switches backend but is viewing a tab that doesn't exist in the new layout.
 
-**Fix:** When toggling backend, auto-switch to the corresponding tab.
+**Fix:** When changing backend, auto-switch to the corresponding settings tab.
 
 ```tsx
 const handleBackendChange = (bt: 'cosmosdb' | 'fabric') => {
   setActiveBackendType(bt);
-  setTab(bt === 'fabric' ? 'fabric' : 'datasources');
+  setTab(bt === 'fabric' ? 'fabricsetup' : 'datasources');
 };
 ```
 
-**Why:** Reduces confusion. The greyed tab won't respond to clicks.
+**Why:** The user's intent when switching backends is to configure that backend. Take them directly there.
+
+#### 5d. Post-provisioning auto-populate
+
+**Problem:** After one-click provisioning completes, user must manually refresh dropdowns.
+
+**Fix:** After `provisionAll()` SSE stream completes successfully, auto-fire `fetchOntologies()` and `fetchEventhouses()` with the newly created workspace ID.
+
+```tsx
+// In useFabric provisionAll() onComplete handler:
+onComplete: (data) => {
+  if (data.workspace_id) {
+    // Auto-update workspace ID and populate dropdowns
+    setFabricWorkspaceId(data.workspace_id);
+    fetchOntologies(data.workspace_id);
+    fetchEventhouses(data.workspace_id);
+  }
+}
+```
+
+**Why:** After provisioning, the user's next action is selecting resources. Don't make them click Refresh.
 
 ---
 
@@ -1328,7 +1814,7 @@ const handleBackendChange = (bt: 'cosmosdb' | 'fabric') => {
 - `graph-query-api/backends/fabric.py` — `FabricGraphBackend` class (~200 lines)
 
 **Files to modify:**
-- `graph-query-api/pyproject.toml` — Add `httpx>=0.27.0` if not present
+- `graph-query-api/pyproject.toml` — Add `httpx>=0.27.0` (not currently a dependency)
 
 **Verification:**
 - Unit test: Mock Fabric REST API, call `execute_query("{ routers { id } }")`, verify `{columns, data}` response
@@ -1345,6 +1831,7 @@ const handleBackendChange = (bt: 'cosmosdb' | 'fabric') => {
 
 **Files to modify:**
 - `graph-query-api/main.py` — Register `fabric_router`
+- `frontend/nginx.conf.template` — Add `/query/` reverse-proxy location block (currently missing — `/query/*` routes have no prod proxy)
 
 **Verification:**
 - `GET /query/fabric/ontologies?workspace_id=<valid>` → returns list of ontologies
@@ -1411,6 +1898,8 @@ const handleBackendChange = (bt: 'cosmosdb' | 'fabric') => {
 | `graph-query-api/main.py` | MODIFY | 1, 3 | Add Fabric var check in lifespan, register `fabric_router` |
 | `azure_config.env.template` | MODIFY | 1 | Add Fabric env var section (~10 lines) |
 | `graph-query-api/backends/fabric.py` | **CREATE** | 2 | `FabricGraphBackend` class (~200 lines) |
+| `graph-query-api/pyproject.toml` | MODIFY | 2 | Add `httpx>=0.27.0` dependency |
+| `frontend/nginx.conf.template` | MODIFY | 3 | Add `/query/` reverse-proxy location block (currently missing — blocks prod `/query/*` calls) |
 | `graph-query-api/router_fabric.py` | **CREATE** | 3 | Discovery endpoints: ontologies, eventhouses (~120 lines) |
 | `graph-query-api/openapi/fabric.yaml` | **CREATE** | 4 | OpenAPI spec for GQL + KQL (~160 lines) |
 | `scripts/agent_provisioner.py` | MODIFY | 4 | Add `"fabric"` to `OPENAPI_SPEC_MAP`, `GRAPH_TOOL_DESCRIPTIONS` |
@@ -1431,7 +1920,7 @@ const handleBackendChange = (bt: 'cosmosdb' | 'fabric') => {
 - `frontend/src/hooks/useScenarios.ts` — Scenarios are backend-agnostic metadata; no changes needed
 - `frontend/src/hooks/useTopology.ts` — Topology hook uses `getQueryHeaders()` which already includes `X-Graph`; works with Fabric backend automatically
 - `frontend/src/components/AddScenarioModal.tsx` — Scenario creation is independent of backend type
-- `scripts/fabric/` (reference provisioning scripts) — Not ported in v9; these handle Fabric resource provisioning (lakehouse, eventhouse, ontology creation) which is done manually per requirement 1
+- `fabric_implementation_references/scripts/fabric/` (reference provisioning scripts) — Not ported in v9; these handle Fabric resource provisioning (lakehouse, eventhouse, ontology creation) which is done manually per requirement 1
 
 ---
 

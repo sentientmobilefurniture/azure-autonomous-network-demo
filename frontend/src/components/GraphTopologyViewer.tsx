@@ -157,6 +157,7 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
         onZoomToFit={() => canvasRef.current?.zoomToFit()}
         isPaused={isPaused}
         onTogglePause={handleTogglePause}
+        nodeColorOverride={nodeColorOverride}
       />
 
       {error && (
@@ -197,7 +198,7 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
       </div>
 
       {/* Overlays rendered outside GraphCanvas so they appear above the <canvas> */}
-      <GraphTooltip tooltip={tooltip} />
+      <GraphTooltip tooltip={tooltip} nodeColorOverride={nodeColorOverride} />
       <GraphContextMenu
         menu={contextMenu}
         onClose={() => setContextMenu(null)}

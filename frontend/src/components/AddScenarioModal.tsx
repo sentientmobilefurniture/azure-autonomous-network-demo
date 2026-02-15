@@ -65,6 +65,10 @@ interface Props {
     name: string;
     display_name?: string;
     description?: string;
+    use_cases?: string[];
+    example_questions?: string[];
+    graph_styles?: Record<string, unknown>;
+    domain?: string;
     upload_results: Record<string, unknown>;
   }) => Promise<unknown>;
 }
@@ -74,6 +78,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   const [nameAutoDetected, setNameAutoDetected] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
+  const scenarioMetadataRef = useRef<Record<string, unknown> | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [slots, setSlots] = useState<Record<SlotKey, ScenarioUploadSlot>>(() => makeEmptySlots());
   const [modalState, setModalState] = useState<ModalState>('idle');
@@ -265,6 +270,10 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
             onComplete: (data) => {
               updateSlot(def.key, { status: 'done', result: data, progress: 'Complete', pct: 100 });
               uploadResults[def.key] = data;
+              // Capture metadata from graph upload for save call
+              if (def.key === 'graph' && data.scenario_metadata) {
+                scenarioMetadataRef.current = data.scenario_metadata as Record<string, unknown>;
+              }
             },
             onError: (data) => {
               updateSlot(def.key, { status: 'error', error: data.error });
@@ -301,10 +310,15 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     setOverallPct(95);
 
     try {
+      const meta = scenarioMetadataRef.current;
       await saveScenarioMeta({
         name,
-        display_name: displayName || undefined,
-        description: description || undefined,
+        display_name: (meta?.display_name as string) || displayName || undefined,
+        description: (meta?.description as string) || description || undefined,
+        use_cases: meta?.use_cases as string[] | undefined,
+        example_questions: meta?.example_questions as string[] | undefined,
+        graph_styles: meta?.graph_styles as Record<string, unknown> | undefined,
+        domain: meta?.domain as string | undefined,
         upload_results: uploadResults,
       });
       setModalState('done');

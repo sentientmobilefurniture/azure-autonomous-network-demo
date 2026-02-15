@@ -81,6 +81,10 @@ class ScenarioSaveRequest(BaseModel):
     name: str
     display_name: str = ""
     description: str = ""
+    use_cases: list[str] | None = None
+    example_questions: list[str] | None = None
+    graph_styles: dict | None = None
+    domain: str | None = None
     upload_results: dict = {}
 
     @field_validator("name")
@@ -158,6 +162,10 @@ async def save_scenario(req: ScenarioSaveRequest):
             "prompts_container": name,
         },
         "upload_status": req.upload_results,
+        "use_cases": req.use_cases or [],
+        "example_questions": req.example_questions or [],
+        "graph_styles": req.graph_styles or {},
+        "domain": req.domain or "",
     }
 
     # Check if existing document has a created_at we should preserve

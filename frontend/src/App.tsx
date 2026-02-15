@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { Header } from './components/Header';
+import { TabBar } from './components/TabBar';
+import { ScenarioInfoPanel } from './components/ScenarioInfoPanel';
 import { MetricsBar } from './components/MetricsBar';
 import { InvestigationPanel } from './components/InvestigationPanel';
 import { DiagnosisPanel } from './components/DiagnosisPanel';
@@ -10,6 +12,8 @@ import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
 import { useScenarioContext } from './context/ScenarioContext';
 import type { Interaction } from './types';
+
+type AppTab = 'investigate' | 'info';
 
 export default function App() {
   const {
@@ -31,6 +35,7 @@ export default function App() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewingInteraction, setViewingInteraction] = useState<Interaction | null>(null);
+  const [activeTab, setActiveTab] = useState<AppTab>('investigate');
 
   // Fetch interactions on mount and when scenario changes
   useEffect(() => {
@@ -78,78 +83,92 @@ export default function App() {
       {/* Zone 1: Header */}
       <Header />
 
+      {/* Tab bar */}
+      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+
       {/* Zone 2 + 3: Main content + sidebar */}
       <div className="flex-1 min-h-0 flex">
-        {/* Main content area */}
-        <div className="flex-1 min-w-0">
-          <PanelGroup orientation="vertical" className="h-full">
-            {/* Zone 2: Metrics bar — draggable bottom edge */}
-            <Panel defaultSize={30} minSize={15}>
-              <div className="h-full border-b border-white/10">
-                <MetricsBar />
-              </div>
-            </Panel>
-
-            <PanelResizeHandle className="vertical-resize-handle" />
-
-            {/* Zone 3: Two-panel split — fills remaining height */}
-            <Panel defaultSize={70} minSize={20}>
-              <div className="h-full flex flex-col min-h-0">
-                {/* Viewing past interaction banner */}
-                {viewingInteraction && (
-                  <div className="flex items-center justify-between px-4 py-1.5 bg-brand/10 border-b border-brand/20 shrink-0">
-                    <span className="text-xs text-brand">
-                      ◀ Viewing interaction from {formatTimeAgo(viewingInteraction.created_at)}
-                      <span className="ml-2 px-1.5 py-0.5 rounded bg-brand/15 text-[10px] font-medium">
-                        {viewingInteraction.scenario}
-                      </span>
-                    </span>
-                    <button
-                      onClick={() => setViewingInteraction(null)}
-                      className="text-xs text-brand hover:text-brand/80 font-medium"
-                    >
-                      Clear
-                    </button>
+        {activeTab === 'investigate' ? (
+          <>
+            {/* Main content area */}
+            <div className="flex-1 min-w-0">
+              <PanelGroup orientation="vertical" className="h-full">
+                {/* Zone 2: Metrics bar — draggable bottom edge */}
+                <Panel defaultSize={30} minSize={15}>
+                  <div className="h-full border-b border-white/10">
+                    <MetricsBar />
                   </div>
-                )}
+                </Panel>
 
-                <div className="flex-1 flex min-h-0">
-                  {/* Left: Investigation */}
-                  <InvestigationPanel
-                    alert={alert}
-                    onAlertChange={setAlert}
-                    onSubmit={submitAlert}
-                    steps={displaySteps}
-                    thinking={thinking}
-                    errorMessage={errorMessage}
-                    running={running}
-                    runStarted={runStarted}
-                    runMeta={displayRunMeta}
-                  />
+                <PanelResizeHandle className="vertical-resize-handle" />
 
-                  {/* Right: Diagnosis */}
-                  <DiagnosisPanel
-                    finalMessage={displayDiagnosis}
-                    running={running}
-                    runStarted={runStarted}
-                    runMeta={displayRunMeta}
-                  />
-                </div>
-              </div>
-            </Panel>
-          </PanelGroup>
-        </div>
+                {/* Zone 3: Two-panel split — fills remaining height */}
+                <Panel defaultSize={70} minSize={20}>
+                  <div className="h-full flex flex-col min-h-0">
+                    {/* Viewing past interaction banner */}
+                    {viewingInteraction && (
+                      <div className="flex items-center justify-between px-4 py-1.5 bg-brand/10 border-b border-brand/20 shrink-0">
+                        <span className="text-xs text-brand">
+                          ◀ Viewing interaction from {formatTimeAgo(viewingInteraction.created_at)}
+                          <span className="ml-2 px-1.5 py-0.5 rounded bg-brand/15 text-[10px] font-medium">
+                            {viewingInteraction.scenario}
+                          </span>
+                        </span>
+                        <button
+                          onClick={() => setViewingInteraction(null)}
+                          className="text-xs text-brand hover:text-brand/80 font-medium"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
 
-        {/* Interaction history sidebar */}
-        <InteractionSidebar
-          interactions={interactions}
-          loading={interactionsLoading}
-          onSelect={(i) => { setViewingInteraction(i); setAlert(i.query); }}
-          onDelete={deleteInteraction}
-          activeInteractionId={viewingInteraction?.id ?? null}
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
+                    <div className="flex-1 flex min-h-0">
+                      {/* Left: Investigation */}
+                      <InvestigationPanel
+                        alert={alert}
+                        onAlertChange={setAlert}
+                        onSubmit={submitAlert}
+                        steps={displaySteps}
+                        thinking={thinking}
+                        errorMessage={errorMessage}
+                        running={running}
+                        runStarted={runStarted}
+                        runMeta={displayRunMeta}
+                      />
+
+                      {/* Right: Diagnosis */}
+                      <DiagnosisPanel
+                        finalMessage={displayDiagnosis}
+                        running={running}
+                        runStarted={runStarted}
+                        runMeta={displayRunMeta}
+                      />
+                    </div>
+                  </div>
+                </Panel>
+              </PanelGroup>
+            </div>
+
+            {/* Interaction history sidebar */}
+            <InteractionSidebar
+              interactions={interactions}
+              loading={interactionsLoading}
+              onSelect={(i) => { setViewingInteraction(i); setAlert(i.query); }}
+              onDelete={deleteInteraction}
+              activeInteractionId={viewingInteraction?.id ?? null}
+              collapsed={sidebarCollapsed}
+              onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+            />
+          </>
+        ) : (
+          <ScenarioInfoPanel
+            onSelectQuestion={(q) => {
+              setAlert(q);
+              setActiveTab('investigate');
+            }}
+          />
+        )}
       </div>
     </motion.div>
   );

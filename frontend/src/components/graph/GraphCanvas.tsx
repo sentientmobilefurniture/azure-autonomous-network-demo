@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import type { TopologyNode, TopologyEdge } from '../../hooks/useTopology';
-import { NODE_COLORS, NODE_SIZES } from './graphConstants';
+import { useNodeColor } from '../../hooks/useNodeColor';
+import { NODE_SIZES } from './graphConstants';
+import { useScenarioContext } from '../../context/ScenarioContext';
 
 type GNode = NodeObject<TopologyNode>;
 type GLink = LinkObject<TopologyNode, TopologyEdge>;
@@ -53,18 +55,25 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
       }
     }, [nodes.length]);
 
-    // Color resolver
-    const getNodeColor = useCallback(
-      (node: GNode) =>
-        nodeColorOverride[node.label] ?? NODE_COLORS[node.label] ?? '#6B7280',
-      [nodeColorOverride],
+    // Color resolver (centralized: override → scenario → constants → auto)
+    const getNodeColor = useNodeColor(nodeColorOverride);
+
+    // Size resolver (scenario sizes normalized to canvas scale)
+    const { scenarioNodeSizes } = useScenarioContext();
+    const getNodeSize = useCallback(
+      (label: string) => {
+        const scenarioSize = scenarioNodeSizes[label];
+        if (scenarioSize != null) return Math.round(scenarioSize / 3); // normalize from 12-30 to 4-10
+        return NODE_SIZES[label] ?? 6;
+      },
+      [scenarioNodeSizes],
     );
 
     // Custom node rendering (colored circle + label)
     const nodeCanvasObject = useCallback(
       (node: GNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-        const size = NODE_SIZES[node.label] ?? 6;
-        const color = getNodeColor(node);
+        const size = getNodeSize(node.label);
+        const color = getNodeColor(node.label);
 
         // Circle
         ctx.beginPath();
@@ -88,7 +97,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
         ctx.textBaseline = 'top';
         ctx.fillText(label, node.x!, node.y! + size + 2);
       },
-      [getNodeColor, nodeDisplayField],
+      [getNodeColor, getNodeSize, nodeDisplayField],
     );
 
     // Edge label rendering

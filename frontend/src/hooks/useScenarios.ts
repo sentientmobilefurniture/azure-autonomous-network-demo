@@ -30,6 +30,7 @@ export function useScenarios() {
   const {
     setActiveScenario,
     setProvisioningStatus,
+    setScenarioStyles,
   } = useScenarioContext();
 
   // Fetch graph scenarios (existing discovery endpoint)
@@ -78,6 +79,10 @@ export function useScenarios() {
     name: string;
     display_name?: string;
     description?: string;
+    use_cases?: string[];
+    example_questions?: string[];
+    graph_styles?: Record<string, unknown>;
+    domain?: string;
     upload_results: Record<string, unknown>;
   }) => {
     const res = await fetch('/query/scenarios/save', {
@@ -113,7 +118,15 @@ export function useScenarios() {
     // 1. Update all frontend bindings instantly
     setActiveScenario(name);
 
-    // 2. Auto-provision agents with SSE progress tracking
+    // 2. Push scenario graph_styles into context for dynamic node colors
+    const saved = savedScenarios.find(s => s.id === name);
+    if (saved?.graph_styles) {
+      setScenarioStyles(saved.graph_styles as { node_types?: Record<string, { color: string; size: number }> });
+    } else {
+      setScenarioStyles(null);
+    }
+
+    // 3. Auto-provision agents with SSE progress tracking
     setProvisioningStatus({ state: 'provisioning', step: 'Starting...', scenarioName: name });
 
     try {
@@ -157,7 +170,7 @@ export function useScenarios() {
         scenarioName: name,
       });
     }
-  }, [setActiveScenario, setProvisioningStatus]);
+  }, [savedScenarios, setActiveScenario, setScenarioStyles, setProvisioningStatus]);
 
   return {
     // Existing discovery

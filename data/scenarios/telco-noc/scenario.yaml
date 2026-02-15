@@ -12,6 +12,25 @@ version: "1.0"
 domain: telecommunications
 
 # ---------------------------------------------------------------------------
+# Use cases & example questions (surfaced in Scenario Info tab)
+# ---------------------------------------------------------------------------
+
+use_cases:
+  - "Fibre cut incident investigation and root cause correlation"
+  - "MPLS path failover analysis and traffic rerouting assessment"
+  - "Enterprise service impact mapping across BGP sessions"
+  - "Alert storm triage and deduplication across transport links"
+  - "SLA breach risk assessment for affected customers"
+
+example_questions:
+  - "What caused the alert storm on the Sydney-Melbourne corridor?"
+  - "Which enterprise services are affected by the fibre cut?"
+  - "How are MPLS paths rerouting around the failed transport link?"
+  - "What BGP sessions are down and what's their blast radius?"
+  - "Which SLA policies are at risk of being breached?"
+  - "Show me the correlation between optical power drops and service degradation"
+
+# ---------------------------------------------------------------------------
 # Data layout — paths relative to this file's parent directory
 # ---------------------------------------------------------------------------
 

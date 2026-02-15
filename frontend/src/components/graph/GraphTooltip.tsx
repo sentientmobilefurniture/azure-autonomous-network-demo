@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import type { TopologyNode, TopologyEdge } from '../../hooks/useTopology';
-import { NODE_COLORS } from './graphConstants';
+import { useNodeColor } from '../../hooks/useNodeColor';
 
 interface GraphTooltipProps {
   tooltip: {
@@ -9,9 +9,11 @@ interface GraphTooltipProps {
     node?: TopologyNode;
     edge?: TopologyEdge;
   } | null;
+  nodeColorOverride: Record<string, string>;
 }
 
-export function GraphTooltip({ tooltip }: GraphTooltipProps) {
+export function GraphTooltip({ tooltip, nodeColorOverride }: GraphTooltipProps) {
+  const getColor = useNodeColor(nodeColorOverride);
   return (
     <AnimatePresence>
       {tooltip && (
@@ -24,7 +26,7 @@ export function GraphTooltip({ tooltip }: GraphTooltipProps) {
           exit={{ opacity: 0, scale: 0.95 }}
           transition={{ duration: 0.1 }}
         >
-          {tooltip.node && <NodeTooltipContent node={tooltip.node} />}
+          {tooltip.node && <NodeTooltipContent node={tooltip.node} getColor={getColor} />}
           {tooltip.edge && <EdgeTooltipContent edge={tooltip.edge} />}
         </motion.div>
       )}
@@ -32,11 +34,11 @@ export function GraphTooltip({ tooltip }: GraphTooltipProps) {
   );
 }
 
-function NodeTooltipContent({ node }: { node: TopologyNode }) {
+function NodeTooltipContent({ node, getColor }: { node: TopologyNode; getColor: (label: string) => string }) {
   return (
     <>
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: NODE_COLORS[node.label] }} />
+        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: getColor(node.label) }} />
         <span className="text-xs font-semibold text-text-primary">{node.id}</span>
       </div>
       <span className="text-[10px] uppercase tracking-wider text-text-muted block mb-1">
