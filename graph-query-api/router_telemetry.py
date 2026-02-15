@@ -140,9 +140,15 @@ async def query_telemetry(
     req: TelemetryQueryRequest,
     ctx: ScenarioContext = Depends(get_scenario_context),
 ):
+    # Prefix container name with scenario prefix for shared DB isolation
+    container_name = (
+        f"{ctx.telemetry_container_prefix}-{req.container_name}"
+        if ctx.telemetry_container_prefix
+        else req.container_name
+    )
     logger.info(
         "POST /query/telemetry — db=%s  container=%s  query=%.200s",
-        ctx.telemetry_database, req.container_name, req.query,
+        ctx.telemetry_database, container_name, req.query,
     )
     endpoint = COSMOS_NOSQL_ENDPOINT
     db = ctx.telemetry_database
@@ -156,7 +162,7 @@ async def query_telemetry(
         result = await asyncio.to_thread(
             _execute_cosmos_sql,
             req.query,
-            container_name=req.container_name,
+            container_name=container_name,
             cosmos_endpoint=endpoint,
             cosmos_database=db,
         )

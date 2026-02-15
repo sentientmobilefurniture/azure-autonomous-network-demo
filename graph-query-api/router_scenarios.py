@@ -64,11 +64,12 @@ _scenarios_container = None
 def _get_scenarios_container(*, ensure_created: bool = True):
     """Get the Cosmos container for scenario metadata.
 
-    Database: scenarios
+    Database: scenarios (pre-created by Bicep)
     Container: scenarios
     Partition key: /id
 
-    Uses the same ARM two-phase pattern as router_prompts._get_prompts_container.
+    Database creation is skipped — the shared 'scenarios' DB pre-exists
+    from Bicep. Only the container is created via ARM if needed.
     """
     global _scenarios_container
     if _scenarios_container is not None:
@@ -89,18 +90,8 @@ def _get_scenarios_container(*, ensure_created: bool = True):
 
                 mgmt = CosmosDBManagementClient(_DC(), sub_id)
 
-                # Create database
-                try:
-                    mgmt.sql_resources.begin_create_update_sql_database(
-                        rg,
-                        account_name,
-                        SCENARIOS_DATABASE,
-                        {"resource": {"id": SCENARIOS_DATABASE}},
-                    ).result()
-                except Exception:
-                    pass  # already exists
-
-                # Create container
+                # Database "scenarios" pre-exists from Bicep — skip creation
+                # Only create container if needed
                 try:
                     mgmt.sql_resources.begin_create_update_sql_container(
                         rg,
@@ -211,10 +202,12 @@ async def save_scenario(req: ScenarioSaveRequest):
         "created_by": "ui",
         "resources": {
             "graph": f"{name}-topology",
-            "telemetry_database": f"{name}-telemetry",
+            "telemetry_database": "telemetry",
+            "telemetry_container_prefix": name,
             "runbooks_index": f"{name}-runbooks-index",
             "tickets_index": f"{name}-tickets-index",
-            "prompts_database": f"{name}-prompts",
+            "prompts_database": "prompts",
+            "prompts_container": name,
         },
         "upload_status": req.upload_results,
     }

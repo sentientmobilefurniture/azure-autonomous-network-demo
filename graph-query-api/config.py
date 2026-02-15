@@ -74,13 +74,21 @@ def get_credential():
 class ScenarioContext:
     """Per-request routing context derived from the X-Graph header.
 
-    Determines which Gremlin graph and which NoSQL telemetry database
-    each request targets. If no header is provided, falls back to the
-    default graph from env vars.
+    Determines which Gremlin graph, NoSQL telemetry database, and prompts
+    database each request targets. If no header is provided, falls back
+    to the default graph from env vars.
+
+    Telemetry and prompts use **shared databases** (pre-created by Bicep).
+    Per-scenario data is isolated via container-level prefixing:
+      - Telemetry containers: "{prefix}-AlertStream", "{prefix}-PerformanceMetrics"
+      - Prompts container: "{prefix}" within the shared "prompts" DB
     """
-    graph_name: str              # e.g. "cloud-outage-topology"
-    gremlin_database: str        # e.g. "networkgraph" (shared across scenarios)
-    telemetry_database: str      # e.g. "cloud-outage-telemetry" (derived)
+    graph_name: str                  # e.g. "cloud-outage-topology"
+    gremlin_database: str            # e.g. "networkgraph" (shared across scenarios)
+    telemetry_database: str          # "telemetry" (shared DB, pre-created by Bicep)
+    telemetry_container_prefix: str  # "cloud-outage" (used to prefix container names)
+    prompts_database: str            # "prompts" (shared DB, pre-created by Bicep)
+    prompts_container: str           # "cloud-outage" (per-scenario container name)
     backend_type: GraphBackendType
 
 
@@ -91,22 +99,22 @@ def get_scenario_context(
 
     If the header is absent, falls back to COSMOS_GREMLIN_GRAPH env var.
 
-    Telemetry database is derived from the graph name:
-      "cloud-outage-topology" → prefix "cloud-outage" → "cloud-outage-telemetry"
-    Falls back to COSMOS_NOSQL_DATABASE if no prefix can be derived.
+    The scenario prefix is derived from the graph name:
+      "cloud-outage-topology" → "cloud-outage"
+    If no hyphen exists, the full graph_name is used as the prefix.
     """
     graph_name = x_graph or COSMOS_GREMLIN_GRAPH
 
-    if "-" in graph_name:
-        prefix = graph_name.rsplit("-", 1)[0]
-        telemetry_db = f"{prefix}-telemetry"
-    else:
-        telemetry_db = COSMOS_NOSQL_DATABASE
+    # Derive scenario prefix: "cloud-outage-topology" → "cloud-outage"
+    prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
 
     return ScenarioContext(
         graph_name=graph_name,
         gremlin_database=COSMOS_GREMLIN_DATABASE,
-        telemetry_database=telemetry_db,
+        telemetry_database="telemetry",           # shared DB
+        telemetry_container_prefix=prefix,         # scenario prefix for container lookup
+        prompts_database="prompts",                # shared DB
+        prompts_container=prefix,                  # scenario container name
         backend_type=GRAPH_BACKEND,
     )
 

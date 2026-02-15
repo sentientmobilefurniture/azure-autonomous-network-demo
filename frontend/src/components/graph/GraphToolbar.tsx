@@ -11,11 +11,14 @@ interface GraphToolbarProps {
   onSearchChange: (q: string) => void;
   onRefresh: () => void;
   onZoomToFit: () => void;
+  isPaused?: boolean;
+  onTogglePause?: () => void;
 }
 
 export function GraphToolbar({
   meta, loading, availableLabels, activeLabels,
   onToggleLabel, searchQuery, onSearchChange, onRefresh, onZoomToFit,
+  isPaused, onTogglePause,
 }: GraphToolbarProps) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 shrink-0">
@@ -65,6 +68,17 @@ export function GraphToolbar({
         <span className="text-[10px] text-text-muted whitespace-nowrap">
           {meta.node_count}N · {meta.edge_count}E
         </span>
+      )}
+
+      {/* Pause/Play toggle */}
+      {onTogglePause && (
+        <button
+          onClick={onTogglePause}
+          className={`text-xs px-1 transition-colors ${
+            isPaused ? 'text-brand hover:text-brand/80' : 'text-text-muted hover:text-text-primary'
+          }`}
+          title={isPaused ? 'Resume simulation' : 'Pause simulation'}
+        >{isPaused ? '▶' : '⏸'}</button>
       )}
 
       {/* Zoom-to-fit */}

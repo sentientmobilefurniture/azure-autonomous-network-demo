@@ -82,6 +82,45 @@ def _read_csv(path: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# ARM NoSQL container creation (shared databases)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_nosql_containers(
+    db_name: str,
+    containers_config: list[dict],
+    emit,
+) -> None:
+    """Create NoSQL containers via ARM (management plane).
+
+    The database is assumed to pre-exist (created by Bicep).
+    Only containers are created here for speed (~5-10s each vs 20-30s for DB).
+    """
+    account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
+    sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
+    rg = os.getenv("AZURE_RESOURCE_GROUP", "")
+    if not sub_id or not rg:
+        raise RuntimeError("AZURE_SUBSCRIPTION_ID/AZURE_RESOURCE_GROUP not set")
+
+    from azure.mgmt.cosmosdb import CosmosDBManagementClient
+    mgmt = CosmosDBManagementClient(get_credential(), sub_id)
+
+    for cdef in containers_config:
+        cname = cdef["name"]
+        pk_path = cdef.get("partition_key", "/id")
+        emit("telemetry", f"Creating container '{cname}'...", 15)
+        try:
+            mgmt.sql_resources.begin_create_update_sql_container(
+                rg, account_name, db_name, cname,
+                {"resource": {"id": cname, "partitionKey": {"paths": [pk_path], "kind": "Hash"}}},
+            ).result()
+        except Exception as e:
+            if "Conflict" not in str(e):
+                raise
+            # Container already exists — fine
+
+
+# ---------------------------------------------------------------------------
 # ARM graph creation
 # ---------------------------------------------------------------------------
 
@@ -897,12 +936,10 @@ async def upload_telemetry(
                     # scenario_name override takes priority over manifest
                     sc_name = scenario_name or manifest["name"]
                     cosmos_cfg = manifest.get("cosmos", {})
-                    # When scenario_name override is provided, always use '-telemetry'
-                    # suffix to guarantee consistency with query-time derivation.
-                    if scenario_name:
-                        nosql_db = f"{sc_name}-telemetry"
-                    else:
-                        nosql_db = f"{sc_name}-{cosmos_cfg.get('nosql', {}).get('database', 'telemetry')}"
+
+                    # Shared telemetry DB — pre-created by Bicep
+                    nosql_db = "telemetry"
+
                     containers_config = cosmos_cfg.get("nosql", {}).get("containers", [])
                     telemetry_dir = scenario_dir / manifest.get("paths", {}).get("telemetry", "data/telemetry")
 
@@ -910,54 +947,26 @@ async def upload_telemetry(
                         emit("error", "COSMOS_NOSQL_ENDPOINT not configured", -1)
                         return
 
-                    emit("telemetry", f"Loading into database '{nosql_db}'...", 10)
+                    emit("telemetry", f"Loading into shared database '{nosql_db}' (scenario prefix '{sc_name}')...", 10)
 
-                    def _ensure_nosql_db_and_containers():
-                        """Create NoSQL database + containers via ARM (management plane).
-                        Data-plane RBAC doesn't cover database creation, so we use ARM."""
-                        account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
-                        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-                        rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-                        if not sub_id or not rg:
-                            raise RuntimeError("AZURE_SUBSCRIPTION_ID/AZURE_RESOURCE_GROUP not set")
+                    # Prefix container names with scenario name for isolation
+                    # e.g. "AlertStream" → "cloud-outage-AlertStream"
+                    for cdef in containers_config:
+                        cdef["original_name"] = cdef["name"]
+                        cdef["name"] = f"{sc_name}-{cdef['name']}"
 
-                        from azure.mgmt.cosmosdb import CosmosDBManagementClient
-                        mgmt = CosmosDBManagementClient(get_credential(), sub_id)
-
-                        # Create database
-                        emit("telemetry", f"Creating database '{nosql_db}' via ARM...", 12)
-                        try:
-                            mgmt.sql_resources.begin_create_update_sql_database(
-                                rg, account_name, nosql_db,
-                                {"resource": {"id": nosql_db}},
-                            ).result()
-                        except Exception as e:
-                            if "Conflict" not in str(e):
-                                raise
-                            # Database already exists — fine
-
-                        # Create containers
-                        for cdef in containers_config:
-                            cname = cdef["name"]
-                            pk_path = cdef.get("partition_key", "/id")
-                            emit("telemetry", f"Creating container '{cname}'...", 15)
-                            try:
-                                mgmt.sql_resources.begin_create_update_sql_container(
-                                    rg, account_name, nosql_db, cname,
-                                    {"resource": {"id": cname, "partitionKey": {"paths": [pk_path], "kind": "Hash"}}},
-                                ).result()
-                            except Exception as e:
-                                if "Conflict" not in str(e):
-                                    raise
-
-                    await asyncio.to_thread(_ensure_nosql_db_and_containers)
+                    await asyncio.to_thread(
+                        _ensure_nosql_containers, nosql_db, containers_config, emit
+                    )
 
                     def _load():
                         cosmos = CosmosClient(COSMOS_NOSQL_ENDPOINT, credential=get_credential())
                         db = cosmos.get_database_client(nosql_db)
                         for ci, cdef in enumerate(containers_config):
-                            cname = cdef["name"]
-                            csv_file = cdef.get("csv_file", f"{cname}.csv")
+                            cname = cdef["name"]  # prefixed name, e.g. "cloud-outage-AlertStream"
+                            # CSV files use the original (unprefixed) container name
+                            original_name = cdef.get("original_name", cname)
+                            csv_file = cdef.get("csv_file", f"{original_name}.csv")
                             csv_path = telemetry_dir / csv_file
                             if not csv_path.exists():
                                 emit("telemetry", f"⚠ {csv_file} not found — skipping", 20)

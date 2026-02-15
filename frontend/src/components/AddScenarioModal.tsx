@@ -84,6 +84,24 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   const abortRef = useRef<AbortController | null>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
+  // Upload timer
+  const uploadStartRef = useRef<number>(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function formatElapsed(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return m > 0 ? `${m}m ${s.toString().padStart(2, '0')}s` : `${s}s`;
+  }
+
+  function stopTimer() {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+  }
+
   function makeEmptySlots(): Record<SlotKey, ScenarioUploadSlot> {
     const result: Partial<Record<SlotKey, ScenarioUploadSlot>> = {};
     for (const def of SLOT_DEFS) {
@@ -116,8 +134,15 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       setCurrentUploadStep('');
       setGlobalError('');
       setShowOverrideConfirm(false);
+      setElapsedSeconds(0);
+      stopTimer();
     }
   }, [open]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => stopTimer();
+  }, []);
 
   // Close on Escape (when not uploading)
   useEffect(() => {
@@ -201,6 +226,13 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     setGlobalError('');
     abortRef.current = new AbortController();
 
+    // Start upload timer
+    uploadStartRef.current = Date.now();
+    setElapsedSeconds(0);
+    timerIntervalRef.current = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - uploadStartRef.current) / 1000));
+    }, 1000);
+
     const uploadResults: Record<string, unknown> = {};
 
     // Upload sequentially: graph → telemetry → runbooks → tickets → prompts
@@ -277,6 +309,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       });
       setModalState('done');
       setOverallPct(100);
+      stopTimer();
       // Auto-close after brief delay
       setTimeout(() => {
         onSaved();
@@ -285,12 +318,14 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     } catch (e) {
       setGlobalError(String(e));
       setModalState('error');
+      stopTimer();
     }
   }, [canSave, allDone, existingNames, name, showOverrideConfirm, slots, updateSlot, saveScenarioMeta, displayName, description, onSaved, onClose]);
 
   const handleCancel = useCallback(() => {
     if (modalState === 'uploading') {
       abortRef.current?.abort();
+      stopTimer();
       setModalState('idle');
     } else {
       onClose();
@@ -471,6 +506,16 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
                   style={{ width: `${Math.max(overallPct, 3)}%` }}
                 />
               </div>
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-xs text-text-secondary">
+                  Overall: {SLOT_DEFS.filter(d => slots[d.key].status === 'done').length} of {SLOT_DEFS.length}
+                </span>
+                <span className={`text-xs font-mono tabular-nums ${
+                  elapsedSeconds > 30 ? 'text-text-secondary' : 'text-text-muted'
+                }`}>
+                  ⏱ {formatElapsed(elapsedSeconds)}
+                </span>
+              </div>
             </div>
           )}
 
@@ -478,6 +523,9 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           {modalState === 'done' && (
             <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 text-center">
               <p className="text-sm text-status-success">Scenario "{name}" saved successfully</p>
+              <p className="text-xs text-status-success/70 mt-1 font-mono tabular-nums">
+                Total: {formatElapsed(elapsedSeconds)}
+              </p>
             </div>
           )}
 

@@ -42,6 +42,7 @@ from router_topology import router as topology_router
 from router_ingest import router as ingest_router
 from router_prompts import router as prompts_router
 from router_scenarios import router as scenarios_router
+from router_interactions import router as interactions_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -131,6 +132,7 @@ app.include_router(topology_router)
 app.include_router(ingest_router)
 app.include_router(prompts_router)
 app.include_router(scenarios_router)
+app.include_router(interactions_router)
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +210,16 @@ async def _log_sse_generator():
 
 @app.get("/api/logs", summary="Stream logs via SSE")
 async def stream_logs():
+    return StreamingResponse(
+        _log_sse_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/query/logs", summary="Stream graph-query-api logs via SSE (nginx-accessible)")
+async def stream_logs_query_route():
+    """Alias for /api/logs that's accessible through nginx's /query/* routing."""
     return StreamingResponse(
         _log_sse_generator(),
         media_type="text/event-stream",

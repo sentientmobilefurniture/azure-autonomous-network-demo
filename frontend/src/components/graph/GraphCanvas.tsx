@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import type { TopologyNode, TopologyEdge } from '../../hooks/useTopology';
 import { NODE_COLORS, NODE_SIZES } from './graphConstants';
@@ -8,6 +8,7 @@ type GLink = LinkObject<TopologyNode, TopologyEdge>;
 
 export interface GraphCanvasHandle {
   zoomToFit: () => void;
+  setFrozen: (frozen: boolean) => void;
 }
 
 interface GraphCanvasProps {
@@ -21,20 +22,28 @@ interface GraphCanvasProps {
   onLinkHover: (edge: TopologyEdge | null) => void;
   onNodeRightClick: (node: TopologyNode, event: MouseEvent) => void;
   onBackgroundClick: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 }
 
 export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
   function GraphCanvas(
     { nodes, edges, width, height,
       nodeDisplayField, nodeColorOverride,
-      onNodeHover, onLinkHover, onNodeRightClick, onBackgroundClick },
+      onNodeHover, onLinkHover, onNodeRightClick, onBackgroundClick,
+      onMouseEnter, onMouseLeave },
     ref,
   ) {
     const fgRef = useRef<ForceGraphMethods<GNode, GLink> | undefined>(undefined);
+    const [frozen, setFrozen] = useState(false);
 
-    // Expose zoomToFit to parent via imperative handle
+    // Expose zoomToFit and setFrozen to parent via imperative handle
     useImperativeHandle(ref, () => ({
       zoomToFit: () => fgRef.current?.zoomToFit(400, 40),
+      setFrozen: (f: boolean) => {
+        setFrozen(f);
+        if (!f) fgRef.current?.d3ReheatSimulation();
+      },
     }), []);
 
     // Fit graph to view on data change
@@ -120,40 +129,47 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
     );
 
     return (
-      <ForceGraph2D
-        ref={fgRef}
-        width={width}
-        height={height}
-        graphData={{ nodes: nodes as GNode[], links: edges as GLink[] }}
-        backgroundColor="transparent"
-        // Node rendering
-        nodeCanvasObject={nodeCanvasObject}
-        nodeCanvasObjectMode={() => 'replace'}
-        nodeId="id"
-        // Edge rendering
-        linkSource="source"
-        linkTarget="target"
-        linkColor={() => 'rgba(255,255,255,0.12)'}
-        linkWidth={1.5}
-        linkDirectionalArrowLength={4}
-        linkDirectionalArrowRelPos={0.9}
-        linkDirectionalArrowColor={() => 'rgba(255,255,255,0.2)'}
-        linkCanvasObjectMode={linkCanvasObjectMode}
-        linkCanvasObject={linkCanvasObject}
-        // Interaction
-        onNodeHover={handleNodeHoverInternal}
-        onLinkHover={handleLinkHoverInternal}
-        onNodeRightClick={onNodeRightClick as (node: GNode, event: MouseEvent) => void}
-        onNodeClick={handleNodeDoubleClick}
-        onBackgroundClick={onBackgroundClick}
-        // Physics
-        d3AlphaDecay={0.02}
-        d3VelocityDecay={0.3}
-        cooldownTime={3000}
-        enableNodeDrag={true}
-        enableZoomInteraction={true}
-        enablePanInteraction={true}
-      />
+      <div
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        style={{ width, height }}
+      >
+        <ForceGraph2D
+          ref={fgRef}
+          width={width}
+          height={height}
+          graphData={{ nodes: nodes as GNode[], links: edges as GLink[] }}
+          backgroundColor="transparent"
+          // Node rendering
+          nodeCanvasObject={nodeCanvasObject}
+          nodeCanvasObjectMode={() => 'replace'}
+          nodeId="id"
+          // Edge rendering
+          linkSource="source"
+          linkTarget="target"
+          linkColor={() => 'rgba(255,255,255,0.12)'}
+          linkWidth={1.5}
+          linkDirectionalArrowLength={4}
+          linkDirectionalArrowRelPos={0.9}
+          linkDirectionalArrowColor={() => 'rgba(255,255,255,0.2)'}
+          linkCanvasObjectMode={linkCanvasObjectMode}
+          linkCanvasObject={linkCanvasObject}
+          // Interaction
+          onNodeHover={handleNodeHoverInternal}
+          onLinkHover={handleLinkHoverInternal}
+          onNodeRightClick={onNodeRightClick as (node: GNode, event: MouseEvent) => void}
+          onNodeClick={handleNodeDoubleClick}
+          onBackgroundClick={onBackgroundClick}
+          // Physics
+          d3AlphaDecay={0.02}
+          d3VelocityDecay={0.3}
+          cooldownTicks={frozen ? 0 : Infinity}
+          cooldownTime={3000}
+          enableNodeDrag={true}
+          enableZoomInteraction={true}
+          enablePanInteraction={true}
+        />
+      </div>
     );
   },
 );

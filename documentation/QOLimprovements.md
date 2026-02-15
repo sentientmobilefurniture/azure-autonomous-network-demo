@@ -2,7 +2,7 @@
 
 > **Created:** 2026-02-15
 > **Last audited:** 2026-02-15 (including UX audit)
-> **Status:** ⬜ Not Started
+> **Status:** 🟡 In Progress
 > **Goal:** Six quality-of-life improvements to speed up loading, improve observability,
 > enhance graph interaction, track investigation history, and eliminate runtime ARM
 > delays by pre-creating core databases at infrastructure provisioning time.
@@ -29,12 +29,12 @@
 
 | Phase | Status | Scope |
 |-------|--------|-------|
-| **Phase 1:** Pre-create Core DBs in Bicep | ⬜ Not started | `cosmos-gremlin.bicep` |
-| **Phase 2:** Per-Scenario Containers (Shared DBs) | ⬜ Not started | `router_ingest.py`, `router_prompts.py`, `router_telemetry.py`, `router_scenarios.py`, `config.py`, `types/index.ts` |
-| **Phase 3:** Upload Timer | ⬜ Not started | `AddScenarioModal.tsx` |
-| **Phase 4:** Graph API Log Stream in MetricsBar | ⬜ Not started | `MetricsBar.tsx`, `main.py` (graph-query-api) |
-| **Phase 5:** Graph Pause/Unpause on Mouseover | ⬜ Not started | `GraphCanvas.tsx`, `GraphTopologyViewer.tsx` |
-| **Phase 6:** Interaction History Sidebar | ⬜ Not started | New router, new hook, new components, `App.tsx`, `types/index.ts`, `cosmos-gremlin.bicep` |
+| **Phase 1:** Pre-create Core DBs in Bicep | ✅ Done | `cosmos-gremlin.bicep` |
+| **Phase 2:** Per-Scenario Containers (Shared DBs) | ✅ Done | `router_ingest.py`, `router_prompts.py`, `router_telemetry.py`, `router_scenarios.py`, `config.py`, `types/index.ts` |
+| **Phase 3:** Upload Timer | ✅ Done | `AddScenarioModal.tsx` |
+| **Phase 4:** Graph API Log Stream in MetricsBar | ✅ Done | `MetricsBar.tsx`, `TabbedLogStream.tsx`, `main.py` (graph-query-api) |
+| **Phase 5:** Graph Pause/Unpause on Mouseover | ✅ Done | `GraphCanvas.tsx`, `GraphTopologyViewer.tsx`, `GraphToolbar.tsx` |
+| **Phase 6:** Interaction History Sidebar | ✅ Done | `router_interactions.py`, `models.py`, `useInteractions.ts`, `InteractionSidebar.tsx`, `App.tsx`, `types/index.ts`, `cosmos-gremlin.bicep` |
 
 ---
 
