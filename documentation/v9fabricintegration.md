@@ -16,4 +16,6 @@ Requirements:
 
 Likely, most of the relevant information will be present in /home/hanchoong/projects/autonomous-network-demo/fabric_implementation_references
 
+## Groundwork 
+
 ## Implementation plan

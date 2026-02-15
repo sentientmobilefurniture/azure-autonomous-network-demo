@@ -40,6 +40,7 @@
 
 ## Table of Contents
 
+- [Codebase Conventions & Routing Context](#codebase-conventions--routing-context)
 - [Overview of Changes](#overview-of-changes)
 - [Item 1: Per-Scenario Containers in Shared DBs](#item-1-per-scenario-containers-in-shared-dbs)
 - [Item 2: Upload Timer](#item-2-upload-timer)
@@ -53,6 +54,68 @@
 - [UX Priority Matrix](#ux-priority-matrix)
 - [Edge Cases & Validation](#edge-cases--validation)
 - [Migration & Backwards Compatibility](#migration--backwards-compatibility)
+
+---
+
+## Codebase Conventions & Routing Context
+
+> **Read this section first** if you are implementing any phase below. These
+> conventions are load-bearing — ignoring them will cause import errors, routing
+> failures, or mismatched data.
+
+### Request Routing
+
+| URL prefix | Proxied to | Config |
+|------------|-----------|--------|
+| `/api/*` | API service on port **8000** | `vite.config.ts` L21-31 (dev), `nginx.conf` `/api/` block (prod) |
+| `/query/*` | graph-query-api on port **8100** | `vite.config.ts` L44-53 (dev), `nginx.conf` `/query/` block (prod) |
+
+Both proxy configs include SSE-compatible settings (`proxy_buffering off`,
+`proxy_cache off`, SSE response headers). New routes under either prefix
+automatically inherit this routing — **no proxy or nginx changes needed**.
+
+### Scenario Naming
+
+| Concept | Example | Where stored |
+|---------|---------|-------------|
+| **Base scenario name** | `"telco-noc"` | `ScenarioContext.activeScenario`, `localStorage`, interaction `scenario` field |
+| **Graph name** | `"telco-noc-topology"` | Derived as `${name}-topology`, sent as `X-Graph` header |
+| **Prefix extraction** | `"telco-noc"` | Backend: `graph_name.rsplit("-", 1)[0]` in `config.py` |
+
+Upload endpoints (`router_ingest.py`) receive scenario names from the upload form's
+`scenario_name` query param (or `scenario.yaml` manifest `name` field) — **not** from
+the `X-Graph` header. The `X-Graph` header is used only for read-time query routing
+via `ScenarioContext`.
+
+### Frontend Import Conventions
+
+The project aliases `react-resizable-panels` exports:
+
+```tsx
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle }
+  from 'react-resizable-panels';
+```
+
+Follow this aliasing pattern in all new code. **Do not** import `PanelGroup` or
+`PanelResizeHandle` directly — they are not the library's actual export names.
+
+### CSS Resize Handles
+
+| Class | Direction | Cursor | Used In |
+|-------|-----------|--------|---------|
+| `metrics-resize-handle` | Horizontal (col) | `col-resize` | `MetricsBar.tsx` — between panels |
+| `vertical-resize-handle` | Vertical (row) | `row-resize` | `App.tsx` — between MetricsBar and content |
+
+Both defined in `frontend/src/styles/globals.css`.
+
+### SSE Event Format
+
+Both backend log endpoints emit SSE events with `event: log`:
+- API (port 8000): `api/app/routers/logs.py` — `yield {"event": "log", "data": ...}`
+- Graph API (port 8100): `graph-query-api/main.py` — `yield f"event: log\ndata: ...\n\n"`
+
+The `LogStream` component listens via `addEventListener('log', ...)` — **not**
+`onmessage`. Any new SSE log endpoint must use the `event: log` naming to be picked up.
 
 ---
 
@@ -589,6 +652,12 @@ The existing nginx `/query/` location block already has `proxy_buffering off` an
 `proxy_cache off` for SSE support. The new `/query/logs` route will be handled
 correctly by the existing config.
 
+> **SSE event format:** Both backends (port 8000 `api/app/routers/logs.py` and port
+> 8100 `graph-query-api/main.py`) emit SSE events with `event: log`. The `LogStream`
+> component listens via `addEventListener('log', ...)` — NOT `onmessage`. The new
+> `/query/logs` endpoint uses the same `_log_sse_generator()` which already emits
+> `event: log`, so `LogStream` will receive events correctly with no changes.
+
 ### UX Enhancement: Tabbed Log Viewer Alternative
 
 #### Layout Concern
@@ -723,61 +792,17 @@ normally while the simulation is frozen.**
 
 #### `GraphCanvas.tsx` — Add Freeze/Unfreeze
 
-1. **Expose `freezeSimulation` and `unfreezeSimulation` via the imperative handle:**
+Use the `cooldownTicks` prop to freeze the d3 simulation while keeping the render
+loop alive. This is the correct approach — the library's `pauseAnimation()` method
+stops the entire `requestAnimationFrame` loop, which would break node dragging and
+hover tooltips. Controlling `cooldownTicks` via state freezes only the physics
+simulation while the canvas continues repainting normally.
+
+1. **Add frozen state and expose via imperative handle:**
 
 ```typescript
-export interface GraphCanvasHandle {
-  zoomToFit: () => void;
-  freezeSimulation: () => void;    // NEW
-  unfreezeSimulation: () => void;  // NEW
-}
-
-useImperativeHandle(ref, () => ({
-  zoomToFit: () => fgRef.current?.zoomToFit(400, 40),
-  freezeSimulation: () => {
-    // Stop the d3 simulation but keep the render loop alive.
-    // This allows node dragging and hover to still repaint the canvas.
-    const engine = fgRef.current?.d3Force?.('simulation');
-    if (!engine) {
-      // Fallback: access the simulation via the undocumented _simulation property
-      // or use d3AlphaTarget prop. The simplest reliable approach:
-      fgRef.current?.d3ReheatSimulation?.();  // ensure sim is active
-      // Then immediately cool it:
-    }
-    // The most reliable approach for react-force-graph-2d:
-    fgRef.current?.pauseAnimation();
-    // BUT we need a workaround — see note below.
-  },
-  unfreezeSimulation: () => {
-    fgRef.current?.resumeAnimation();
-    fgRef.current?.d3ReheatSimulation();
-  },
-}), []);
-```
-
-> **⚠️ Implementation note — preferred approach:** Rather than fighting the library's
-> imperative API, use the `cooldownTicks` prop dynamically. Set `cooldownTicks={0}` on
-> mouse-enter (simulation stops ticking but render loop stays alive), and restore the
-> original `cooldownTime={3000}` on mouse-leave with a `d3ReheatSimulation()` call.
-> This is the cleanest solution because the `ForceGraph2D` component natively handles
-> render-loop-independent simulation freezing via cooldown props.
-
-```typescript
-// PREFERRED: Use state-driven cooldown instead of imperative pause/resume
 const [frozen, setFrozen] = useState(false);
 
-// In the ForceGraph2D props:
-<ForceGraph2D
-  ref={fgRef}
-  cooldownTicks={frozen ? 0 : Infinity}
-  cooldownTime={frozen ? 0 : 3000}
-  // ... all existing props ...
-/>
-```
-
-With this approach, `GraphCanvasHandle` simplifies to:
-
-```typescript
 export interface GraphCanvasHandle {
   zoomToFit: () => void;
   setFrozen: (frozen: boolean) => void;  // NEW
@@ -791,6 +816,21 @@ useImperativeHandle(ref, () => ({
   },
 }), []);
 ```
+
+2. **Control freeze via props on `ForceGraph2D`:**
+
+```tsx
+<ForceGraph2D
+  ref={fgRef}
+  cooldownTicks={frozen ? 0 : Infinity}
+  cooldownTime={3000}  // constant — cooldownTicks controls freeze behavior
+  // ... all existing props ...
+/>
+```
+
+> **Note:** `cooldownTicks={0}` alone is sufficient to stop the simulation when frozen.
+> When unfrozen, `cooldownTicks={Infinity}` defers to `cooldownTime={3000}`. Keep
+> `cooldownTime` constant — toggling it alongside `cooldownTicks` is redundant.
 
 2. **Add `onMouseEnter`/`onMouseLeave` props:**
 
@@ -882,7 +922,7 @@ with this language of state visibility.
 
 If a user's mouse briefly exits the canvas (e.g., moving to a nearby button), the graph
 instantly resumes and the layout shifts. Add a **300ms debounce** on `onMouseLeave`
-before calling `resumeAnimation()`:
+before calling `setFrozen(false)`:
 
 ```typescript
 const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -892,13 +932,13 @@ const handleMouseEnter = useCallback(() => {
     clearTimeout(resumeTimeoutRef.current);
     resumeTimeoutRef.current = null;
   }
-  canvasRef.current?.pauseAnimation();
+  canvasRef.current?.setFrozen(true);
   setIsPaused(true);
 }, []);
 
 const handleMouseLeave = useCallback(() => {
   resumeTimeoutRef.current = setTimeout(() => {
-    canvasRef.current?.resumeAnimation();
+    canvasRef.current?.setFrozen(false);
     setIsPaused(false);
     resumeTimeoutRef.current = null;
   }, 300);
@@ -907,6 +947,10 @@ const handleMouseLeave = useCallback(() => {
 
 **Why:** Without debounce, accidental mouse exits (common when reaching for the toolbar
 above the graph or the resize handle below) cause jarring layout jumps.
+
+> **Note:** This debounced version should **replace** the simple `handleMouseEnter`/
+> `handleMouseLeave` in the `GraphTopologyViewer.tsx` section above. The simple
+> version is shown first for clarity; use the debounced version in production.
 
 #### 4c. Manual Pause/Resume Toggle in Toolbar
 
@@ -987,7 +1031,7 @@ A collapsible right sidebar showing past interactions:
 | Database | `interactions` |
 | Container | `interactions` |
 | Partition Key | `/scenario` |
-| Throughput | Autoscale max 400 RU/s |
+| Throughput | Autoscale max 1000 RU/s (Azure autoscale minimum) |
 
 The database + container are pre-created by Bicep (Item 6).
 
@@ -1029,7 +1073,27 @@ The database + container are pre-created by Bicep (Item 6).
 
 #### New File: `graph-query-api/router_interactions.py`
 
+> **Routing context:** All `/query/*` paths are proxied to the graph-query-api
+> service on port 8100 — by vite in dev (`vite.config.ts` proxy) and by nginx
+> in production (`/query/` location block). New routes under `/query/` prefix
+> automatically inherit this routing. No proxy or nginx config changes are needed.
+
+> **Note:** Interaction endpoints use the scenario's **base name** (e.g.,
+> `"telco-noc"`) directly as the `scenario` field and partition key. They do NOT
+> use the `X-Graph` header or `ScenarioContext` dependency. The frontend's
+> `activeScenario` (from `ScenarioContext.tsx`) already stores the base name — it
+> is NOT the graph name (which would be `"telco-noc-topology"`).
+
 ```python
+import asyncio
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, HTTPException, Query
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+
+from models import InteractionSaveRequest
+
 router = APIRouter(prefix="/query")
 
 # --- Container setup (same pattern as router_scenarios.py) ---
@@ -1053,7 +1117,6 @@ async def list_interactions(
 ):
     """List interactions, optionally filtered by scenario.
     Returns newest first (ORDER BY c.created_at DESC).
-    Uses cross-partition query when no scenario filter.
     """
     container = _get_interactions_container(ensure_created=False)
     def _list():
@@ -1064,11 +1127,18 @@ async def list_interactions(
             params.append({"name": "@scenario", "value": scenario})
         query += " ORDER BY c.created_at DESC OFFSET 0 LIMIT @limit"
         params.append({"name": "@limit", "value": limit})
-        return list(container.query_items(
-            query=query,
-            parameters=params,
-            enable_cross_partition_query=True,
-        ))
+        # When filtering by scenario, route to single partition for efficiency.
+        # Cross-partition query only needed for unfiltered listing.
+        if scenario:
+            return list(container.query_items(
+                query=query, parameters=params,
+                partition_key=scenario,
+            ))
+        else:
+            return list(container.query_items(
+                query=query, parameters=params,
+                enable_cross_partition_query=True,
+            ))
     items = await asyncio.to_thread(_list)
     return {"interactions": items}
 
@@ -1097,9 +1167,11 @@ async def get_interaction(interaction_id: str, scenario: str = Query(...)):
     """Get a specific interaction by ID. Requires scenario for partition key routing."""
     container = _get_interactions_container(ensure_created=False)
     def _get():
-        return container.read_item(item=interaction_id, partition_key=scenario)
-    item = await asyncio.to_thread(_get)
-    return item
+        try:
+            return container.read_item(item=interaction_id, partition_key=scenario)
+        except CosmosResourceNotFoundError:
+            raise HTTPException(status_code=404, detail="Interaction not found")
+    return await asyncio.to_thread(_get)
 
 
 @router.delete("/interactions/{interaction_id}", summary="Delete an interaction")
@@ -1107,7 +1179,10 @@ async def delete_interaction(interaction_id: str, scenario: str = Query(...)):
     """Delete a specific interaction."""
     container = _get_interactions_container(ensure_created=False)
     def _delete():
-        container.delete_item(item=interaction_id, partition_key=scenario)
+        try:
+            container.delete_item(item=interaction_id, partition_key=scenario)
+        except CosmosResourceNotFoundError:
+            raise HTTPException(status_code=404, detail="Interaction not found")
     await asyncio.to_thread(_delete)
     return {"deleted": interaction_id}
 ```
@@ -1376,26 +1451,23 @@ export default function App() {
   }, [activeScenario, fetchInteractions]);
 
   // Auto-save interaction when investigation completes.
-  // We use refs for values that should be captured at save-time to avoid
-  // stale closures AND satisfy react-hooks/exhaustive-deps.
+  // Use a composite ref to capture the latest values at save-time,
+  // avoiding stale closures while keeping the effect dependency list clean.
   const prevRunningRef = useRef(running);
-  const alertRef = useRef(alert);
-  const stepsRef = useRef(steps);
-  const runMetaRef = useRef(runMeta);
-  const activeScenarioRef = useRef(activeScenario);
-  useEffect(() => { alertRef.current = alert; }, [alert]);
-  useEffect(() => { stepsRef.current = steps; }, [steps]);
-  useEffect(() => { runMetaRef.current = runMeta; }, [runMeta]);
-  useEffect(() => { activeScenarioRef.current = activeScenario; }, [activeScenario]);
+  const latestValuesRef = useRef({ alert, steps, runMeta, activeScenario });
+  useEffect(() => {
+    latestValuesRef.current = { alert, steps, runMeta, activeScenario };
+  });
 
   useEffect(() => {
-    if (prevRunningRef.current && !running && finalMessage && activeScenarioRef.current) {
+    if (prevRunningRef.current && !running && finalMessage && latestValuesRef.current.activeScenario) {
+      const { alert, steps, runMeta, activeScenario } = latestValuesRef.current;
       saveInteraction({
-        scenario: activeScenarioRef.current,
-        query: alertRef.current,
-        steps: stepsRef.current,
+        scenario: activeScenario,
+        query: alert,
+        steps,
         diagnosis: finalMessage,
-        run_meta: runMetaRef.current,
+        run_meta: runMeta,
       });
     }
     prevRunningRef.current = running;
@@ -1564,9 +1636,9 @@ History + Saved ✓   → (2s later) →   History
 
 #### 5h. Sidebar Width Transition
 
-Use `transition-[width]` instead of `transition-all` to avoid transitioning unrelated
-properties (color, opacity, etc.). Use `duration-200 ease-out` to match the app's
-standard 200ms animation timing:
+The `InteractionSidebar` code sample above uses `transition-all` — change this to
+`transition-[width]` to avoid transitioning unrelated properties (color, opacity, etc.).
+Use `duration-200 ease-out` to match the app's standard 200ms animation timing:
 
 ```tsx
 className={`
@@ -1631,7 +1703,7 @@ resource scenariosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
       id: 'scenarios'
       partitionKey: { paths: ['/id'], kind: 'Hash', version: 2 }
     }
-    options: { autoscaleSettings: { maxThroughput: 1000 } }  // ⚠️ AUDIT FIX: minimum for autoscale is 1000
+    options: { autoscaleSettings: { maxThroughput: 1000 } }  // Azure autoscale minimum
   }
 }
 
@@ -1677,7 +1749,7 @@ resource interactionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabas
       // Set to -1 (or remove) to disable TTL and keep interactions forever.
       defaultTtl: 7776000  // 90 days in seconds
     }
-    options: { autoscaleSettings: { maxThroughput: 1000 } }  // ⚠️ AUDIT FIX: minimum for autoscale is 1000
+    options: { autoscaleSettings: { maxThroughput: 1000 } }  // Azure autoscale minimum
   }
 }
 ```
@@ -2069,6 +2141,16 @@ except CosmosResourceNotFoundError:
 > `CosmosHttpResponseError`, `KeyboardInterrupt`, etc. The `container.read()` probe
 > is needed because `get_container_client()` is lazy and doesn't hit the network.
 
+> **⚠️ Caveat on DB name derivation:** The fallback above assumes old databases
+> follow the `{prefix}-telemetry` pattern. However, `router_ingest.py` has two
+> derivation paths: when `scenario_name` is passed as a query param, the DB is
+> `f"{sc_name}-telemetry"` (hardcoded suffix). When omitted, it reads from
+> `scenario.yaml`'s `cosmos.nosql.database` field (defaulting to `"telemetry"`).
+> If any `scenario.yaml` overrides this field (e.g., `database: "metrics"`), the
+> fallback would miss `{name}-metrics` databases. **Assumption:** All existing
+> scenarios use the default `telemetry` suffix. Verify this before relying on the
+> fallback — or add a second fallback attempt using the manifest-derived name.
+
 This fallback can be removed after all scenarios are re-uploaded.
 
 ### API Surface Compatibility
@@ -2076,355 +2158,3 @@ This fallback can be removed after all scenarios are re-uploaded.
 All API endpoints remain the same. Changes are internal to the data layer.
 Frontend is unaffected except for the `SavedScenario.resources` type update
 (additive — new optional fields marked with `?` for back-compat with existing docs).
-
----
-
-## Audit: Bugs, Defects, Gotchas & Agent-Readiness Review
-
-> **Audited:** 2026-02-15
-> **Scope:** Cross-referenced every code snippet, file reference, line number, API
-> assumption, and proposed change against the live codebase. Findings categorized by
-> severity.
-
-### CRITICAL — Will Break Deployment or Runtime
-
-#### A1. Bicep `autoscaleSettings.maxThroughput: 400` Is Below Azure Minimum
-
-**Location:** Item 6 Bicep changes — `scenariosContainer` and `interactionsContainer`
-both specify `options: { autoscaleSettings: { maxThroughput: 400 } }`.
-
-**Problem:** Azure Cosmos DB requires `autoscaleSettings.maxThroughput >= 1000`.
-Setting 400 will cause the Bicep deployment to fail with a validation error. The
-existing codebase confirms this — the Gremlin graph uses `maxThroughput: 1000`
-(the minimum), and no resource in the project uses a value below 1000.
-
-**Fix:** Change both occurrences to `maxThroughput: 1000`:
-```bicep
-options: { autoscaleSettings: { maxThroughput: 1000 } }
-```
-
-**Alternative:** Use manual provisioned throughput at 400 RU/s instead of autoscale:
-```bicep
-options: { throughput: 400 }
-```
-This avoids the autoscale minimum and keeps cost low for low-traffic containers.
-
-#### A2. Item 4 Graph Pause: Three Contradictory Implementation Approaches
-
-**Location:** Item 4, lines ~720-900.
-
-**Problem:** The plan presents three different approaches for pausing the graph, and
-the code samples MIX them:
-
-1. **Imperative `pauseAnimation()`/`resumeAnimation()`** — presented first, then
-   immediately flagged as problematic because it stops the render loop (breaking
-   drag and hover).
-2. **Preferred `cooldownTicks` prop** — presented as the "correct" approach via
-   state-driven `frozen` prop. This is the right approach.
-3. **UX Enhancement 4b (debounce code)** — REVERTS to the rejected
-   `canvasRef.current?.pauseAnimation()` / `resumeAnimation()` approach!
-
-An agent implementing this will not know which code to use. The `freezeSimulation`
-block in the first approach also has incomplete/confused comments like
-`"// BUT we need a workaround — see note below."`.
-
-**Fix:** Remove the first imperative approach entirely. Keep only the `cooldownTicks`
-state-driven approach. Update the 4b debounce code to use `setFrozen(true)` /
-`setFrozen(false)` instead of `pauseAnimation()` / `resumeAnimation()`. The debounce
-section should read:
-
-```typescript
-const handleMouseEnter = useCallback(() => {
-  if (resumeTimeoutRef.current) {
-    clearTimeout(resumeTimeoutRef.current);
-    resumeTimeoutRef.current = null;
-  }
-  canvasRef.current?.setFrozen(true);
-  setIsPaused(true);
-}, []);
-
-const handleMouseLeave = useCallback(() => {
-  resumeTimeoutRef.current = setTimeout(() => {
-    canvasRef.current?.setFrozen(false);
-    setIsPaused(false);
-    resumeTimeoutRef.current = null;
-  }, 300);
-}, []);
-```
-
----
-
-### HIGH — Will Cause Bugs or Incorrect Behavior
-
-#### A3. Item 5: Missing 404 Handling in `get_interaction` and `delete_interaction`
-
-**Location:** `router_interactions.py` — `get_interaction` and `delete_interaction` endpoints.
-
-**Problem:** Both endpoints call `container.read_item()` and `container.delete_item()`
-without handling `CosmosResourceNotFoundError`. If the interaction doesn't exist, the
-Azure SDK raises an unhandled exception → FastAPI returns HTTP 500 instead of 404.
-
-The plan correctly uses `CosmosResourceNotFoundError` in the migration fallback section
-(Item 1), showing awareness of this exception, but omits it from the interaction
-endpoints.
-
-**Fix:** Wrap both endpoints:
-```python
-from azure.cosmos.exceptions import CosmosResourceNotFoundError
-from fastapi import HTTPException
-
-@router.get("/interactions/{interaction_id}")
-async def get_interaction(interaction_id: str, scenario: str = Query(...)):
-    container = _get_interactions_container(ensure_created=False)
-    def _get():
-        try:
-            return container.read_item(item=interaction_id, partition_key=scenario)
-        except CosmosResourceNotFoundError:
-            raise HTTPException(status_code=404, detail="Interaction not found")
-    return await asyncio.to_thread(_get)
-```
-
-Same pattern for `delete_interaction`.
-
-#### A4. Item 5: Cross-Partition Query Waste When Scenario Filter Is Set
-
-**Location:** `router_interactions.py` — `list_interactions` endpoint.
-
-**Problem:** When `scenario` parameter is provided, the query includes
-`WHERE c.scenario = @scenario` but still uses `enable_cross_partition_query=True`.
-Since the partition key IS `/scenario`, this query could be routed to a single
-partition, saving significant RU cost. Cross-partition queries fan out to ALL
-partitions even when the partition key is known.
-
-**Fix:** Pass `partition_key` when filtering by scenario:
-```python
-if scenario:
-    items = list(container.query_items(
-        query=query, parameters=params,
-        partition_key=scenario,  # ← single-partition fan-out
-    ))
-else:
-    items = list(container.query_items(
-        query=query, parameters=params,
-        enable_cross_partition_query=True,  # ← needed only for unfiltered queries
-    ))
-```
-
-#### A5. NoSQL Database Name Derivation Is More Complex Than Documented
-
-**Location:** Item 1 backend changes — the plan assumes `nosql_db = f"{name}-telemetry"`.
-
-**Problem:** The actual code in `router_ingest.py` (~line 903-907) has TWO derivation
-paths:
-
-```python
-if scenario_name:           # query param override
-    nosql_db = f"{sc_name}-telemetry"       # hardcoded suffix
-else:                        # from manifest
-    nosql_db = f"{sc_name}-{cosmos_cfg.get('nosql',{}).get('database','telemetry')}"
-```
-
-If a `scenario.yaml` defines `cosmos.nosql.database: "metrics"`, the database name
-would be `{name}-metrics`, NOT `{name}-telemetry`. The migration fallback logic
-(Item 1's probing code) only tries `{prefix}-telemetry` — it would fail for scenarios
-created with non-default database suffixes from the manifest.
-
-**Fix:** The migration fallback should also check the manifest-derived name. Or
-document that all existing scenarios use the default `telemetry` suffix. If ALL
-existing scenario.yaml files use the default, this is a non-issue — but the plan
-should explicitly state this assumption.
-
-#### A6. Implementation Status Table: Phase Scope Mismatches
-
-**Location:** Top of document, "Implementation Status" table.
-
-**Problems:**
-1. **Phase 1** scope lists `router_scenarios.py`, `router_prompts.py`,
-   `router_ingest.py` — but those router changes belong in **Phase 2**. Phase 1
-   should only be `cosmos-gremlin.bicep`.
-2. **Phase 2** scope is missing `router_telemetry.py`, which IS described in the
-   Phase 2 body text as needing container prefix changes.
-
-**Fix:** Update the status table:
-```
-| Phase 1 | cosmos-gremlin.bicep |
-| Phase 2 | config.py, router_ingest.py, router_prompts.py, router_telemetry.py, router_scenarios.py, types/index.ts |
-```
-
----
-
-### MEDIUM — Will Confuse a Blind Implementing Agent
-
-#### A7. `react-resizable-panels` Import Aliasing
-
-**Problem:** The codebase imports panel components with non-standard aliases:
-```tsx
-// Actual codebase pattern (MetricsBar.tsx, App.tsx):
-import { Group as PanelGroup, Panel, Separator as PanelResizeHandle }
-  from 'react-resizable-panels';
-```
-
-The plan's code samples use `PanelGroup` and `PanelResizeHandle` as if they're
-direct exports. An agent writing `import { PanelGroup, PanelResizeHandle } from
-'react-resizable-panels'` will get import errors.
-
-**Fix:** Add an "Import Conventions" note to the plan:
-> **Import note:** The project aliases react-resizable-panels exports:
-> `Group as PanelGroup`, `Separator as PanelResizeHandle`. Follow this
-> pattern in all new code, OR normalize all imports to use the library's
-> actual export names (`PanelGroup`, `PanelResizeHandle`) if the version
-> supports it (v3+ does).
-
-#### A8. Item 4 UX Enhancement 4b Debounce Code Uses Rejected Approach
-
-**Location:** Section 4b, "Debounce Resume on Mouse-Leave."
-
-**Problem:** The debounce code block calls `canvasRef.current?.pauseAnimation()`
-and `canvasRef.current?.resumeAnimation()` — the imperative API that was
-explicitly rejected earlier in the same item for breaking node drag and hover.
-Since the preferred approach exposes `setFrozen(boolean)` on `GraphCanvasHandle`,
-the debounce code must use that instead.
-
-An agent following the code literally would implement the wrong approach.
-
-**Fix:** See A2 above — replace `pauseAnimation()`/`resumeAnimation()` with
-`setFrozen(true)`/`setFrozen(false)` in the 4b debounce section.
-
-#### A9. Missing Routing Context for `/query/*` → Port 8100 Mapping
-
-**Problem:** The plan doesn't explain WHY `/query/interactions` and `/query/logs`
-reach the graph-query-api. A blind agent may not know about the vite proxy and
-nginx routing that maps `/query/*` → port 8100.
-
-**Fix:** Add a note in Item 5 (or a cross-cutting section):
-> **Routing context:** All `/query/*` paths are proxied to the graph-query-api
-> service on port 8100 — by vite in dev (`vite.config.ts` proxy) and by nginx
-> in production (`/query/` location block). New routes under `/query/` prefix
-> (like `/query/interactions`) automatically inherit this routing. No proxy or
-> nginx changes are needed.
-
-#### A10. `ScenarioContext.activeScenario` vs `X-Graph` Header Distinction
-
-**Problem:** The plan mixes two naming concepts that an agent needs to understand:
-- `activeScenario` = base name (e.g., `"telco-noc"`) — stored in frontend context,
-  used as `scenario` param in interaction API calls.
-- `X-Graph` header = `"telco-noc-topology"` (derived as `${activeScenario}-topology`)
-  — sent to backend for `ScenarioContext` routing.
-
-The interaction endpoints (`/query/interactions`) use the base scenario name directly
-(not the graph name). The plan correctly shows `scenario: req.scenario` and
-`scenario: string = Query(...)`, but doesn't explain this distinction. A blind
-agent might pass the graph name or use `ScenarioContext` instead of the direct param.
-
-**Fix:** Add a note in Item 5 backend section:
-> **Note:** Interaction endpoints use the scenario's **base name** (e.g.,
-> `"telco-noc"`) directly as the `scenario` field and partition key. They do NOT
-> use the `X-Graph` header or `ScenarioContext` dependency. The frontend's
-> `activeScenario` (from `ScenarioContext.tsx`) already stores the base name.
-
-#### A11. Item 5 Auto-Save: Over-Engineered Ref-Syncing Pattern
-
-**Problem:** The plan uses 5 separate `useEffect` hooks to sync refs for 4 values
-(`alert`, `steps`, `runMeta`, `activeScenario`). This is fragile and verbose.
-
-**Simpler alternative — single composite ref:**
-```typescript
-const latestValuesRef = useRef({ alert, steps, runMeta, activeScenario });
-useEffect(() => {
-  latestValuesRef.current = { alert, steps, runMeta, activeScenario };
-});
-
-useEffect(() => {
-  if (prevRunningRef.current && !running && finalMessage && latestValuesRef.current.activeScenario) {
-    const { alert, steps, runMeta, activeScenario } = latestValuesRef.current;
-    saveInteraction({ scenario: activeScenario, query: alert, steps, diagnosis: finalMessage, run_meta: runMeta });
-  }
-  prevRunningRef.current = running;
-}, [running, finalMessage, saveInteraction]);
-```
-
-This preserves the same semantics with 1 sync effect instead of 4.
-
-#### A12. Missing `__init__` or Model Imports for `router_interactions.py`
-
-**Problem:** The plan creates a new file `router_interactions.py` with models
-`InteractionStep`, `InteractionRunMeta`, `InteractionSaveRequest` defined in
-`models.py`. But Pydantic models like `InteractionStep` use `str | None` union
-syntax, which requires Python 3.10+. The codebase uses it elsewhere so this is
-fine — but the import line `from models import InteractionSaveRequest, ...` is
-not shown in the `router_interactions.py` code sample. An agent implementing
-this must know to add the import.
-
-**Fix:** Add the import to the `router_interactions.py` code sample:
-```python
-from models import InteractionStep, InteractionRunMeta, InteractionSaveRequest
-```
-
----
-
-### LOW — Minor Issues, Typos, Polish
-
-#### A13. Typo: "inconsisent" in Bicep Comment
-
-**Location:** Item 6, interactions container `indexingPolicy` comment.
-
-```
-"may return inconsisent ordering"  →  "may return inconsistent ordering"
-```
-
-#### A14. `cooldownTicks` + `cooldownTime` Redundancy
-
-**Location:** Item 4, preferred approach code sample.
-
-The plan sets BOTH props simultaneously:
-```tsx
-cooldownTicks={frozen ? 0 : Infinity}
-cooldownTime={frozen ? 0 : 3000}
-```
-
-`cooldownTicks={0}` alone is sufficient to stop the simulation when frozen (0 ticks
-allowed). When unfrozen, `cooldownTicks={Infinity}` defers to `cooldownTime={3000}`
-(whichever limit is hit first). Setting `cooldownTime={0}` when frozen is redundant.
-
-**Recommendation:** Simplify to only control `cooldownTicks` and leave `cooldownTime`
-at a constant:
-```tsx
-cooldownTicks={frozen ? 0 : Infinity}
-cooldownTime={3000}  // always 3000 — cooldownTicks controls freeze behavior
-```
-
-#### A15. Missing CSS Class Context for New Panel Resize Handles
-
-**Problem:** The plan uses `className="metrics-resize-handle"` for new panel resize
-handles but doesn't note that this class provides horizontal col-resize styling
-(6px wide, white hover glow). A blind agent should know it exists in
-`frontend/src/styles/globals.css` and is distinct from `vertical-resize-handle`
-(which is used for the vertical MetricsBar/content split in `App.tsx`).
-
-#### A16. `formatTimeAgo` Doesn't Handle Future Timestamps
-
-**Location:** Item 5, `InteractionCard` sub-component.
-
-If the server's clock is ahead of the client's, `Date.now() - new Date(isoString).getTime()`
-could be negative. The function would return `"just now"` (since `seconds < 60`
-when negative), which is acceptable behavior — just worth noting.
-
----
-
-### Agent-Readiness Checklist
-
-For an agent coming in blind, the following context is essential but not currently
-documented in the plan:
-
-| Context | Where to Find It | Why It Matters |
-|---------|------------------|----------------|
-| `/query/*` routes to graph-query-api (port 8100) | `vite.config.ts` L44-53, `nginx.conf` L43-53 | New endpoints must use `/query/` prefix |
-| Panel imports are aliased (`Group as PanelGroup`) | `MetricsBar.tsx` L2, `App.tsx` L3 | Unaliased imports will fail |
-| `activeScenario` = base name, `X-Graph` = `{name}-topology` | `ScenarioContext.tsx` L77-83 | Interaction API uses base name, not graph name |
-| `_ensure_nosql_db_and_containers` is 3 levels nested | `router_ingest.py` L915 (inside `run()` inside `stream()` inside `upload_telemetry()`) | Extraction is complex — closures over credentials, emit callback |
-| SSE events use `event: log` naming | `api/app/routers/logs.py` yield dict, `graph-query-api/main.py` manual format | LogStream listens for `'log'` — both backends already emit this |
-| CSS: `metrics-resize-handle` vs `vertical-resize-handle` | `frontend/src/styles/globals.css` L84-142 | Use the right one for horizontal vs vertical splits |
-| Autoscale minimum is 1000 RU/s | Azure Cosmos DB constraint; existing Bicep uses 1000 | Cannot set 400 — deployment will fail |
-| `scenario_name` flows from upload form (query param), not `X-Graph` | `router_ingest.py` L901 | Upload and query use different routing mechanisms |
-| `useInvestigation` exposes `setAlert` | `App.tsx` L12, `useInvestigation.ts` | Needed for Item 5 viewing historical interactions |
-| NO existing `Interaction` type in TypeScript or Pydantic | `types/index.ts`, `models.py` | Must create both from scratch |
