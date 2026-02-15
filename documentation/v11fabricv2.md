@@ -1,13 +1,14 @@
 # Fabric Integration — V11 Revised Plan (Config-Native Architecture)
 
 > **Created:** 2026-02-16
-> **Audited:** 2026-02-16 (cross-referenced against `fabric_implementation_references/` and V10 codebase)
+> **Audited:** 2026-02-16 (cross-referenced against `fabric_implementation_references/`, V10 codebase, and actual codebase state)
 > **Status:** ⬜ Not Started
 > **Depends on:** V10 — Config-Driven Multi-Agent Orchestration (in progress)
 > **Supersedes:** `V11Fabric.md` (service-separation architecture — abandoned)
-> **Goal:** Add Microsoft Fabric as an alternative graph + telemetry backend,
-> integrated as **additional connectors** within the existing config-driven
+> **Goal:** Add Microsoft Fabric as an alternative **graph** backend,
+> integrated as an **additional connector** within the existing config-driven
 > architecture — no new services, no directory renames, no new ports.
+> Fabric KQL telemetry is a future extension (Gap 1), not part of this plan's core scope.
 
 ---
 
@@ -36,16 +37,15 @@ A Fabric scenario's `scenario.yaml` simply declares:
 ```yaml
 data_sources:
   graph:
-    connector: "fabric-gql"
+    connector: "fabric-gql"             # ← Fabric for graph queries (GQL)
     config:
       workspace_id: "${FABRIC_WORKSPACE_ID}"
       graph_model_id: "${FABRIC_GRAPH_MODEL_ID}"
       graph: "telco-noc-fabric-topology"
   telemetry:
-    connector: "fabric-kql"
-    config:
-      eventhouse_query_uri: "${EVENTHOUSE_QUERY_URI}"
-      kql_database: "${FABRIC_KQL_DB_NAME}"
+    connector: "cosmosdb-nosql"          # ← Telemetry stays on CosmosDB initially
+    config:                              #   (fabric-kql is a future extension — see Gap 1)
+      database: "telemetry"
       container_prefix: "telco-noc-fabric"
       containers:
         - name: AlertStream
@@ -59,6 +59,10 @@ the right OpenAPI spec, composes the right prompt language file, and everything
 flows through the existing `/query/graph`, `/query/telemetry`, `/query/topology`
 endpoints. CosmosDB and Fabric scenarios coexist — the user switches between them
 the same way they switch between any two scenarios.
+
+> **Note:** The architecture supports a fully-Fabric scenario (`fabric-kql` for
+> telemetry too), but this plan targets **graph-only Fabric** first. See Gap 1
+> for the telemetry extension.
 
 ---
 
@@ -130,11 +134,14 @@ scenario.yaml                    graph-query-api (:8100)
     graph:                           __init__.py  (registry — 3 backends)
       connector: "fabric-gql"       cosmosdb.py  (CosmosDBGremlinBackend)
     telemetry:                       fabric.py    (FabricGQLBackend)      ← NEW
-      connector: "fabric-kql"       mock.py      (MockGraphBackend)
+      connector: "cosmosdb-nosql"   mock.py      (MockGraphBackend)
                                    adapters/
                                      cosmos_config.py
                                      fabric_config.py                    ← NEW
 ```
+
+> Note: Telemetry remains on `cosmosdb-nosql` initially. `fabric-kql` is a
+> future extension (see Gap 1).
 
 ### Request Flow (Fabric scenario)
 
@@ -166,23 +173,24 @@ The flow is **identical** to a CosmosDB request — only the backend implementat
 
 | Layer | Changes? | Detail |
 |-------|----------|--------|
-| nginx.conf | **No** | Same `/query/*` proxy |
-| supervisord.conf | **No** | Same 3 processes |
+| nginx.conf | **No** | Same `/query/*` and `/api/*` locations — no new location blocks |
+| supervisord.conf | **No** | Same 3 processes (nginx, api, graph-query-api) |
 | Dockerfile | **No** | Same build (Fabric deps added to `graph-query-api/pyproject.toml`) |
 | `deploy.sh` | **No** | Maybe add Fabric env var echo in local instructions |
 | `azure.yaml` | **No** | Same service definition |
 | `vite.config.ts` | **No** | Same `/query` proxy |
-| `graph-query-api/main.py` | **No** | Routers already use `get_backend_for_context()` |
+| `graph-query-api/main.py` | **Phase 2: Small** | Phase 0–1: unchanged. Phase 2: mount `router_fabric_discovery` (+2 lines) |
 | `graph-query-api/router_graph.py` | **No** | Already dispatches via `get_backend_for_context(ctx)` |
 | `graph-query-api/router_topology.py` | **No** | Already dispatches via `get_backend_for_context(ctx)` |
-| `graph-query-api/config.py` | **Small** | `BACKEND_REQUIRED_VARS` gets a `"fabric-gql"` entry |
+| `graph-query-api/config.py` | **Medium** | `BACKEND_REQUIRED_VARS` + **async `get_scenario_context()`** with per-scenario backend resolution (Phase 0f — converts sync → async with Cosmos I/O) |
 | `graph-query-api/backends/__init__.py` | **Small** | Auto-register `FabricGQLBackend` |
 | `graph-query-api/backends/fabric.py` | **New** | The actual Fabric GQL implementation |
 | `graph-query-api/adapters/fabric_config.py` | **New** | Fabric env var reads |
 | `graph-query-api/pyproject.toml` | **Small** | Add `httpx` dependency |
 | `openapi/templates/graph.yaml` | **No** | Already templated with `{query_language_description}` |
-| `scripts/agent_provisioner.py` | **Small** | Update `CONNECTOR_OPENAPI_VARS["fabric"]` to GQL + add `GRAPH_TOOL_DESCRIPTIONS["fabric"]` |
-| Frontend | **Small** | Fabric Setup tab in Settings (for discovery), upload adapts for Fabric — but core routing is unchanged |
+| `scripts/agent_provisioner.py` | **Small** | Update `CONNECTOR_OPENAPI_VARS["fabric"]` to GQL + add `GRAPH_TOOL_DESCRIPTIONS["fabric"]` — no `OPENAPI_SPEC_MAP` entry needed (Fabric uses spec templates, not per-backend spec files) |
+| `api/app/main.py` | **Phase 2: Small** | Mount `fabric_provision` router (+2 lines) |
+| Frontend | **Phase 3: Small** | Fabric Setup tab in Settings (for discovery), upload adapts for Fabric — but core routing is unchanged |
 
 ---
 
@@ -503,6 +511,13 @@ config store when available.
 **Approach (Option A):** Make `get_scenario_context()` async and call the async config
 store. FastAPI resolves async dependencies correctly.
 
+> **⚠️ Dependency note:** This change requires V10's `DocumentStore` infrastructure
+> (stores/ + `config_store.py`). Phases 0a–0e are independent of V10, but Phase 0f
+> depends on the config store being operational. If V10 isn't complete, defer this
+> step and keep the sync `get_scenario_context()` with `backend_type=GRAPH_BACKEND`
+> as a temporary fallback (Fabric scenarios would require setting `GRAPH_BACKEND=fabric-gql`
+> as a deployment-level env var instead of per-scenario resolution).
+
 ```python
 async def get_scenario_context(
     x_graph: str | None = Header(default=None, alias="X-Graph"),
@@ -541,12 +556,21 @@ async def get_scenario_context(
     )
 ```
 
-> **Performance note:** `fetch_scenario_config()` uses `DocumentStore` which has internal
-> caching. The config is fetched once and cached in the store's container cache. This adds
-> a ~1ms overhead per request (in-memory hit after first fetch). If this becomes a concern,
-> add an in-process LRU cache keyed on `prefix`. Note: making `get_scenario_context()`
-> async has no performance downside — FastAPI runs async dependencies on the event loop
-> without thread-pool overhead (unlike sync dependencies which use `run_in_threadpool()`).
+> **Performance note:** `fetch_scenario_config()` calls `store.get()` (a Cosmos point-read
+> by ID + partition key) on **every request**. The `DocumentStore` caches the container
+> reference (avoiding ARM metadata lookups after first access), but each `get()` still
+> makes a network call to Cosmos (~3–10ms within the same Azure region). This is a
+> change from the current zero-I/O sync `get_scenario_context()` which returns instantly.
+>
+> **Recommended mitigation:** Add an in-process LRU cache (e.g., `@functools.lru_cache`
+> or `cachetools.TTLCache` with ~60s TTL) keyed on `prefix`. This reduces Cosmos calls
+> to at most once per minute per scenario, making the overhead negligible. The upload
+> pipeline can invalidate the cache when a scenario is re-uploaded.
+>
+> Making `get_scenario_context()` async has no *framework* performance downside — FastAPI
+> runs async dependencies on the event loop without thread-pool overhead (unlike sync
+> dependencies which use `run_in_threadpool()`). The concern is solely the Cosmos I/O
+> added to the hot path.
 
 **Files changed in Phase 0:**
 
@@ -555,12 +579,12 @@ async def get_scenario_context(
 | `graph-query-api/adapters/fabric_config.py` | **New** |
 | `graph-query-api/backends/fabric.py` | **New** |
 | `graph-query-api/backends/__init__.py` | Small addition (register) |
-| `graph-query-api/config.py` | Small addition (BACKEND_REQUIRED_VARS + per-scenario resolution) |
+| `graph-query-api/config.py` | Medium change (`BACKEND_REQUIRED_VARS` entry + async `get_scenario_context()` rewrite with Cosmos I/O — see Phase 0f) |
 | `graph-query-api/pyproject.toml` | Small addition (httpx) |
 
-**Files NOT changed:** `main.py`, `router_graph.py`, `router_topology.py`, `nginx.conf`,
-`supervisord.conf`, `Dockerfile`, `deploy.sh`, `azure.yaml`, `vite.config.ts`. None of
-the infrastructure or routing layer needs modification.
+**Files NOT changed in Phase 0:** `main.py`, `router_graph.py`, `router_topology.py`,
+`router_ingest.py`, `nginx.conf`, `supervisord.conf`, `Dockerfile`, `deploy.sh`,
+`azure.yaml`, `vite.config.ts`. None of the infrastructure or routing layer needs modification.
 
 ---
 
@@ -575,14 +599,29 @@ types to the placeholder values injected into OpenAPI spec templates. **The
 `"fabric"` key already exists** but currently describes KQL — update it to GQL:
 
 > **⚠️ Bug found during audit:** The existing `CONNECTOR_OPENAPI_VARS["fabric"]`
-> describes KQL ("Submits a KQL query against the topology data stored in
-> Microsoft Fabric"). This is **wrong** — KQL is for telemetry (Eventhouse).
-> The graph query language for Fabric Ontology/GraphModel is **GQL** (ISO GQL).
-> The code below fixes this.
+> (line ~79 in `agent_provisioner.py`) describes KQL: "Submits a KQL (Kusto Query
+> Language) query against the topology data stored in Microsoft Fabric. Use standard
+> KQL syntax." This is **wrong** — KQL is for Eventhouse telemetry queries. The graph
+> query language for Fabric Ontology/GraphModel is **GQL** (ISO GQL). Agents would be
+> instructed to write KQL queries against a GQL endpoint, causing 100% query failures.
 >
-> **⚠️ Key naming:** `_build_tools_from_config()` does `connector.split("-")[0]`
-> to look up the key. `"fabric-gql"` → `"fabric"`. So the key must be `"fabric"`,
-> not `"fabric-gql"`.
+> **⚠️ Key naming (dual-key system):** The codebase uses **two different lookup paths**
+> for connector-to-config resolution:
+>
+> | Lookup | Key for Fabric | How derived | Used by |
+> |--------|---------------|-------------|----------|
+> | Backend registry | `"fabric-gql"` | `CONNECTOR_TO_BACKEND[connector]` → `"fabric-gql"` | `get_backend_for_context()` |
+> | `CONNECTOR_OPENAPI_VARS` | `"fabric"` | `connector.split("-")[0]` → `"fabric"` | `_build_tools_from_config()` in agent provisioner |
+> | `BACKEND_REQUIRED_VARS` | `"fabric-gql"` | Direct backend_type string | Lifespan health check |
+>
+> This means the `CONNECTOR_OPENAPI_VARS` key must be `"fabric"` (not `"fabric-gql"`).
+> The `"fabric-gql"` form is only used in the backend registry and required vars.
+>
+> **⚠️ `OPENAPI_SPEC_MAP` — no entry needed:** `OPENAPI_SPEC_MAP` (line ~39) only has
+> `"cosmosdb"` and `"mock"` entries. Fabric does **not** need an entry because Fabric
+> scenarios use `spec_template: "graph"` in their agent definitions, which routes
+> through the template path in `_load_openapi_spec()` (not the `OPENAPI_SPEC_MAP`
+> fallback path).
 
 ```python
 # ⚠️  AUDIT NOTE: The CONNECTOR_OPENAPI_VARS key must be "fabric" (not
@@ -620,9 +659,14 @@ CONNECTOR_OPENAPI_VARS = {
 }
 ```
 
-The existing `graph.yaml` template already has `{query_language_description}` — no spec
-template changes needed. The provisioner injects the GQL description when the scenario's
-connector is `fabric-gql`.
+The existing `graph.yaml` template (at `graph-query-api/openapi/templates/graph.yaml`)
+already has `{query_language_description}` — no spec template changes needed. The
+provisioner injects the GQL description when the scenario's connector is `fabric-gql`.
+
+> **Lookup flow:** Scenario connector `"fabric-gql"` → `_build_tools_from_config()`
+> calls `connector.split("-")[0]` → `"fabric"` → looks up `CONNECTOR_OPENAPI_VARS["fabric"]`
+> → gets GQL description → injects into `{query_language_description}` placeholder in
+> `openapi/templates/graph.yaml`. No `OPENAPI_SPEC_MAP["fabric"]` entry is consulted.
 
 #### 1b. Composed prompt — `language_gql.md`
 
@@ -668,9 +712,10 @@ directory — it joins `core_instructions.md` + `core_schema.md` + `language_*.m
 Fabric scenarios, the correct language file is **already auto-selected** by the existing
 connector-aware logic:
 
-- `connector: "cosmosdb-gremlin"` → `"gremlin".split("-")[-1]` → `language_gremlin.md`
-- `connector: "fabric-gql"` → `"fabric-gql".split("-")[-1]` → `language_gql.md`  ✓
-- `connector: "mock"` → `language_mock.md`
+- `connector: "cosmosdb-gremlin"` → `split("-")[-1]` → `"gremlin"` → `language_gremlin.md`
+- `connector: "fabric-gql"` → `split("-")[-1]` → `"gql"` → `language_gql.md`  ✓
+- `connector: "cosmosdb-nosql"` → `split("-")[-1]` → `"nosql"` → `language_nosql.md`
+- `connector: "mock"` → `split("-")[-1]` → `"mock"` → `language_mock.md`
 
 > **⚠️ Audit finding:** The plan previously referenced a
 > `_compose_graph_explorer_prompt()` function — **this function does not exist**.
@@ -1067,10 +1112,10 @@ V10 Phases 0–7 (backend registry, DocumentStore) ──┐
 V10 Phases 8–9 (config provisioner, OpenAPI tmpl) ──┤
                                                      │
 V11 Phase 0 (backends/fabric.py + config)           │
-  ├── adapters/fabric_config.py                      │  Independent of V10
+  ├── adapters/fabric_config.py                      │  Phases 0a–0e: Independent of V10
   ├── backends/fabric.py                             │  (uses existing Protocol)
-  ├── backends/__init__.py (register)                │
-  ├── config.py (per-scenario backend resolution)    │
+  ├── backends/__init__.py (register)                │  Phase 0f: Depends on V10 config store
+  ├── config.py (per-scenario backend resolution)    │  (DocumentStore + fetch_scenario_config)
   └── pyproject.toml (httpx)                         │
                                                      │
 V11 Phase 1 (agent integration) ◄───────────────────┘
@@ -1102,18 +1147,19 @@ fully without them (just configure via env vars + scripts instead of UI).
 | `graph-query-api/adapters/fabric_config.py` | 0 | ~30 | Fabric env var reads |
 | `graph-query-api/backends/fabric.py` | 0 | ~180 | FabricGQLBackend implementation |
 | `graph-query-api/router_fabric_discovery.py` | 2 | ~120 | Fabric resource discovery endpoints |
-| `api/app/routers/fabric_provision.py` | 2 | ~200 | Fabric provisioning SSE endpoints |
-| `data/scenarios/telco-noc-fabric/scenario.yaml` | 1 | ~120 | Reference Fabric scenario |
-| `data/scenarios/telco-noc-fabric/data/prompts/graph_explorer/language_gql.md` | 1 | ~110 | GQL prompt fragment (copy from reference impl) |
+| `api/app/routers/fabric_provision.py` | 2 | ~400+ | Fabric provisioning SSE endpoints (see L4 note — reference `provision_ontology.py` alone is 935 lines; estimate conservatively) |
+| `data/scenarios/telco-noc-fabric/scenario.yaml` | 1 | ~120 | Reference Fabric scenario (entity/telemetry CSVs reuse `telco-noc` data) |
+| `data/scenarios/telco-noc-fabric/data/prompts/graph_explorer/language_gql.md` | 1 | ~110 | GQL prompt fragment (copy from `fabric_implementation_references/data/prompts/graph_explorer/language_gql.md`) |
 
-### Modified Files (5)
+### Modified Files (6)
 
 | File | Phase | Change size | Description |
 |------|-------|------------|-------------|
 | `graph-query-api/backends/__init__.py` | 0 | +6 lines | Register `FabricGQLBackend` |
-| `graph-query-api/config.py` | 0 | +20 lines | `BACKEND_REQUIRED_VARS` entry + async per-scenario backend resolution |
+| `graph-query-api/config.py` | 0 | +25 lines | `BACKEND_REQUIRED_VARS` entry + async `get_scenario_context()` rewrite with Cosmos I/O |
 | `graph-query-api/pyproject.toml` | 0 | +1 line | Add `httpx` dependency |
 | `graph-query-api/main.py` | 2 | +2 lines | Mount fabric discovery router |
+| `api/app/main.py` | 2 | +2 lines | Mount fabric provisioning router |
 | `scripts/agent_provisioner.py` | 1 | +10 lines | Update `CONNECTOR_OPENAPI_VARS["fabric"]` GQL description + add `GRAPH_TOOL_DESCRIPTIONS["fabric"]` |
 
 ### Untouched Files (everything else)
@@ -1123,7 +1169,8 @@ No changes to: `nginx.conf`, `supervisord.conf`, `Dockerfile`, `deploy.sh`, `azu
 `router_prompts.py`, `router_scenarios.py`, `router_interactions.py`, `router_ingest.py`,
 `cosmos_helpers.py`, `sse_helpers.py`, `models.py`, any frontend component (until Phase 3).
 
-**Total: ~11 files touched (6 new + 5 modified), ~590 lines of new code.**
+**Total: ~12 files touched (6 new + 6 modified), ~750+ lines of new code.**
+(Revised upward from original ~590 estimate based on L4 audit finding re: provisioning complexity.)
 
 Compare to V11Fabric.md: ~25+ files touched, 2000+ lines, infrastructure changes everywhere.
 
@@ -1219,16 +1266,21 @@ is out of scope.
 ### Gap 5: Env var substitution in scenario.yaml
 
 The Fabric scenario YAML uses `${FABRIC_WORKSPACE_ID}` syntax for env var references.
-The current `_normalize_manifest()` doesn't perform env var substitution. Options:
-- The `FabricGQLBackend` reads workspace/model IDs from its own config adapter as
-  defaults, and the YAML values are documentation-only
+The current `_normalize_manifest()` (in `router_ingest.py`, line ~52) converts old-format
+manifests to v2.0 `data_sources:` format but does **not** perform env var substitution.
+Options:
+- The `FabricGQLBackend` reads workspace/model IDs from its own config adapter
+  (`adapters/fabric_config.py` env vars) as defaults, and the YAML `${...}` values are
+  documentation-only placeholders that are never parsed
 - Add a `_substitute_env_vars(config)` pass to the manifest loader
-- The user sets the actual IDs in the YAML (no substitution needed)
+- The user sets the actual IDs directly in the YAML (no substitution needed)
 
-**Recommended:** The YAML values are defaults/documentation. The backend always checks
-`adapters/fabric_config.py` env vars first, then falls back to YAML config values.
-This matches the CosmosDB pattern where `COSMOS_GREMLIN_DATABASE` env var overrides
-the YAML config.
+**Recommended:** The YAML `${...}` values are documentation placeholders only. The
+backend always reads from `adapters/fabric_config.py` env vars (e.g., `FABRIC_WORKSPACE_ID`,
+`FABRIC_GRAPH_MODEL_ID`). The `execute_query()` method falls back to these env var values
+when no explicit config is provided. This matches the CosmosDB pattern where
+`COSMOS_GREMLIN_DATABASE` env var is the authoritative source and the YAML config is
+stored for documentation/display purposes (e.g., in the frontend Settings modal).
 
 ---
 
@@ -1258,14 +1310,14 @@ frontend API calls change. Fabric is purely additive.
 | Metric | V11Fabric.md (old) | This plan |
 |--------|-------------------|-----------|
 | New files | ~15 | 6 |
-| Modified files | ~15 | 5 |
-| New lines of code | ~2000+ | ~590 |
+| Modified files | ~15 | 6 |
+| New lines of code | ~2000+ | ~750+ |
 | Infrastructure changes | Dockerfile, supervisord, nginx, deploy.sh, azure.yaml, vite.config | None |
 | New service processes | 1 (port 8200) | 0 |
 | New URL prefixes | `/fabric/*` | 0 (uses `/query/*`) |
 | Frontend routing changes | Major (dual-backend routing) | None (until Phase 3) |
 | Risk of breaking existing functionality | Medium (directory rename, port changes) | Very low (additive only) |
-| Time to first working Fabric query | ~3 weeks (all 6 phases) | ~3 days (Phase 0 only) |
+| Time to first working Fabric query | ~3 weeks (all 6 phases) | ~3 days (Phase 0 only, assuming V10 config store is operational) |
 
 ---
 
@@ -1281,42 +1333,65 @@ fixed inline in the plan. This section serves as a changelog and reference for r
 |---|---------|----------|-------------|
 | C1 | **Async/sync mismatch in `get_scenario_context()`**: Plan called `fetch_scenario_config()` (which is `async def`) from a **sync** function. Would fail at runtime: `TypeError: coroutine was never awaited`. | Phase 0f | Made `get_scenario_context()` `async def`. FastAPI supports async dependencies natively. |
 | C2 | **`CONNECTOR_OPENAPI_VARS` key mismatch**: Plan used key `"fabric-gql"` but `_build_tools_from_config()` does `connector.split("-")[0]` → `"fabric"`. The provisioner would find no matching entry, falling back to empty vars and producing an OpenAPI spec with unsubstituted `{query_language_description}` placeholder. | Phase 1a | Changed key to `"fabric"` (matching existing code). |
-| C3 | **Existing `CONNECTOR_OPENAPI_VARS["fabric"]` has wrong language**: Currently says "KQL (Kusto Query Language) query against the topology data". KQL is for Eventhouse telemetry. Fabric graph uses **GQL** (ISO Graph Query Language). Agents would be told to write KQL queries against a GQL endpoint. | Phase 1a | Updated description to GQL. |
+| C3 | **Existing `CONNECTOR_OPENAPI_VARS["fabric"]` has wrong language**: Currently says "KQL (Kusto Query Language) query against the topology data" (actual line ~79 in `agent_provisioner.py`). KQL is for Eventhouse telemetry. Fabric graph uses **GQL** (ISO Graph Query Language). Agents would be told to write KQL queries against a GQL endpoint, causing 100% query failures. | Phase 1a | Updated description to GQL. |
 
 ### 🟡 Medium — Incorrect assumptions / phantom code references
 
 | # | Finding | Location | Fix applied |
 |---|---------|----------|-------------|
-| M1 | **`_compose_graph_explorer_prompt()` doesn't exist**: Plan referenced this function 3 times and proposed modifying it. The actual prompt composition is inline within `upload_prompts()` in `router_ingest.py` (~line 1000). | Phase 1b | Removed reference. Documented that existing `connector.split("-")[-1]` logic already handles `"fabric-gql"` → `language_gql.md` with zero code changes. |
+| M1 | **`_compose_graph_explorer_prompt()` doesn't exist**: Plan referenced this function 3 times and proposed modifying it. The actual prompt composition is inline within `upload_prompts()` in `router_ingest.py` (lines 999–1009). | Phase 1b | Removed reference. Documented that existing `connector.split("-")[-1]` logic already handles `"fabric-gql"` → `language_gql.md` with zero code changes. |
 | M2 | **`language_gql.md` placed in wrong scenario**: Plan placed it at `telco-noc/data/prompts/graph_explorer/language_gql.md`, but `telco-noc` uses `cosmosdb-gremlin`. | Phase 1b | Moved to `telco-noc-fabric/data/prompts/graph_explorer/language_gql.md`. |
 | M3 | **Simplified `language_gql.md` vs reference**: Plan's version is ~30 lines. The reference at `fabric_implementation_references/data/prompts/graph_explorer/language_gql.md` is 106 lines with all 7 relationship examples, multi-hop patterns, and critical rules like "Never use `LOWER()`". | Phase 1b | Added note to copy from reference implementation. |
 | M4 | **`router_ingest.py` listed as modified file**: Plan said "+8 lines" change needed. Actually, **no change is needed** — the existing `_resolve_connector_for_agent()` + `connector.split("-")[-1]` logic already handles Fabric connectors. | Phase 1 table | Removed from modified files list. |
 | M5 | **`close()` method doesn't interop with V10 shutdown**: V10's `close_all_backends()` calls `backend.close()` and checks `inspect.isawaitable(result)`. The original plan's `close()` used fire-and-forget `create_task()`, meaning the async client might not be closed before process exit. | Phase 0b | Added `aclose()` async method as preferred path. |
+| M6 | **`config.py` change undersold in "What Changes" table**: Original table said `config.py` = "**Small**" (just `BACKEND_REQUIRED_VARS` entry). But Phase 0f adds a significant change: converting sync `get_scenario_context()` to async with Cosmos I/O per request. This is a medium-sized architectural change. | "What Changes" table | Updated table entry to "**Medium**" with accurate description. |
+| M7 | **`main.py` incorrectly listed as "No" change**: The "What Changes" table said `graph-query-api/main.py` = "**No**", but Phase 2c explicitly adds `from router_fabric_discovery import router` + `app.include_router()`. | "What Changes" table | Changed to "**Phase 2: Small**" with clarification that Phase 0–1 doesn't touch it. |
+| M8 | **`api/app/main.py` missing from file inventory**: Phase 2 files-changed table lists `api/app/main.py` as modified, but the File Change Inventory "Modified Files" section omitted it. Count was "5" but should be "6". | File inventory | Added `api/app/main.py` and corrected count. |
+| M9 | **Performance note for `fetch_scenario_config()` was inaccurate**: Claimed `DocumentStore` has "internal caching" providing "~1ms overhead (in-memory hit)". In reality, `store.get()` makes an actual Cosmos point-read (~3–10ms same-region). The SDK caches *container references* (metadata), not query results. | Phase 0f | Corrected performance note. Added LRU cache recommendation. |
+| M10 | **Initial example YAML showed `fabric-kql` telemetry as if in-scope**: The Core Insight section's example used `telemetry.connector: "fabric-kql"` with KQL config, contradicting the plan's own scope (telemetry stays on CosmosDB — see Phase 1c, Gap 1). | Core Insight | Changed example to `cosmosdb-nosql` telemetry. Added note that `fabric-kql` is a future extension. |
+| M11 | **Header said "graph + telemetry backend"**: Goal line implied both graph and telemetry are Fabric-ified in V11. Only graph is in scope. | Header | Changed to "graph backend" with note about KQL being future. |
 
 ### 🟢 Low — Missing items / incomplete coverage
 
 | # | Finding | Location | Fix applied |
 |---|---------|----------|-------------|
-| L1 | **Missing `GRAPH_TOOL_DESCRIPTIONS["fabric"]`**: `agent_provisioner.py` has `GRAPH_TOOL_DESCRIPTIONS` with only `"cosmosdb"` and `"mock"` keys. Fabric agent provisioning may use this for tool descriptions. | Phase 1a | Added to files changed table. |
+| L1 | **Missing `GRAPH_TOOL_DESCRIPTIONS["fabric"]`**: `agent_provisioner.py` has `GRAPH_TOOL_DESCRIPTIONS` with only `"cosmosdb"` and `"mock"` keys (line ~83). Fabric agent provisioning falls back to cosmosdb description, which is wrong. | Phase 1a | Added to files changed table. |
 | L2 | **`GraphQueryRequest` has no `workspace_id`/`graph_model_id`**: Plan's `execute_query()` accepts these via `**kwargs`, but `router_graph.py` passes only `req.query`. The kwargs will always be empty. This is fine if `fabric_config.py` env vars are used as defaults (which the code does), but the kwargs path is dead code. | Phase 0b | No fix needed — env var defaults are correct. Noted for awareness. |
-| L3 | **Env var substitution gap is misleading**: Scenario YAML has `${FABRIC_WORKSPACE_ID}` but no substitution engine exists. Since the backend reads from `adapters/fabric_config.py` directly, the YAML values are never actually used. Consider removing them or documenting them as "documentation-only". | Gap 5 | Already addressed in Gap 5 — no change. |
-| L4 | **Phase 2b provisioning estimate is optimistic**: Plan estimates ~200 lines for `fabric_provision.py`. But `provision_ontology.py` alone is 935 lines with complex schema definitions, data bindings, and contextualizations. Wrapping all provisioning scripts in SSE-streaming API endpoints is a multi-day effort, not a few-hour task. | Phase 2b | No inline fix — noted here for planning. |
-| L5 | **Reference impl uses `GraphBackendType` enum**: `fabric_implementation_references/graph-query-api/config.py` uses `GraphBackendType(str, Enum)` with `FABRIC = "fabric"` (not `"fabric-gql"`). V10 codebase removed the enum in favour of plain strings. The registry key `"fabric-gql"` in V10's registry is not wrong, but differs from the reference's `"fabric"`. Backend registry key and connector name are different lookup paths (`"fabric-gql"` for registry via `CONNECTOR_TO_BACKEND`, `"fabric"` for `CONNECTOR_OPENAPI_VARS` via `.split("-")[0]`). This dual-key system works but is subtle — future contributors may be confused. | Phase 0 | No fix — inherent in V10's architecture. Noted for awareness. |
+| L3 | **Env var substitution gap was misleading**: Scenario YAML has `${FABRIC_WORKSPACE_ID}` but no substitution engine exists. `_normalize_manifest()` (at `router_ingest.py` line ~52) handles old→new format conversion, not env var substitution. Since the backend reads from `adapters/fabric_config.py` directly, the YAML `${...}` values are never parsed — they're documentation-only placeholders. | Gap 5 | Clarified in Gap 5 that `_normalize_manifest()` exists but doesn't substitute env vars, and that YAML values are documentation-only. |
+| L4 | **Phase 2b provisioning estimate is optimistic**: Plan estimated ~200 lines for `fabric_provision.py`. But reference `provision_ontology.py` alone is 935 lines with complex schema definitions, data bindings, and contextualizations. Wrapping all provisioning scripts in SSE-streaming API endpoints is a multi-day effort. | Phase 2b, File inventory | Updated estimate to "~400+" in file inventory with note. |
+| L5 | **Reference impl uses `GraphBackendType` enum**: `fabric_implementation_references/graph-query-api/config.py` uses `GraphBackendType(str, Enum)` with `FABRIC = "fabric"` (not `"fabric-gql"`). V10 codebase removed the enum in favour of plain strings. The registry key `"fabric-gql"` in V10's registry is not wrong, but differs from the reference's `"fabric"`. Backend registry key and connector name are different lookup paths (`"fabric-gql"` for registry via `CONNECTOR_TO_BACKEND`, `"fabric"` for `CONNECTOR_OPENAPI_VARS` via `.split("-")[0]`). This dual-key system works but is subtle — future contributors may be confused. | Phase 0, 1a | Added dual-key lookup table in Phase 1a for clarity. |
 | L6 | **No `router_telemetry.py` adapter for Fabric KQL**: Plan correctly defers this to Gap 1 / Phase 3+, but the `telemetry_query_language_description` in `CONNECTOR_OPENAPI_VARS["fabric"]` is already set to KQL. If a `fabric-kql` telemetry connector is added later, the provisioner will need the telemetry description only — the graph description would not apply. | Gap 1 | No fix needed now — deferred. |
 | L7 | **Fabric API 429 retry may be insufficient during ontology indexing**: `SETUP_FABRIC.md` documents 20-90 minute ontology indexing periods. The plan's 5-retry / 15s-per-attempt backoff (max ~225s) will exhaust during long indexing. This is acceptable for normal operations but users should be warned about post-provisioning delays. | Edge Cases | No fix — documented in Gap 3 for awareness. |
 | L8 | **`get_topology()` default query has no pagination**: `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m` returns ALL nodes and ALL edges. For large graphs this could be extremely slow or hit API response size limits. Consider adding `LIMIT` or requiring callers to specify a query. | Phase 0b | No fix — the CosmosDB backend has the same issue. Noted for awareness. |
+| L9 | **Dependency graph labels Phase 0 as "Independent of V10"**: Phase 0a–0e are truly independent (they implement the backend against the existing `GraphBackend` Protocol). But Phase 0f (`get_scenario_context()` → `fetch_scenario_config()`) depends on V10's `DocumentStore` + `config_store.py` infrastructure. | Dependency graph | Split Phase 0 into independent (0a–0e) and V10-dependent (0f) with fallback path noted. |
+| L10 | **`OPENAPI_SPEC_MAP` has no `"fabric"` entry but isn't mentioned**: Readers seeing `OPENAPI_SPEC_MAP = {"cosmosdb": ..., "mock": ...}` may think a `"fabric"` entry is needed. It's not — Fabric uses spec templates via `spec_template: "graph"` in agent definitions, bypassing `OPENAPI_SPEC_MAP` entirely. | Phase 1a | Added clarification in both the "What Changes" table and Phase 1a notes. |
+| L11 | **File count and line estimate were stale**: Original said "~11 files, ~590 lines". With `api/app/main.py` included and provisioning estimate corrected: 12 files, ~750+ lines. | File inventory, comparison table | Updated counts and estimates throughout. |
 
 ### Summary of changes applied to the plan
 
 | Change | Type | Lines affected |
 |--------|------|---------------|
 | Added audit metadata to header | Header | +1 line |
+| Fixed header goal from "graph + telemetry" to "graph" | M11 | Header |
+| Fixed initial example YAML from `fabric-kql` to `cosmosdb-nosql` telemetry | M10 | Core Insight |
 | Fixed `CONNECTOR_OPENAPI_VARS` key from `"fabric-gql"` to `"fabric"` | C2, C3 | Phase 1a code block |
 | Made `get_scenario_context()` async | C1 | Phase 0f code block |
+| Added V10 dependency note to Phase 0f | L9 | Phase 0f narrative |
+| Corrected `fetch_scenario_config()` performance note | M9 | Phase 0f |
+| Fixed `config.py` change description in "What Changes" table | M6 | Table |
+| Fixed `main.py` entry in "What Changes" table | M7 | Table |
+| Added `api/app/main.py` to "What Changes" table | M8 | Table |
+| Added `OPENAPI_SPEC_MAP` clarification | L10 | Phase 1a, table |
+| Added dual-key lookup table | L5 | Phase 1a |
 | Removed phantom `_compose_graph_explorer_prompt()` reference | M1 | Phase 1b narrative |
+| Fixed `language_suffix` comment from `"kusto"` to `"gql"` | M1 | Phase 1b code |
 | Moved `language_gql.md` to correct scenario directory | M2 | Phase 1b, Phase 1 table, file inventory |
 | Added note about reference impl's richer `language_gql.md` | M3 | Phase 1b |
 | Removed `router_ingest.py` from modified files | M4 | Phase 1 table, file inventory |
 | Added `aclose()` method to `FabricGQLBackend` | M5 | Phase 0b code block |
 | Added `GRAPH_TOOL_DESCRIPTIONS["fabric"]` to Phase 1 scope | L1 | Phase 1 table |
+| Fixed file counts from 5→6 modified, 11→12 total | M8, L11 | File inventory |
+| Fixed line estimate from ~590→~750+ | L4, L11 | File inventory, comparison table |
+| Clarified `_normalize_manifest()` location (line ~52) | L3 | Gap 5 |
+| Split Phase 0 V10 dependency in dependency graph | L9 | Dependency graph |
 | Added this audit findings section | — | End of document |
