@@ -1,8 +1,11 @@
+import { useEffect } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import type { StepEvent, ThinkingState, RunMeta } from '../types';
 import { AlertInput } from './AlertInput';
 import { AgentTimeline } from './AgentTimeline';
 import { ErrorBanner } from './ErrorBanner';
+import { useScenarioContext } from '../context/ScenarioContext';
+import { useScenarios } from '../hooks/useScenarios';
 
 interface InvestigationPanelProps {
   alert: string;
@@ -27,6 +30,13 @@ export function InvestigationPanel({
   runStarted,
   runMeta,
 }: InvestigationPanelProps) {
+  // Source example questions from the active scenario
+  const { activeScenario } = useScenarioContext();
+  const { savedScenarios, fetchSavedScenarios } = useScenarios();
+  useEffect(() => { fetchSavedScenarios(); }, [fetchSavedScenarios]);
+  const scenario = savedScenarios.find(s => s.id === activeScenario);
+  const exampleQuestions = scenario?.example_questions;
+
   return (
     <div className="w-full lg:w-1/2 border-r border-white/10 overflow-y-auto p-4 flex flex-col">
       <AlertInput
@@ -34,6 +44,7 @@ export function InvestigationPanel({
         onAlertChange={onAlertChange}
         onSubmit={onSubmit}
         running={running}
+        exampleQuestions={exampleQuestions}
       />
 
       <AgentTimeline

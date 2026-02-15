@@ -1,20 +1,13 @@
 import { motion } from 'framer-motion';
 import type { TopologyNode } from '../../hooks/useTopology';
 
-const COLOR_PALETTE = [
-  '#38BDF8', '#FB923C', '#A78BFA', '#3B82F6',
-  '#C084FC', '#CA8A04', '#FB7185', '#F472B6',
-  '#10B981', '#EF4444', '#6366F1', '#FBBF24',
-];
-
 interface GraphContextMenuProps {
   menu: { x: number; y: number; node: TopologyNode } | null;
   onClose: () => void;
   onSetDisplayField: (label: string, field: string) => void;
-  onSetColor: (label: string, color: string) => void;
 }
 
-export function GraphContextMenu({ menu, onClose, onSetDisplayField, onSetColor }: GraphContextMenuProps) {
+export function GraphContextMenu({ menu, onClose, onSetDisplayField }: GraphContextMenuProps) {
   if (!menu) return null;
 
   const propertyKeys = ['id', ...Object.keys(menu.node.properties)];
@@ -55,22 +48,6 @@ export function GraphContextMenu({ menu, onClose, onSetDisplayField, onSetColor 
           </div>
         </div>
 
-        {/* Color picker */}
-        <div className="px-3 py-1.5 border-t border-white/10">
-          <span className="text-[10px] uppercase tracking-wider text-text-muted">
-            Color ({menu.node.label})
-          </span>
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {COLOR_PALETTE.map((color) => (
-              <button
-                key={color}
-                className="h-4 w-4 rounded-full border border-white/20 hover:scale-125 transition-transform"
-                style={{ backgroundColor: color }}
-                onClick={() => { onSetColor(menu.node.label, color); onClose(); }}
-              />
-            ))}
-          </div>
-        </div>
       </motion.div>
     </>
   );

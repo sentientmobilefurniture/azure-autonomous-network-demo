@@ -1,7 +1,7 @@
 # Fabric Integration — Implementation Plan
 
 > **Created:** 2026-02-15
-> **Last audited:** 2026-02-15
+> **Last audited:** 2026-02-15 (third audit — Fabric API accuracy, GQL endpoint/response format corrections, item type fixes)
 > **Status:** ⬜ Not Started
 > **Goal:** Add Microsoft Fabric as an alternative graph backend to CosmosDB,
 > allowing users to toggle between backends in the UI, browse Fabric
@@ -46,11 +46,20 @@
 
 | # | Plan Said | What Was Done | Rationale |
 |---|-----------|---------------|-----------|
-| D-1 | — | — | — |
-
-### Extra Work Not In Plan
-
-- {None yet}
+| D-1 | `/query/*` has no prod proxy (nginx.conf.template) | Removed false warning. Production uses root `nginx.conf` (Dockerfile L57) which already proxies `/query/*` | `nginx.conf.template` is for standalone frontend only; unified container uses `nginx.conf` |
+| D-2 | 7 Fabric env vars in `config.py` | Expanded to ~30 env vars matching `fabric_implementation_references/azure_config.env` | Reference implementation uses many more vars (capacity, lakehouse, KQL DB, connection names). Incomplete list would cause implementation gaps |
+| D-3 | `FABRIC_KQL_URI` env var name | Renamed to `EVENTHOUSE_QUERY_URI` everywhere | Reference implementation uses `EVENTHOUSE_QUERY_URI`. Consistency with reference avoids confusion |
+| D-4 | Fabric routing via X-Graph header + ScenarioContext fields | `workspace_id` + `graph_model_id` passed in request body (GraphQueryRequest) instead | Reference implementation passes IDs in request body. X-Graph header still used for Cosmos-backed services (prompts, telemetry). Graph queries use body IDs. |
+| D-5 | `router_graph.py` listed under "Files NOT Changed" | Moved to changed files (Phase 2) | Must pass `workspace_id`/`graph_model_id` from request body to backend. Reference `router_graph.py` does this. |
+| D-6 | `models.py` not mentioned | Added to Phase 1 changes | `GraphQueryRequest` needs `workspace_id` + `graph_model_id` fields (matching reference `models.py`) |
+| D-7 | No mention of Fabric Data Agent rejection | Added explicit rejection in Decision 1 | User confirmed: use graph-query-api proxy pattern, not Fabric Data Agent |
+| D-8 | GQL endpoint: `/graphqlapis/{id}/graphql` | Corrected to `/GraphModels/{id}/executeQuery?beta=True` | Reference `test_gql_query.py` (working, tested) uses this endpoint. The `/graphqlapis/` path does not exist in the current Fabric REST API |
+| D-9 | Response format: standard GraphQL `{"data": {...}}` | Corrected to Fabric-specific: `{"status": {...}, "result": {"columns": [...], "data": [...]}}` | Reference `test_gql_query.py` parses this format. No GraphQL-style `errors` array — errors are in `status.code` |
+| D-10 | Ontology item type: `"GraphQLApi"` via `/items?type=GraphQLApi` | Corrected to `"Ontology"` via dedicated `/workspaces/{id}/ontologies` endpoint | Reference `provision_ontology.py` uses `/ontologies` sub-resource. `"GraphQLApi"` is not a valid Fabric item type |
+| D-11 | Graph model discovery via generic `/items` endpoint | Corrected to dedicated `/workspaces/{id}/GraphModels` endpoint | Reference uses this to find auto-created GraphModel items. Falls back to filtering `/items` for type `"GraphModel"` or `"Graph"` |
+| D-12 | GQL syntax examples: `{ routers { id } }` (GraphQL style) | Corrected to MATCH/RETURN syntax: `MATCH (r:CoreRouter) RETURN r.RouterId` | GQL (ISO GQL) uses MATCH/RETURN, not GraphQL curly-brace syntax. Reference sample queries confirm this |
+| D-13 | `get_topology()` uses `__schema` introspection | Removed. GQL doesn't support `__schema`. Use Fabric REST `/ontologies/{id}` to discover types | GQL is not GraphQL — it has no introspection query. Entity types must be discovered via the Fabric REST API |
+| D-14 | No 429/rate-limit handling in `execute_query()` | Added retry loop with exponential backoff (5 retries, 15s × attempt minimum) + JSON body timestamp parsing | Reference `test_gql_query.py` implements this pattern (5 retries, 15s × attempt, parses `"until:"` timestamp from 429 body). Reference ARCHITECTURE.md describes a planned 3-retry / 10s-minimum pattern for the async `fabric.py` — we follow `test_gql_query.py` (proven/tested) and adapt it for async `httpx`. |
 
 ---
 
@@ -79,11 +88,11 @@
 
 | URL prefix | Proxied to | Config |
 |------------|-----------|--------|
-| `/api/*` | API service on `:8000` | `vite.config.ts` L33-36 (dev), `nginx.conf.template` L16-28 (prod) |
-| `/query/*` | graph-query-api on `:8100` | `vite.config.ts` L41-52 (dev) — **no prod proxy** (see ⚠️ below) |
-| `/health` | API service on `:8000` | `vite.config.ts` L37-40 (dev), `nginx.conf.template` L31-34 (prod) |
+| `/api/*` | API service on `:8000` | `vite.config.ts` L32-34 (dev), `nginx.conf` L18-30 (prod) |
+| `/query/*` | graph-query-api on `:8100` | `vite.config.ts` L40-50 (dev), `nginx.conf` L43-55 (prod) |
+| `/health` | API service on `:8000` | `vite.config.ts` L36-38 (dev), `nginx.conf` L33-38 (prod) |
 
-> **⚠️ Production routing:** In the deployed container, nginx proxies **only** `/api/` and `/health` traffic to the API backend. **There is no `/query/*` proxy in `nginx.conf.template`.** The graph-query-api is accessed internally by `OpenApiTool` agents using `GRAPH_QUERY_API_URI` env var (e.g., `https://<container-app-hostname>`). Frontend calls to `/query/*` **do not work in prod** unless an nginx proxy rule is added for `/query/`. New Fabric endpoints at `/query/fabric/*` also require this missing proxy. **This is a pre-existing gap that must be addressed in Phase 3 or earlier** (add a `/query/` location block to `nginx.conf.template` proxying to the graph-query-api).
+> **Note:** Production uses `nginx.conf` (root-level, copied by Dockerfile L63), which **already proxies** `/query/*` to `:8100` with 600s timeout and SSE support. A separate `frontend/nginx.conf.template` exists for standalone frontend Container App deployments (uses `envsubst` + `${API_BACKEND_URL}`) and lacks `/query/*`, but this is irrelevant to the unified container deployment. New Fabric endpoints at `/query/fabric/*` are automatically covered by the existing `/query/` location block.
 
 ### Naming Conventions
 
@@ -95,7 +104,7 @@
 | Search index | `"cloud-outage-runbooks-index"` | `{prefix}-runbooks-index` |
 | Prompts container | `"cloud-outage"` | Same as prefix, inside shared `prompts` DB |
 
-> **Fabric analogy:** Fabric mode replaces graph_name with ontology ID + graph model ID. No name-based derivation — IDs come from Fabric REST API.
+> **Fabric routing:** In Fabric mode, graph data is resolved via `FABRIC_WORKSPACE_ID` + `FABRIC_GRAPH_MODEL_ID` from env vars (not from X-Graph header derivation). The `X-Graph` header is still sent by the frontend for telemetry/prompts container routing (those remain in Cosmos even in Fabric mode), but graph queries pass `workspace_id` and `graph_model_id` in the request body — matching the reference implementation's `GraphQueryRequest` model. The `FabricGraphBackend` reads these IDs to call the Fabric REST API at `POST /v1/workspaces/{id}/GraphModels/{id}/executeQuery?beta=True`.
 
 ### Import & Code Style Conventions
 
@@ -153,7 +162,7 @@ Phase 1 (config/enum) ──┐
                          │       │
                          ├──▶ Phase 3 (discovery endpoints)
                          │       │
-                         ├──▶ Phase 3.5 (provisioning API) ◀── depends on Phase 3
+                         ├──▶ Phase 3.5 (provisioning API) ◀── depends on Phase 1 (config/env vars)
                          │       │
                          └───────┴──▶ Phase 5 (frontend)
                                           │
@@ -161,7 +170,8 @@ Phase 1 (config/enum) ──┐
 ```
 
 Phase 1 is prerequisite for all others. Phases 2 and 3 can be parallelized.
-Phase 3.5 depends on Phase 3 (reuses discovery helpers). Phase 4 depends on
+Phase 3.5 depends on Phase 1 (needs config/env vars) but is independent of Phase 3 —
+it wraps reference provisioning scripts directly, not discovery endpoints. Phase 4 depends on
 Phase 2 (needs working backend). Phase 5 depends on Phases 3 and 3.5 (needs
 discovery and provisioning endpoints). Phase 6 is final.
 
@@ -193,24 +203,36 @@ discovery and provisioning endpoints). Phase 6 is final.
 - `graph-query-api` already has the `GraphBackend` Protocol; adding Fabric is natural
 - OpenAPI spec can document GQL syntax for agent prompt engineering
 
-**Implication:** Need `backends/fabric.py` implementing full `GraphBackend` Protocol + `openapi/fabric.yaml` with GQL-specific schema.
+**Implication:** Need `backends/fabric.py` implementing full `GraphBackend` Protocol + `openapi/fabric.yaml` with GQL MATCH/RETURN syntax documentation.
 
 ### Decision 2: Query language — GQL for Fabric backend
 
-The Fabric Graph Model supports GQL natively via its REST API. The `backends/fabric.py` backend will:
-- Accept GQL query strings (not Gremlin) in `execute_query()`
-- Call `POST https://api.fabric.microsoft.com/v1/workspaces/{id}/graphqlapis/{model_id}/graphql` (or equivalent endpoint)
-- Agent prompts for Fabric mode will use GQL syntax instead of Gremlin
+The Fabric Graph Model supports GQL natively via its REST API (beta). The `backends/fabric.py` backend will:
+- Accept GQL query strings (not Gremlin) in `execute_query()` — GQL uses `MATCH`/`RETURN` syntax (e.g., `MATCH (r:CoreRouter) RETURN r.RouterId, r.City LIMIT 10`)
+- Call `POST https://api.fabric.microsoft.com/v1/workspaces/{id}/GraphModels/{model_id}/executeQuery?beta=True`
+- Handle the Fabric-specific response format: `{"status": {"code": ..., "description": ...}, "result": {"columns": [...], "data": [...]}}`
+- Implement retry with exponential backoff for HTTP 429 (rate limiting) — the Fabric executeQuery API rate-limits aggressively, especially on lower-SKU capacities
+- Agent prompts for Fabric mode will use GQL MATCH/RETURN syntax instead of Gremlin
 
-### Decision 3: Telemetry backend — Fabric Eventhouse/KQL when in Fabric mode
+### Decision 3: Telemetry backend — Fabric Eventhouse/KQL when in Fabric mode (DEFERRED)
 
-When `GRAPH_BACKEND=fabric`, telemetry queries will use Eventhouse (KQL) instead of Cosmos NoSQL. This requires:
-- A new `FabricTelemetryBackend` or an extension of `router_telemetry.py` to dispatch KQL queries
+When `GRAPH_BACKEND=fabric`, telemetry queries **should** use Eventhouse (KQL) instead of Cosmos NoSQL. However, full KQL dispatch is **not in scope** for this plan. This plan adds:
+- A **501 guard clause** in `router_telemetry.py` that returns a clear error when `GRAPH_BACKEND=fabric` (Phase 2, 3 lines)
+- A **KQL-documented OpenAPI spec** for the telemetry agent (Phase 4) — the agent can use KQL syntax in prompts, but the actual KQL execution backend is a follow-up work item
+
+The full implementation would require:
+- A new `FabricTelemetryBackend` or an extension of `router_telemetry.py` to dispatch KQL queries via `azure-kusto-data` SDK
 - Eventhouse connection details (KQL cluster URI, database name) from env vars or Fabric discovery
 
-### Decision 4: Scenario context extension for Fabric
+> **⚠️ This means telemetry queries will NOT work in Fabric mode until the follow-up KQL dispatch is implemented.** Agents will receive a clear 501 error and can communicate this to the user. Graph topology queries and agent-driven graph exploration work fully.
 
-`ScenarioContext` will be extended with optional Fabric fields:
+### Decision 4: Fabric routing — request body IDs (not X-Graph header)
+
+Fabric does **not** use the `X-Graph` header for graph routing. Instead, `workspace_id` and `graph_model_id` are passed as fields in the `GraphQueryRequest` body, defaulting to env vars `FABRIC_WORKSPACE_ID` / `FABRIC_GRAPH_MODEL_ID` when omitted. This mirrors the reference implementation’s approach.
+
+The `X-Graph` header is **still sent** by the frontend because prompts and telemetry remain in Cosmos even in Fabric mode — those routers need the scenario prefix. But graph routers in Fabric mode ignore `X-Graph` and use the body IDs.
+
+`ScenarioContext` will be extended with optional Fabric fields for routers that need them:  
 
 ```python
 @dataclass
@@ -228,7 +250,7 @@ class ScenarioContext:
     fabric_ontology_id: str | None = None
     fabric_graph_model_id: str | None = None
     fabric_eventhouse_id: str | None = None
-    fabric_kql_uri: str | None = None
+    eventhouse_query_uri: str | None = None
 ```
 
 ### Decision 5: Frontend tab structure — context-adaptive 3-tab layout (**REVISED**)
@@ -274,7 +296,22 @@ Backend: [ CosmosDB ▾ ]                        Backend: [ Fabric ▾ ]
 
 > **Rationale:** Runbooks, tickets, and prompts are AI Search / Cosmos resources, not graph data. They are backend-agnostic and use the same upload path regardless of whether the graph backend is CosmosDB or Fabric. Only graph topology data and telemetry data change based on backend.
 
-### Decision 6: Fabric provisioning from UI
+### Decision 6: Capacity provisioning is an ARM operation
+
+Fabric capacity creation and management (create, suspend, resume, scale up/down) is an **Azure Resource Manager (ARM) operation**, NOT a Fabric REST API call. The Fabric REST API (`api.fabric.microsoft.com/v1`) manages workspace-level resources (lakehouses, eventhouses, ontologies), but capacity itself is an ARM resource managed via:
+
+- `azure-mgmt-fabric` SDK (`FabricMgmtClient.fabric_capacities.begin_create_or_update()`)
+- Azure CLI / Bicep / ARM templates (used by `azd up` in the `infra/` directory)
+
+The `FABRIC_CAPACITY_ID` env var is populated during `azd up` (ARM deployment). The Phase 3.5 provisioning pipeline accepts `capacity_id` as input — it does NOT create the capacity. Users must have capacity pre-provisioned via `azd up` or the Azure Portal. This is consistent with the reference implementation where capacity is provisioned in the Bicep/`azd` step, not by the Python scripts.
+
+Key `azure-mgmt-fabric` patterns (from SDK reference):
+- All mutating operations are LRO — always call `.result()` on pollers
+- Always set `tier="Fabric"` when specifying `CapacitySku`
+- Suspend unused capacities to stop billing (`begin_suspend()`)
+- Use `DefaultAzureCredential` for authentication
+
+### Decision 7: Fabric provisioning from UI
 
 **Chosen:** Wrap reference provisioning scripts as SSE-streamed API endpoints.
 
@@ -317,23 +354,26 @@ After provisioning completes, the ontology/eventhouse dropdowns auto-populate. T
 
 ### Current State
 
-- `GraphBackendType` enum in `config.py` (lines 25-29) has only `COSMOSDB` and `MOCK`
+- `GraphBackendType` enum in `config.py` (lines 25-27) has only `COSMOSDB` and `MOCK`
 - `GRAPH_BACKEND` global reads `GRAPH_BACKEND` env var, defaults to `"cosmosdb"`
-- `ScenarioContext` dataclass (lines 73-92) has no Fabric fields
-- `BACKEND_REQUIRED_VARS` (lines 125-131) maps only `COSMOSDB` and `MOCK`
+- `ScenarioContext` dataclass (lines 71-101) has no Fabric fields
+- `BACKEND_REQUIRED_VARS` (lines 121-126) maps only `COSMOSDB` and `MOCK`
 - `backends/__init__.py` factory functions handle only `COSMOSDB` and `MOCK`
-- `azure_config.env.template` has no Fabric variables
+- `azure_config.env.template` has no Fabric variables (66 lines total)
+- `azure_config.env` (live) has **no** Fabric env vars — they must be added manually or populated by reference provisioning scripts
+- `models.py` `GraphQueryRequest` has only `query: str` — no `workspace_id` or `graph_model_id` fields
 
-**Problem:** No Fabric backend type exists in the enum, config, or routing.
+**Problem:** No Fabric backend type exists in the enum, config, routing, or request models.
 
 ### Target State
 
 - `GraphBackendType` gains `FABRIC = "fabric"`
-- `config.py` gains Fabric-specific env vars (`FABRIC_API`, `FABRIC_SCOPE`, `FABRIC_WORKSPACE_ID`, `FABRIC_GRAPH_MODEL_ID`, `FABRIC_ONTOLOGY_ID`)
+- `config.py` gains Fabric-specific env vars (full list matching reference `azure_config.env` — see below)
 - `ScenarioContext` gains optional Fabric routing fields
 - `BACKEND_REQUIRED_VARS` maps `FABRIC` to required vars
 - `backends/__init__.py` dispatches to `FabricGraphBackend` for `FABRIC`
-- `azure_config.env.template` gains Fabric section
+- `models.py` `GraphQueryRequest` gains `workspace_id` + `graph_model_id` fields (matching reference implementation)
+- `azure_config.env.template` gains full Fabric section
 
 ### Backend Changes
 
@@ -356,17 +396,46 @@ class GraphBackendType(str, Enum):
 # NEW: Fabric env vars (after Cosmos Gremlin section)
 # ---------------------------------------------------------------------------
 # Fabric settings (used by GRAPH_BACKEND=fabric)
+# Env var names match those in fabric_implementation_references/azure_config.env
 # ---------------------------------------------------------------------------
 
+# Core API settings
 FABRIC_API = os.getenv("FABRIC_API_URL", "https://api.fabric.microsoft.com/v1")
 FABRIC_SCOPE = os.getenv("FABRIC_SCOPE", "https://api.fabric.microsoft.com/.default")
+
+# Provisioning / capacity
+FABRIC_SKU = os.getenv("FABRIC_SKU", "F8")
+FABRIC_CAPACITY_ID = os.getenv("FABRIC_CAPACITY_ID", "")
+AZURE_FABRIC_ADMIN = os.getenv("AZURE_FABRIC_ADMIN", "")
+
+# Workspace
 FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
+FABRIC_WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "")
+
+# Lakehouse
+FABRIC_LAKEHOUSE_ID = os.getenv("FABRIC_LAKEHOUSE_ID", "")
+FABRIC_LAKEHOUSE_NAME = os.getenv("FABRIC_LAKEHOUSE_NAME", "")
+
+# Ontology / Graph Model
 FABRIC_ONTOLOGY_ID = os.getenv("FABRIC_ONTOLOGY_ID", "")
+FABRIC_ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "")
 FABRIC_GRAPH_MODEL_ID = os.getenv("FABRIC_GRAPH_MODEL_ID", "")
+
+# Eventhouse / KQL
 FABRIC_EVENTHOUSE_ID = os.getenv("FABRIC_EVENTHOUSE_ID", "")
-FABRIC_KQL_URI = os.getenv("FABRIC_KQL_URI", "")
+FABRIC_EVENTHOUSE_NAME = os.getenv("FABRIC_EVENTHOUSE_NAME", "")
+FABRIC_KQL_DB_ID = os.getenv("FABRIC_KQL_DB_ID", "")
+FABRIC_KQL_DB_NAME = os.getenv("FABRIC_KQL_DB_NAME", "")
+FABRIC_KQL_DB_DEFAULT = os.getenv("FABRIC_KQL_DB_DEFAULT", "NetworkDB")
+EVENTHOUSE_QUERY_URI = os.getenv("EVENTHOUSE_QUERY_URI", "")  # KQL cluster URI
+
+# Agent connections (Foundry connection names for Fabric-bound agents)
 FABRIC_CONNECTION_NAME = os.getenv("FABRIC_CONNECTION_NAME", "")
+GRAPH_FABRIC_CONNECTION_NAME = os.getenv("GRAPH_FABRIC_CONNECTION_NAME", "")
+TELEMETRY_FABRIC_CONNECTION_NAME = os.getenv("TELEMETRY_FABRIC_CONNECTION_NAME", "")
 ```
+
+> **Naming reconciliation:** The reference `azure_config.env` uses `EVENTHOUSE_QUERY_URI` for the KQL cluster URI. Earlier drafts of this plan used `FABRIC_KQL_URI` — we adopt the reference name `EVENTHOUSE_QUERY_URI` for consistency. All env var names match `fabric_implementation_references/azure_config.env`.
 
 ```python
 # ScenarioContext extension:
@@ -384,7 +453,7 @@ class ScenarioContext:
     fabric_ontology_id: str | None = None
     fabric_graph_model_id: str | None = None
     fabric_eventhouse_id: str | None = None
-    fabric_kql_uri: str | None = None
+    eventhouse_query_uri: str | None = None
 ```
 
 ```python
@@ -402,7 +471,7 @@ def get_scenario_context(
             "fabric_ontology_id": FABRIC_ONTOLOGY_ID,
             "fabric_graph_model_id": FABRIC_GRAPH_MODEL_ID,
             "fabric_eventhouse_id": FABRIC_EVENTHOUSE_ID,
-            "fabric_kql_uri": FABRIC_KQL_URI,
+            "eventhouse_query_uri": EVENTHOUSE_QUERY_URI,
         }
 
     return ScenarioContext(
@@ -457,22 +526,58 @@ elif bt == GraphBackendType.FABRIC:
 
 > **⚠️ Implementation note:** Fabric backend cache key should include workspace_id + graph_model_id (not graph_name, which is meaningless for Fabric). The `get_backend_for_context()` method needs special handling — it can pull IDs from `ScenarioContext.fabric_*` fields.
 
+#### `graph-query-api/models.py` — Add Fabric routing fields to GraphQueryRequest
+
+```python
+# Match the reference implementation in fabric_implementation_references/graph-query-api/models.py:
+class GraphQueryRequest(BaseModel):
+    query: str
+    workspace_id: str = ""    # NEW: Fabric workspace ID (defaults to env var)
+    graph_model_id: str = ""  # NEW: Fabric graph model ID (defaults to env var)
+```
+
+> **⚠️ Implementation note:** These fields default to `""` and are ignored by the CosmosDB/mock backends. The `FabricGraphBackend.execute_query()` reads them (falling back to env vars when empty). The `router_graph.py` must pass them through: `backend.execute_query(req.query, workspace_id=req.workspace_id, graph_model_id=req.graph_model_id)`. This matches the reference implementation exactly.
+
 #### `azure_config.env.template` — Add Fabric section
 
 ```bash
 # --- Fabric Integration (optional — only when GRAPH_BACKEND=fabric) ---
-# Fabric workspace ID (from portal or Fabric API)
+# Full variable list matches fabric_implementation_references/azure_config.env
+
+# Provisioning / capacity
+FABRIC_SKU=F8
+AZURE_FABRIC_ADMIN=
+FABRIC_CAPACITY_ID=
+
+# Core API settings
+FABRIC_API_URL=https://api.fabric.microsoft.com/v1
+FABRIC_SCOPE=https://api.fabric.microsoft.com/.default
+
+# Workspace
 FABRIC_WORKSPACE_ID=
-# Fabric ontology ID (discovered via /query/fabric/ontologies)
+FABRIC_WORKSPACE_NAME=
+
+# Lakehouse
+FABRIC_LAKEHOUSE_ID=
+FABRIC_LAKEHOUSE_NAME=
+
+# Ontology / Graph Model
 FABRIC_ONTOLOGY_ID=
-# Fabric graph model ID (auto-created with ontology)
+FABRIC_ONTOLOGY_NAME=
 FABRIC_GRAPH_MODEL_ID=
-# Fabric eventhouse ID (discovered via /query/fabric/eventhouses)
+
+# Eventhouse / KQL
 FABRIC_EVENTHOUSE_ID=
-# KQL cluster URI for eventhouse queries
-FABRIC_KQL_URI=
-# AI Foundry connection name for Fabric (used by FabricTool in agents)
+FABRIC_EVENTHOUSE_NAME=
+FABRIC_KQL_DB_ID=
+FABRIC_KQL_DB_NAME=
+FABRIC_KQL_DB_DEFAULT=NetworkDB
+EVENTHOUSE_QUERY_URI=
+
+# Agent connections
 FABRIC_CONNECTION_NAME=
+GRAPH_FABRIC_CONNECTION_NAME=
+TELEMETRY_FABRIC_CONNECTION_NAME=
 ```
 
 ---
@@ -484,9 +589,9 @@ FABRIC_CONNECTION_NAME=
 - `backends/cosmosdb.py` implements `GraphBackend` Protocol using Gremlin SDK
 - `backends/mock.py` implements the Protocol with static data
 - No `backends/fabric.py` exists
-- Reference codebase has a `FabricGraphBackend` import in `__init__.py` but **no actual `fabric.py` file**
+- Reference codebase has a `FabricGraphBackend` import in `__init__.py` but **no actual `fabric.py` file** — the only working GQL execution code is in `scripts/testing_scripts/test_gql_query.py`
 
-**Problem:** No Fabric query execution exists. Must implement `execute_query()` (GQL) and `get_topology()` (GQL → nodes/edges).
+**Problem:** No Fabric query execution exists. Must implement `execute_query()` (GQL via `/GraphModels/{id}/executeQuery?beta=True`) and `get_topology()` (GQL → nodes/edges).
 
 ### Target State
 
@@ -498,12 +603,15 @@ FABRIC_CONNECTION_NAME=
 
 ```python
 """
-Fabric Graph Backend — executes GQL queries against Microsoft Fabric GraphQL API.
+Fabric Graph Backend — executes GQL queries against Microsoft Fabric GraphModel Execute Query (beta) API.
 
-Uses the Fabric REST API:
-  POST /v1/workspaces/{workspace_id}/graphqlapis/{graph_model_id}/graphql
+Uses the Fabric REST API (beta):
+  POST /v1/workspaces/{workspace_id}/GraphModels/{graph_model_id}/executeQuery?beta=True
 
 Auth: DefaultAzureCredential with scope "https://api.fabric.microsoft.com/.default"
+
+Response format: {"status": {"code": ..., "description": ...}, "result": {"columns": [...], "data": [...]}}
+Rate limiting: Returns 429 with Retry-After header — must implement retry with exponential backoff
 """
 
 from __future__ import annotations
@@ -513,7 +621,7 @@ import httpx
 
 from config import (
     FABRIC_API, FABRIC_SCOPE, FABRIC_WORKSPACE_ID, FABRIC_GRAPH_MODEL_ID,
-    get_credential,
+    EVENTHOUSE_QUERY_URI, get_credential,
 )
 
 logger = logging.getLogger("graph-query-api.fabric")
@@ -543,43 +651,85 @@ class FabricGraphBackend:
         return self._client
 
     async def execute_query(self, query: str, **kwargs) -> dict:
-        """Execute a GQL query against the Fabric GraphQL API.
+        """Execute a GQL query against the Fabric GraphModel Execute Query (beta) API.
+
+        Uses: POST /v1/workspaces/{id}/GraphModels/{id}/executeQuery?beta=True
+
+        GQL syntax uses MATCH/RETURN (not GraphQL). Example:
+          MATCH (r:CoreRouter) RETURN r.RouterId, r.City LIMIT 10
 
         Args:
-            query: A GQL query string.
+            query: A GQL query string (MATCH/RETURN syntax).
+            **kwargs: Optional workspace_id, graph_model_id overrides
+                      (passed from GraphQueryRequest body fields).
 
         Returns:
             {"columns": [...], "data": [...]} matching the GraphBackend Protocol.
         """
+        # Allow per-request ID overrides from request body (reference pattern)
+        ws_id = kwargs.get("workspace_id") or self.workspace_id
+        model_id = kwargs.get("graph_model_id") or self.graph_model_id
+
         client = await self._get_client()
-        url = f"{FABRIC_API}/workspaces/{self.workspace_id}/graphqlapis/{self.graph_model_id}/graphql"
+        url = f"{FABRIC_API}/workspaces/{ws_id}/GraphModels/{model_id}/executeQuery"
         token = self._get_token()
 
-        resp = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={"query": query},
-        )
-        resp.raise_for_status()
-        result = resp.json()
+        for attempt in range(1, 6):  # max 5 retries for 429
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                params={"beta": "True"},
+                json={"query": query},
+            )
 
-        # Transform GraphQL response → {columns, data} protocol format
-        if "errors" in result:
-            return {"columns": [], "data": [], "error": str(result["errors"])}
+            if resp.status_code == 429:
+                # Parse Retry-After header first
+                retry_after = int(resp.headers.get("Retry-After", "0"))
+                # Fallback: parse Fabric's JSON body timestamp ("until: M/D/YYYY H:M:S AM/PM (UTC)")
+                if not retry_after:
+                    try:
+                        from datetime import datetime, timezone
+                        msg = resp.json().get("message", "")
+                        if "until:" in msg:
+                            ts_str = msg.split("until:")[1].strip().rstrip(")")
+                            ts_str = ts_str.replace("(UTC", "").strip()
+                            blocked_until = datetime.strptime(ts_str, "%m/%d/%Y %I:%M:%S %p")
+                            blocked_until = blocked_until.replace(tzinfo=timezone.utc)
+                            wait = (blocked_until - datetime.now(timezone.utc)).total_seconds()
+                            retry_after = max(int(wait) + 1, 3)
+                    except Exception:
+                        pass
+                retry_after = max(retry_after, 15 * attempt)  # at least 15s × attempt
+                if attempt < 5:
+                    import asyncio
+                    logger.warning(f"Rate-limited (429). Waiting {retry_after}s (attempt {attempt}/5)")
+                    await asyncio.sleep(retry_after)
+                    token = self._get_token()  # refresh token
+                    continue
+                return {"columns": [], "data": [], "error": "Rate limit exceeded after 5 retries"}
 
-        data_key = next(iter(result.get("data", {})), None)
-        rows = result.get("data", {}).get(data_key, []) if data_key else []
-        if not isinstance(rows, list):
-            rows = [rows]
+            break
 
-        columns = []
-        if rows:
-            columns = [{"name": k, "type": type(v).__name__} for k, v in rows[0].items()]
+        # For non-429 errors (400 bad GQL syntax, 403, 500, etc.), catch and
+        # return as error payload — the router uses the error-as-200 pattern
+        # to allow the LLM agent to read and self-correct.
+        if resp.status_code != 200:
+            return {"columns": [], "data": [], "error": f"Fabric API error (HTTP {resp.status_code}): {resp.text[:500]}"}
+        raw = resp.json()
 
-        return {"columns": columns, "data": rows}
+        # Fabric executeQuery returns: {"status": {...}, "result": {"columns": [...], "data": [...]}}
+        status = raw.get("status", {})
+        if status.get("code", "").lower() not in ("", "ok", "success"):
+            return {"columns": [], "data": [], "error": status.get("description", str(status))}
+
+        result = raw.get("result", {})
+        columns = result.get("columns", [])
+        data = result.get("data", [])
+
+        return {"columns": columns, "data": data}
 
     async def get_topology(
         self,
@@ -597,20 +747,20 @@ class FabricGraphBackend:
             # Caller is responsible for shaping result
             return {"nodes": result.get("data", []), "edges": []}
 
-        # Default: introspect ontology for all entity types and relationships
-        # This query shape depends on the actual ontology schema —
-        # implementer must adapt to the specific ontology definition.
-        # Placeholder GQL for topology:
-        gql = """
-        {
-          __schema {
-            queryType { fields { name } }
-          }
-        }
-        """
-        # Step 1: Discover entity types via introspection
-        # Step 2: Query each entity type for nodes
-        # Step 3: Query relationship types for edges
+        # Default: query all nodes and relationships using GQL MATCH/RETURN syntax.
+        # The ontology schema defines entity types (CoreRouter, TransportLink, etc.)
+        # and relationship types (connects_to, etc.).
+        #
+        # GQL does NOT support GraphQL-style introspection (__schema).
+        # To discover types, use the Fabric REST API:
+        #   GET /v1/workspaces/{id}/ontologies/{ontology_id}
+        # Then query each entity type for nodes and relationship type for edges.
+        #
+        # Example queries against the Network Topology ontology:
+        #   MATCH (n) RETURN LABELS(n) AS type, count(n) AS cnt GROUP BY type
+        #   MATCH (r:CoreRouter) RETURN r.RouterId AS id, r.City AS city
+        #   MATCH (l:TransportLink)-[:connects_to]->(r:CoreRouter) RETURN l.LinkId, r.RouterId
+        #
         # Implementation depends on ontology structure — see ⚠️ note below
         ...
 
@@ -626,15 +776,35 @@ class FabricGraphBackend:
             self._client = None
 ```
 
-> **⚠️ Implementation note:** The `get_topology()` method's default query depends entirely on the Fabric ontology schema. The ontology defines entity types (e.g., Router, Switch, Link) and relationship types. The implementer must:
-> 1. Use GQL introspection (`__schema`) to discover available types
-> 2. Build per-type queries like `{ routers { id label properties... } }`
-> 3. Build relationship queries to extract edges
+> **⚠️ Implementation note:** The `get_topology()` method's default query depends entirely on the Fabric ontology schema. The ontology defines entity types (e.g., CoreRouter, AggSwitch, TransportLink) and relationship types (e.g., connects_to). The implementer must:
+> 1. Use the Fabric REST API `GET /v1/workspaces/{id}/ontologies/{ontology_id}` to discover available entity types (GQL does **not** support GraphQL-style `__schema` introspection)
+> 2. Build per-type GQL queries like `MATCH (r:CoreRouter) RETURN r.RouterId AS id, r.City AS city, r.Region AS region`
+> 3. Build relationship queries: `MATCH (a)-[rel]->(b) RETURN a, type(rel) AS relType, b`
 > 4. Map results to `{nodes: [{id, label, properties}], edges: [{id, source, target, label, properties}]}`
 >
 > This is the single hardest piece of the implementation. Start with a simple hard-coded query for a known ontology, then generalize.
 
-> **⚠️ Implementation note:** `httpx` is used for async HTTP. It is **not** currently in any project `pyproject.toml` and **must be added** to `graph-query-api/pyproject.toml` as `httpx>=0.27.0`.
+> **⚠️ Implementation note:** `httpx` is used for async HTTP calls in the backend. It is **not** currently in any project `pyproject.toml` and **must be added** to `graph-query-api/pyproject.toml` as `httpx>=0.27.0`. Alternatively, `requests` (sync, used by the reference provisioning scripts) could be used via `asyncio.to_thread()` — similar to how `router_telemetry.py` wraps sync Cosmos SDK calls. The async `httpx` approach is preferred for the backend to avoid blocking the event loop.
+
+#### `graph-query-api/router_graph.py` — Pass Fabric IDs through to backend
+
+The existing `router_graph.py` must pass request body fields to the backend so `FabricGraphBackend` can use per-request workspace/model overrides:
+
+```python
+# Current (simplified):
+result = await backend.execute_query(req.query)
+
+# New — pass through Fabric routing fields:
+result = await backend.execute_query(
+    req.query,
+    workspace_id=req.workspace_id,
+    graph_model_id=req.graph_model_id,
+)
+```
+
+This matches the reference implementation's `router_graph.py` exactly. For CosmosDB/mock backends, the extra `**kwargs` are harmlessly ignored by the existing `execute_query()` signatures.
+
+> **⚠️ Implementation note — Error-as-200 pattern:** The reference `router_graph.py` wraps ALL backend calls in a try/except and returns HTTP 200 with an `error` field in the `GraphQueryResponse` body — it NEVER raises HTTP 4xx/5xx to the caller. This is critical for LLM agent self-correction: `OpenApiTool` treats non-200 responses as tool failures (opaque to the LLM), but 200 + error payload lets the agent read the error message, fix the query syntax, and retry. Ensure `router_graph.py` catches `NotImplementedError`, `HTTPException`, and generic `Exception` around the `backend.execute_query()` call, returning `GraphQueryResponse(error=f"...")` in each case. The reference implementation shows this exact pattern.
 
 ---
 
@@ -651,9 +821,9 @@ class FabricGraphBackend:
 ### Target State
 
 New router `router_fabric.py` with:
-- `GET /query/fabric/ontologies?workspace_id=...` — list ontologies
-- `GET /query/fabric/eventhouses?workspace_id=...` — list eventhouses
-- `GET /query/fabric/graph-models?workspace_id=...&ontology_id=...` — list graph models for an ontology
+- `GET /query/fabric/ontologies?workspace_id=...` — list ontologies (via `/workspaces/{id}/ontologies`)
+- `GET /query/fabric/eventhouses?workspace_id=...` — list eventhouses (via `/workspaces/{id}/eventhouses`)
+- `GET /query/fabric/graph-models?workspace_id=...` — list graph models (via `/workspaces/{id}/GraphModels`)
 
 ### Backend Changes
 
@@ -693,19 +863,43 @@ class FabricListResponse(BaseModel):
 
 
 async def _fabric_list_items(workspace_id: str, item_type: str) -> list[dict]:
-    """Call Fabric REST API to list items of a given type in a workspace."""
+    """Call Fabric REST API to list items of a given type in a workspace.
+
+    Uses type-specific sub-resource endpoints where available:
+      - "Ontology"    → GET /workspaces/{id}/ontologies
+      - "Eventhouse"  → GET /workspaces/{id}/eventhouses
+      - "GraphModel"  → GET /workspaces/{id}/GraphModels
+      - "Lakehouse"   → GET /workspaces/{id}/lakehouses
+    Falls back to GET /workspaces/{id}/items for other types.
+    """
     import httpx
 
     cred = get_credential()
     token = cred.get_token(FABRIC_SCOPE)
 
+    # Fabric provides dedicated sub-resource endpoints for key item types
+    sub_resource_map = {
+        "Ontology": "ontologies",
+        "Eventhouse": "eventhouses",
+        "GraphModel": "GraphModels",
+        "Lakehouse": "lakehouses",
+    }
+
     async with httpx.AsyncClient(timeout=30.0) as client:
-        url = f"{FABRIC_API}/workspaces/{workspace_id}/items"
-        resp = await client.get(
-            url,
-            params={"type": item_type},
-            headers={"Authorization": f"Bearer {token.token}"},
-        )
+        sub_resource = sub_resource_map.get(item_type)
+        if sub_resource:
+            url = f"{FABRIC_API}/workspaces/{workspace_id}/{sub_resource}"
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {token.token}"},
+            )
+        else:
+            url = f"{FABRIC_API}/workspaces/{workspace_id}/items"
+            resp = await client.get(
+                url,
+                params={"type": item_type} if item_type else {},
+                headers={"Authorization": f"Bearer {token.token}"},
+            )
         if resp.status_code == 404:
             raise HTTPException(404, f"Workspace {workspace_id} not found")
         if resp.status_code == 403:
@@ -723,7 +917,10 @@ async def list_ontologies(
     if not ws_id:
         raise HTTPException(400, "workspace_id required (param or FABRIC_WORKSPACE_ID env var)")
 
-    items = await _fabric_list_items(ws_id, "GraphQLApi")  # or "Ontology"
+    items = await _fabric_list_items(ws_id, "Ontology")
+    # Fabric has a dedicated /ontologies sub-resource endpoint.
+    # Each ontology auto-creates a corresponding GraphModel item —
+    # use the /graph-models endpoint or /workspaces/{id}/GraphModels to find them.
     return FabricListResponse(
         workspace_id=ws_id,
         items=[
@@ -765,16 +962,18 @@ async def list_eventhouses(
 @router.get("/graph-models", response_model=FabricListResponse)
 async def list_graph_models(
     workspace_id: str = Query(default=None),
-    ontology_id: str = Query(default=None),
 ):
-    """List graph models. Currently returns graph model IDs associated with ontologies."""
+    """List graph models in a Fabric workspace.
+
+    Graph models are auto-created by Fabric when an ontology is created.
+    They have item type "GraphModel" (or "Graph" in some API versions).
+    Uses the dedicated /workspaces/{id}/GraphModels endpoint.
+    """
     ws_id = workspace_id or FABRIC_WORKSPACE_ID
     if not ws_id:
         raise HTTPException(400, "workspace_id required")
 
-    # Graph models are associated with ontologies via the ontology definition
-    # For now, list all GraphQLApi items (each has a graph model)
-    items = await _fabric_list_items(ws_id, "GraphQLApi")
+    items = await _fabric_list_items(ws_id, "GraphModel")
     return FabricListResponse(
         workspace_id=ws_id,
         items=[
@@ -784,16 +983,13 @@ async def list_graph_models(
                 type="graph-model",
             )
             for item in items
-            if not ontology_id or item["id"] == ontology_id
         ],
     )
 ```
 
-> **⚠️ Implementation note:** The Fabric REST API item type strings may differ from what's documented. Verify the exact `type` parameter for ontologies — it could be `"GraphQLApi"`, `"Ontology"`, or `"GraphModel"`. The reference scripts use `GET /v1/workspaces/{id}/items` without a type filter and then filter client-side. If the type parameter is unreliable, filter client-side:
-> ```python
-> all_items = await _fabric_list_items(ws_id, None)
-> ontologies = [i for i in all_items if i.get("type") == "Ontology"]
-> ```
+> **⚠️ Implementation note:** The Fabric REST API has **dedicated sub-resource endpoints** for key item types — use `/workspaces/{id}/ontologies` for ontologies, `/workspaces/{id}/eventhouses` for eventhouses, and `/workspaces/{id}/GraphModels` for graph models. The generic `/workspaces/{id}/items?type=...` endpoint works as a fallback for other types. The reference provisioning scripts use both patterns. Item type strings used in the Fabric API: `"Ontology"`, `"GraphModel"` (or `"Graph"`), `"Eventhouse"`, `"Lakehouse"`, `"KQLDatabase"`.
+
+> **⚠️ Implementation note — Pagination:** The Fabric REST API uses `continuationUri` / `continuationToken` for paginated responses. The discovery endpoints above fetch only the first page. For workspaces with many items, this will silently omit results. The reference `populate_fabric_config.py` also has this limitation (takes `[0]` of each list — first-match assumption). Add pagination loop if production use cases require listing more than ~100 items per type. At minimum, log a warning if the response contains a `continuationUri`.
 
 #### `graph-query-api/main.py` — Register new router
 
@@ -851,18 +1047,28 @@ from __future__ import annotations
 import logging
 from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 logger = logging.getLogger("api.fabric_provision")
 
 router = APIRouter(prefix="/api/fabric", tags=["fabric-provision"])
 
 
+class ProvisionRequest(BaseModel):
+    capacity_id: str
+    workspace_name: str = "AutonomousNetworkDemo"
+    scenario_name: str = "cloud-outage"
+
+
 @router.post("/provision")
 async def provision_fabric_resources(
-    capacity_id: str = Form(...),
-    workspace_name: str = Form(default="AutonomousNetworkDemo"),
-    scenario_name: str = Form(default="cloud-outage"),
+    request: ProvisionRequest,
 ):
+    # ProvisionRequest is a Pydantic model (JSON body), NOT Form data.
+    # The frontend sends JSON via fetch() — Form(...) would be incompatible.
+    capacity_id = request.capacity_id
+    workspace_name = request.workspace_name
+    scenario_name = request.scenario_name
     """
     Full Fabric provisioning pipeline with SSE progress streaming.
 
@@ -952,14 +1158,24 @@ async def upload_eventhouse_csvs(
 >
 > The API router imports from `_provisioner.py` and wraps each step in SSE event emission.
 > This avoids code duplication and keeps the standalone scripts functional for CLI use.
+>
+> **⚠️ Cross-project import:** The API service (`api/`) and provisioning scripts (`scripts/fabric/`) are separate Python projects. To import `_provisioner.py` from the API router, either:
+> 1. **Symlink** `scripts/fabric/` into `api/app/services/fabric/` at build time (Dockerfile)
+> 2. **Copy** the shared module into the API package during Docker build
+> 3. **Mount** a shared volume in docker-compose
+> 4. **Use `sys.path.insert()`** in the API router to add `scripts/fabric/` to the Python path
+>
+> Option 1 (symlink in Dockerfile) is recommended — it keeps a single source of truth and works with the existing build pipeline.
 
 > **⚠️ Implementation note — Dependencies:**
 > The provisioning endpoints require additional packages in `api/pyproject.toml`:
-> - `azure-storage-file-datalake` (OneLake upload)
+> - `azure-storage-file-datalake` (OneLake upload via `DataLakeServiceClient`)
 > - `azure-kusto-data` + `azure-kusto-ingest` (Eventhouse KQL ingest)
 > - `requests` (already present)
 >
 > These are the same packages used by the standalone provisioning scripts.
+
+> **⚠️ Implementation note — OneLake URL:** CSV uploads to Lakehouse go through OneLake's ADLS Gen2 endpoint at `https://onelake.dfs.fabric.microsoft.com`. The reference `provision_lakehouse.py` uses `DataLakeServiceClient("https://onelake.dfs.fabric.microsoft.com", credential=DefaultAzureCredential())` to upload files to `{workspace_id}/{lakehouse_id}/Files/`. This is NOT the same as the Fabric REST API base URL (`https://api.fabric.microsoft.com/v1`). The provisioning code must use both endpoints — Fabric REST for item creation/management, OneLake ADLS Gen2 for file uploads.
 
 #### `api/app/main.py` — Register provisioning router
 
@@ -1025,9 +1241,10 @@ info:
   title: Graph Query API (Fabric Backend)
   version: "0.5.0"
   description: |
-    Micro-API for executing GQL queries against Microsoft Fabric Ontology.
+    Micro-API for executing GQL queries against Microsoft Fabric Graph Model.
     Used by Foundry agents via OpenApiTool.
-    Backend: Microsoft Fabric GraphQL API
+    Backend: Microsoft Fabric GraphModel Execute Query (beta) API
+    GQL uses MATCH/RETURN syntax (ISO GQL), not GraphQL.
 servers:
   - url: "{base_url}"
     description: Deployed Container App
@@ -1036,22 +1253,23 @@ paths:
   /query/graph:
     post:
       operationId: query_graph
-      summary: Execute a GQL query against the Fabric Ontology graph
+      summary: Execute a GQL query against the Fabric Graph Model
       description: |
         Submits a GQL (Graph Query Language) query to Microsoft Fabric.
         Returns columns and data rows from the network ontology.
-        Use GQL syntax (not Gremlin). Example:
-          { routers { routerId name location status } }
-          { transportLinks(filter: {status: "DOWN"}) { linkId endpoints bandwidth } }
+        Use GQL MATCH/RETURN syntax (not Gremlin, not GraphQL). Examples:
+          MATCH (r:CoreRouter) RETURN r.RouterId, r.City, r.Region LIMIT 10
+          MATCH (l:TransportLink)-[:connects_to]->(r:CoreRouter) RETURN r.RouterId, l.LinkId, l.LinkType LIMIT 10
+          MATCH (n) RETURN LABELS(n) AS type, count(n) AS cnt GROUP BY type ORDER BY cnt DESC
       parameters:
         - name: X-Graph
           in: header
-          required: true
+          required: false
           schema:
             type: string
-            enum: ["{graph_name}"]
           description: |
-            The graph context for routing. Always use the value shown.
+            Scenario context for telemetry/prompts routing (Cosmos).
+            Not used for Fabric graph queries — use workspace_id/graph_model_id in body instead.
       requestBody:
         required: true
         content:
@@ -1064,9 +1282,19 @@ paths:
                 query:
                   type: string
                   description: |
-                    A GQL query string for the Fabric ontology.
-                    Uses GraphQL-like syntax. Query entity types and their
-                    properties. Use filters for targeted results.
+                    A GQL query string for the Fabric Graph Model.
+                    Uses MATCH/RETURN syntax (ISO GQL, not GraphQL).
+                    Examples:
+                      MATCH (r:CoreRouter) RETURN r.RouterId, r.City LIMIT 10
+                      MATCH (n) RETURN LABELS(n) AS type, count(n) AS cnt GROUP BY type
+                workspace_id:
+                  type: string
+                  description: |
+                    Fabric workspace ID. Defaults to FABRIC_WORKSPACE_ID env var if omitted.
+                graph_model_id:
+                  type: string
+                  description: |
+                    Fabric graph model ID. Defaults to FABRIC_GRAPH_MODEL_ID env var if omitted.
       responses:
         "200":
           description: Query results
@@ -1150,7 +1378,7 @@ OPENAPI_SPEC_MAP = {
 # Add to GRAPH_TOOL_DESCRIPTIONS:
 GRAPH_TOOL_DESCRIPTIONS = {
     "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB...",
-    "fabric": "Execute a GQL query against Microsoft Fabric Ontology to explore topology and relationships.",
+    "fabric": "Execute a GQL query against the Fabric GraphModel to explore network topology and relationships.",
     "mock": "Query the topology graph (offline mock mode).",
 }
 ```
@@ -1180,11 +1408,11 @@ class ConfigApplyRequest(BaseModel):
 
 ### Current State
 
-- `SettingsModal.tsx` (673 lines) has 3 tabs: `scenarios`, `datasources`, `upload`
+- `SettingsModal.tsx` (~675 lines) has 3 tabs: `scenarios`, `datasources`, `upload`
 - Tab type is `type Tab = 'scenarios' | 'datasources' | 'upload'`
 - Data Sources tab shows Cosmos-specific dropdowns (graph, runbooks index, tickets index, prompt set)
-- `AddScenarioModal.tsx` (683 lines) has 5 fixed upload slots: graph, telemetry, runbooks, tickets, prompts — all `.tar.gz` files uploaded to CosmosDB/AI Search endpoints
-- `ScenarioContext.tsx` manages `activeGraph`, `activeRunbooksIndex`, `activeTicketsIndex`, `activePromptSet`
+- `AddScenarioModal.tsx` (~685 lines) has 5 fixed upload slots: graph, telemetry, runbooks, tickets, prompts — all `.tar.gz` files uploaded to CosmosDB/AI Search endpoints
+- `ScenarioContext.tsx` (~160 lines) manages `activeGraph`, `activeRunbooksIndex`, `activeTicketsIndex`, `activePromptSet`
 - No concept of backend type in frontend state
 
 **Problems:**
@@ -1798,8 +2026,9 @@ onComplete: (data) => {
 **Files to modify:**
 - `graph-query-api/config.py` — Add `FABRIC` to enum, Fabric env vars, `ScenarioContext` fields, `get_scenario_context()` changes, `BACKEND_REQUIRED_VARS`
 - `graph-query-api/backends/__init__.py` — Add `FABRIC` branches to `get_backend()`, `get_backend_for_context()`, `get_backend_for_graph()`
+- `graph-query-api/models.py` — Add `workspace_id`, `graph_model_id` fields to `GraphQueryRequest`
 - `graph-query-api/main.py` — Add lifespan check for Fabric vars
-- `azure_config.env.template` — Add Fabric section
+- `azure_config.env.template` — Add Fabric section (~30 vars, matching reference)
 
 **Verification:**
 - `GRAPH_BACKEND=fabric uv run python -c "from config import GRAPH_BACKEND; print(GRAPH_BACKEND)"` → prints `GraphBackendType.FABRIC`
@@ -1815,11 +2044,13 @@ onComplete: (data) => {
 
 **Files to modify:**
 - `graph-query-api/pyproject.toml` — Add `httpx>=0.27.0` (not currently a dependency)
+- `graph-query-api/router_graph.py` — Pass `workspace_id` + `graph_model_id` from request body to `backend.execute_query()`
+- `graph-query-api/router_telemetry.py` — Add 501 guard clause for `GRAPH_BACKEND=fabric` (see Gap 1)
 
 **Verification:**
-- Unit test: Mock Fabric REST API, call `execute_query("{ routers { id } }")`, verify `{columns, data}` response
-- Integration test (with real Fabric workspace): `GRAPH_BACKEND=fabric` + valid workspace/model IDs → `POST /query/graph` with GQL returns data
-- `POST /query/topology` with `X-Graph: fabric` → returns `{nodes, edges, meta}`
+- Unit test: Mock Fabric REST API, call `execute_query("MATCH (r:CoreRouter) RETURN r.RouterId")`, verify `{columns, data}` response
+- Integration test (with real Fabric workspace): `GRAPH_BACKEND=fabric` + valid workspace/model IDs → `POST /query/graph` with GQL MATCH/RETURN query returns data
+- `POST /query/topology` → returns `{nodes, edges, meta}`
 - Backend cache: Two requests with same workspace/model → same backend instance
 
 ### Phase 3: Fabric Discovery Endpoints
@@ -1831,7 +2062,8 @@ onComplete: (data) => {
 
 **Files to modify:**
 - `graph-query-api/main.py` — Register `fabric_router`
-- `frontend/nginx.conf.template` — Add `/query/` reverse-proxy location block (currently missing — `/query/*` routes have no prod proxy)
+
+> **Note:** Production `nginx.conf` (root-level) already proxies `/query/*` to `:8100` — no nginx changes needed. New `/query/fabric/*` routes are automatically covered.
 
 **Verification:**
 - `GET /query/fabric/ontologies?workspace_id=<valid>` → returns list of ontologies
@@ -1859,7 +2091,7 @@ onComplete: (data) => {
 
 ### Phase 3.5: Fabric Provisioning API
 
-> Depends on Phase 3 (reuses Fabric REST helpers and discovery logic).
+> Depends on Phase 1 (needs config/env vars). Independent of Phase 3.
 
 **Files to create:**
 - `api/app/routers/fabric_provision.py` — Provisioning + CSV upload endpoints (~300 lines)
@@ -1919,15 +2151,15 @@ onComplete: (data) => {
 
 | File | Action | Phase | Changes |
 |------|--------|-------|---------|
-| `graph-query-api/config.py` | MODIFY | 1 | Add `FABRIC` enum, Fabric env vars, `ScenarioContext` fields, update `get_scenario_context()`, `BACKEND_REQUIRED_VARS` |
+| `graph-query-api/config.py` | MODIFY | 1 | Add `FABRIC` enum, Fabric env vars (~30 vars matching reference), `ScenarioContext` fields, update `get_scenario_context()`, `BACKEND_REQUIRED_VARS` |
 | `graph-query-api/backends/__init__.py` | MODIFY | 1 | Add `FABRIC` branches to all factory/cache functions |
+| `graph-query-api/models.py` | MODIFY | 1 | Add `workspace_id`, `graph_model_id` fields to `GraphQueryRequest` (matching reference) |
 | `graph-query-api/main.py` | MODIFY | 1, 3 | Add Fabric var check in lifespan, register `fabric_router` |
-| `azure_config.env.template` | MODIFY | 1 | Add Fabric env var section (~10 lines) |
+| `azure_config.env.template` | MODIFY | 1 | Add Fabric env var section (~30 lines, matching `fabric_implementation_references/azure_config.env`) |
 | `graph-query-api/backends/fabric.py` | **CREATE** | 2 | `FabricGraphBackend` class (~200 lines) |
 | `graph-query-api/pyproject.toml` | MODIFY | 2 | Add `httpx>=0.27.0` dependency |
-| `frontend/nginx.conf.template` | MODIFY | 3 | Add `/query/` reverse-proxy location block (currently missing — blocks prod `/query/*` calls) |
-| `graph-query-api/router_fabric.py` | **CREATE** | 3 | Discovery endpoints: ontologies, eventhouses (~120 lines) |
-| `api/app/routers/fabric_provision.py` | **CREATE** | 3.5 | Provisioning + CSV upload SSE endpoints (~300 lines) |
+| `graph-query-api/router_telemetry.py` | MODIFY | 2 | Add 501 guard clause for `GRAPH_BACKEND=fabric` (3 lines — see Gap 1) |
+| `graph-query-api/router_graph.py` | MODIFY | 2 | Pass `workspace_id` + `graph_model_id` from request body to `backend.execute_query()` |
 | `scripts/fabric/_provisioner.py` | **CREATE** | 3.5 | Shared provisioning logic extracted from standalone scripts |
 | `scripts/fabric/provision_lakehouse.py` | MODIFY | 3.5 | Refactor to thin CLI wrapper importing from `_provisioner.py` |
 | `scripts/fabric/provision_eventhouse.py` | MODIFY | 3.5 | Refactor to thin CLI wrapper importing from `_provisioner.py` |
@@ -1946,13 +2178,13 @@ onComplete: (data) => {
 
 - `graph-query-api/backends/cosmosdb.py` — CosmosDB backend is unchanged; Fabric is a parallel implementation
 - `graph-query-api/backends/mock.py` — Mock backend unchanged
-- `graph-query-api/router_graph.py` — Existing router dispatches via `get_backend_for_context()` which already handles backend type; no changes needed
-- `graph-query-api/router_topology.py` — Same dispatch pattern; works with any `GraphBackend` implementation
-- `graph-query-api/router_telemetry.py` — Initially unchanged; KQL telemetry support is a follow-up (Phase 4 OpenAPI handles agent-side; direct UI telemetry queries are a stretch goal)
+- `graph-query-api/router_topology.py` — Dispatches via `get_backend_for_context()` which handles backend type; works with any `GraphBackend` implementation. `get_topology()` is part of the Protocol.
 - `graph-query-api/openapi/cosmosdb.yaml` — Unchanged
 - `graph-query-api/openapi/mock.yaml` — Unchanged
+- `nginx.conf` (root) — Already proxies `/query/*` to `:8100`; no changes needed for Fabric
+- `frontend/nginx.conf.template` — Only used for standalone frontend deployments, not the unified container. Not relevant.
 - `frontend/src/hooks/useScenarios.ts` — Scenarios are backend-agnostic metadata; no changes needed
-- `frontend/src/hooks/useTopology.ts` — Topology hook uses `getQueryHeaders()` which already includes `X-Graph`; works with Fabric backend automatically
+- `frontend/src/hooks/useTopology.ts` — Topology hook uses `getQueryHeaders()` which includes `X-Graph`; works with Fabric backend automatically (Fabric graph routing uses request body IDs, not the header)
 
 ---
 
@@ -1962,11 +2194,11 @@ onComplete: (data) => {
 
 **Current state:** Telemetry router uses Cosmos NoSQL (SQL syntax). Fabric telemetry uses Eventhouse (KQL syntax). The `router_telemetry.py` only supports Cosmos SQL.
 
-**Where this matters for the current plan:** When `GRAPH_BACKEND=fabric`, the telemetry agent gets a KQL-documented OpenAPI spec (Phase 4) but the backend endpoint still expects Cosmos SQL.
+**Where this matters for the current plan:** When `GRAPH_BACKEND=fabric`, the telemetry agent gets a KQL-documented OpenAPI spec (Phase 4) but the backend endpoint still expects Cosmos SQL. **This means the telemetry agent will send KQL to an endpoint that only speaks Cosmos SQL — it will fail at runtime.** The error recovery path (“read the error, fix your query”) won’t help because the endpoint fundamentally can’t execute KQL.
 
-**Recommendation:** Either (a) extend `router_telemetry.py` with a conditional KQL path using `azure-kusto-data` SDK, or (b) create a separate `/query/fabric/telemetry` endpoint for KQL, or (c) route KQL queries through the same endpoint with backend detection.
+**Recommendation:** At minimum, add a backend-type check at the top of `router_telemetry.py` that returns a clear 501 error: `"KQL telemetry queries not yet implemented for Fabric backend. Use the Eventhouse KQL endpoint directly."` This prevents silent/confusing failures. Full KQL dispatch via `azure-kusto-data` SDK is the proper follow-up.
 
-**Scope:** Fast-follow — agent-side works via OpenAPI spec but direct UI telemetry is deferred.
+**Scope:** In scope (Phase 2) — the guard clause (3 lines) is added in Phase 2. Full KQL dispatch is a separate work item.
 
 ### Gap 2: Prompt set compatibility with Fabric mode
 
@@ -1980,13 +2212,34 @@ onComplete: (data) => {
 
 ### Gap 3: Graph visualizer GQL response format
 
-**Current state:** `useTopology.ts` expects `{nodes: [{id, label, properties}], edges: [{source, target, label}]}`. Fabric GQL responses have different shapes.
+**Current state:** `useTopology.ts` expects `{nodes: [{id, label, properties}], edges: [{source, target, label}]}`. Fabric executeQuery API returns tabular data: `{"status": {...}, "result": {"columns": [...], "data": [...]}}` — a flat table of rows, not a node/edge graph.
 
-**Where this matters:** `FabricGraphBackend.get_topology()` must map Fabric GQL results to this exact format.
+**Where this matters:** `FabricGraphBackend.get_topology()` must:\n1. Execute multiple GQL MATCH/RETURN queries (one per entity type, plus relationship queries)\n2. Map each entity row to a `TopologyNode` with `id`, `label`, `properties`\n3. Map relationship results to `TopologyEdge` with `source`, `target`, `label`\n4. The entity types and their ID fields depend on the specific ontology schema
 
-**Recommendation:** The mapping logic in `backends/fabric.py` must be thorough. Test with actual Fabric ontology output.
+**Recommendation:** The mapping logic in `backends/fabric.py` must be thorough. Start with a hard-coded mapping for the known Network Topology ontology (CoreRouter→RouterId, TransportLink→LinkId, etc.), then generalize using ontology definition introspection via the Fabric REST API. Test with actual Fabric ontology output.
 
 **Scope:** In scope (Phase 2) — core implementation concern.
+
+### Gap 7: Ontology schema drift
+
+**Current state (from reference):** The Fabric ontology definition in `provision_ontology.py` may NOT include all relationships defined in the YAML schema file. Known gaps:
+- `Service→AggSwitch` and `Service→BaseStation` edges exist in the schema YAML but are **missing from the Fabric ontology** definition
+
+**Where this matters:** GQL queries that traverse missing relationship types will return empty results (not errors). The `get_topology()` implementation must be aware of which edges are actually present.
+
+**Recommendation:** Audit `provision_ontology.py` entity/relationship definitions against the scenario schema YAML before implementation. Document the ontology→schema mapping explicitly. Time-series bindings are **explicitly out of scope** — telemetry data is queried directly via KQL against Eventhouse, not through the ontology graph.
+
+**Scope:** Phase 2 (topology mapping), Phase 3.5 (ontology provisioning) — awareness item.
+
+### Gap 8: `FABRIC_KQL_DB_NAME` vs display name
+
+**Current state:** The reference `populate_fabric_config.py` discovers the KQL database's actual name by calling `GET /workspaces/{id}/kqlDatabases/{db_id}` and extracting `properties.databaseName` — this is the real KQL database name used in Kusto connection strings, and **may differ** from the item's `displayName`. The `FABRIC_KQL_DB_NAME` env var should hold `properties.databaseName`, NOT `displayName`.
+
+**Where this matters:** Using `displayName` instead of `properties.databaseName` in KQL connection strings will cause "database not found" errors.
+
+**Recommendation:** Ensure `populate_fabric_config.py` (and Phase 3.5's config update step) writes `properties.databaseName` to `FABRIC_KQL_DB_NAME`. The existing reference script does this correctly.
+
+**Scope:** Phase 3.5 — correctness item.
 
 ### ~~Gap 4~~ → Resolved: AddScenarioModal not adapted for Fabric
 
@@ -1998,7 +2251,15 @@ onComplete: (data) => {
 
 **Original gap:** Plan said provisioning scripts "handle Fabric resource provisioning which is done manually per requirement 1."
 
-**Resolution:** New Phase 3.5 wraps provisioning scripts as SSE-streamed API endpoints. One-click "Provision Fabric Resources" button on Fabric Setup tab (see Item 3.5 and Decision 6).
+**Resolution:** New Phase 3.5 wraps provisioning scripts as SSE-streamed API endpoints. One-click "Provision Fabric Resources" button on Fabric Setup tab (see Item 3.5 and Decision 7).
+
+### Gap 6: Cosmos DB still required in Fabric mode
+
+**Where this matters:** Even with `GRAPH_BACKEND=fabric`, prompts are stored in Cosmos NoSQL (`prompts` database), runbooks/tickets are in AI Search + Blob Storage, and the `X-Graph` header still drives container routing for these stores. Users may assume "Fabric mode" means no Cosmos dependency — this is incorrect.
+
+**Recommendation:** Document explicitly that Fabric mode replaces **only graph topology data and telemetry** with Fabric resources. Prompts, runbooks, tickets, and scenario metadata remain in Cosmos/AI Search. `COSMOS_NOSQL_ENDPOINT` must still be configured even in Fabric mode. The Fabric Setup tab should show a note: "Prompts and knowledge bases are stored in Cosmos DB / AI Search regardless of graph backend."
+
+**Scope:** In scope (Phase 5) — add info text to Fabric Setup tab.
 
 ---
 
@@ -2043,11 +2304,11 @@ onComplete: (data) => {
 
 ### Fabric Graph Backend (Item 2)
 
-**Fabric API rate limiting:** Fabric REST API may return `429 Too Many Requests`. `FabricGraphBackend` should implement retry with exponential backoff (use `httpx` transport with retries or `tenacity`).
+**Fabric API rate limiting:** Fabric executeQuery API returns `429 Too Many Requests` aggressively, especially on lower-SKU capacities (e.g., F4). The `FabricGraphBackend.execute_query()` code above already implements retry with exponential backoff (up to 5 retries, minimum 15s × attempt). This matches the pattern in the reference `test_gql_query.py`.
 
 **Credential expiry:** `DefaultAzureCredential.get_token()` returns tokens valid ~1 hour. The `_get_token()` method calls `get_token()` on every request — `DefaultAzureCredential` handles caching and refresh internally. No manual token management needed.
 
-**GQL query syntax errors:** Fabric GraphQL API returns `{"errors": [...]}` for malformed queries. The backend correctly returns `{"columns": [], "data": [], "error": "..."}` which the agent will see and retry with corrected syntax.
+**GQL query syntax errors:** The Fabric executeQuery API returns `{"status": {"code": "BadRequest", "description": "..."}, "result": null}` for malformed GQL. The backend extracts the error description and returns `{"columns": [], "data": [], "error": "..."}` which the agent will see and retry with corrected syntax.
 
 **Empty ontology:** If the selected ontology has no entities, `get_topology()` returns `{"nodes": [], "edges": []}`. Frontend handles empty graph gracefully (existing behavior).
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { Header } from './components/Header';
 import { TabBar } from './components/TabBar';
@@ -31,7 +31,7 @@ export default function App() {
 
   const { interactions, loading: interactionsLoading, fetchInteractions,
     saveInteraction, deleteInteraction } = useInteractions();
-  const { activeScenario } = useScenarioContext();
+  const { activeScenario, scenarioReady } = useScenarioContext();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewingInteraction, setViewingInteraction] = useState<Interaction | null>(null);
@@ -80,6 +80,28 @@ export default function App() {
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}
     >
+      {/* Startup loading overlay while validating persisted scenario */}
+      <AnimatePresence>
+        {!scenarioReady && (
+          <motion.div
+            key="startup-overlay"
+            className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm
+                       flex items-center justify-center"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <div className="flex flex-col items-center gap-4 text-text-secondary">
+              <span className="inline-block h-8 w-8 animate-spin rounded-full
+                              border-[3px] border-brand border-t-transparent" />
+              <span className="text-sm animate-pulse">
+                Validating scenario &ldquo;{activeScenario}&rdquo;&hellip;
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Zone 1: Header */}
       <Header />
 

@@ -2,15 +2,19 @@
 
 > **Last updated:** 2026-02-15 — reflects V8 data management plane +
 > scenario management (SCENARIOHANDLING.md) + V8 codebase simplification
-> refactor (V8REFACTOR.md). Includes first-class scenario CRUD, per-type
-> uploads, per-request graph routing, Cosmos-backed prompts, unified
-> container deployment, UI scenario switching with auto-provisioning,
-> SSE helper extraction, Cosmos helper centralisation, dead code removal,
-> credential caching standardisation, and frontend component extraction.
+> refactor (V8REFACTOR.md) + V9.5 frontend fixes (v95fixes.md). Includes
+> first-class scenario CRUD, per-type uploads, per-request graph routing,
+> Cosmos-backed prompts, unified container deployment, UI scenario switching
+> with auto-provisioning, SSE helper extraction, Cosmos helper centralisation,
+> dead code removal, credential caching standardisation, frontend component
+> extraction, toolbar color wheel popover, example question suggestion chips,
+> and ScenarioInfoPanel data loading fix.
 >
 > **Audit note:** All code paths verified against actual source files 2026-02-15.
 > Post-V8-refactor verification confirms: dead code removed, helpers extracted,
 > CORS unified, bare excepts fixed, agent_ids caching implemented.
+> V9.5 fixes verified: ScenarioInfoPanel fetches data, AlertInput shows
+> example question chips, GraphToolbar color dot opens ColorWheelPopover.
 
 ---
 
@@ -205,9 +209,9 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │           ├── TabbedLogStream.tsx   # Tabbed log stream viewer (~48 lines)
 │           ├── MetricsBar.tsx       # Resizable panel: topology viewer + log stream
 │           ├── GraphTopologyViewer.tsx  # Owns all overlay state, delegates to graph/* (~214 lines)
-│           ├── InvestigationPanel.tsx   # Alert input + agent timeline
+│           ├── InvestigationPanel.tsx   # Alert input + agent timeline + scenario example questions (~65 lines)
 │           ├── DiagnosisPanel.tsx    # Final markdown report (ReactMarkdown)
-│           ├── AlertInput.tsx       # Textarea + submit button
+│           ├── AlertInput.tsx       # Textarea + submit button + example question chips (~65 lines)
 │           ├── AgentTimeline.tsx     # Step cards + thinking dots
 │           ├── StepCard.tsx         # Individual agent step display
 │           ├── ThinkingDots.tsx     # Animated thinking indicator
@@ -215,10 +219,11 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │           ├── LogStream.tsx        # SSE log viewer (EventSource → /api/logs)
 │           └── graph/
 │               ├── GraphCanvas.tsx      # ForceGraph2D wrapper (forwardRef, canvas rendering, ~184 lines)
-│               ├── GraphToolbar.tsx     # Label filters, search, zoom controls (~102 lines)
+│               ├── GraphToolbar.tsx     # Label filters, search, zoom controls, color dot → popover (~130 lines)
 │               ├── GraphTooltip.tsx     # Hover tooltip (framer-motion, ~80 lines)
 │               ├── GraphContextMenu.tsx # Right-click: display field + color picker
-│               └── graphConstants.ts    # NODE_COLORS and NODE_SIZES by vertex label
+│               ├── ColorWheelPopover.tsx # HSL color wheel + hex input + preset swatches (~260 lines)
+│               └── graphConstants.ts    # NODE_COLORS, NODE_SIZES, COLOR_PALETTE by vertex label
 │
 ├── data/
 │   ├── generate_all.sh         # Generate + package all scenarios as 5 per-type tarballs
@@ -1073,14 +1078,15 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
       ├── [activeTab === 'investigate']
       │   ├── <MetricsBar>                  ← Vertically resizable panel (default 30%)
       │   │   ├── <GraphTopologyViewer>     ← useTopology(), owns overlay state
-      │   │   │   ├── <GraphToolbar>        ← +nodeColorOverride prop → useNodeColor()
+      │   │   │   ├── <GraphToolbar>        ← +nodeColorOverride + onSetColor props → useNodeColor()
+      │   │   │   │   └── <ColorWheelPopover>  ← Opens on color dot click (HSL wheel + hex + presets)
       │   │   │   ├── <GraphCanvas>         ← useNodeColor() + scenario-driven sizes
       │   │   │   ├── <GraphTooltip>        ← +nodeColorOverride prop → useNodeColor()
-      │   │   │   └── <GraphContextMenu>    ← Right-click menu
+      │   │   │   └── <GraphContextMenu>    ← Right-click menu (uses shared COLOR_PALETTE)
       │   │   └── <TabbedLogStream>             ← Tabs: "API" (/api/logs) + "Graph API" (/query/logs)
       │   │       └── <LogStream> (×2)          ← Both kept mounted for SSE continuity
-      │   ├── <InvestigationPanel>
-      │   │   ├── <AlertInput>              ← Textarea + submit button
+      │   ├── <InvestigationPanel>          ← Sources example questions from useScenarios()
+      │   │   ├── <AlertInput>              ← Textarea + submit button + example question chips
       │   │   ├── <AgentTimeline>
       │   │   │   ├── <StepCard> (×n)
       │   │   │   └── <ThinkingDots>
@@ -1089,7 +1095,7 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
       │   └── <AddScenarioModal>            ← Opened from ScenarioChip or SettingsModal
       │
       └── [activeTab === 'info']
-          └── <ScenarioInfoPanel>           ← Scenario description, use cases, example questions
+          └── <ScenarioInfoPanel>           ← Fetches savedScenarios on mount; shows description, use cases, example questions
               └── onClick(question) → setAlert(q), switch to 'investigate' tab
 ```
 
@@ -1343,10 +1349,11 @@ upload/provisioning). Uses `aria-modal="true"` and `role="dialog"` attributes.
 | Component | Role |
 |-----------|------|
 | `GraphCanvas` | `forwardRef` wrapper around `react-force-graph-2d`. Uses `useNodeColor()` hook for color resolution (replaces direct `NODE_COLORS` lookup). Scenario-driven node sizes via `scenarioNodeSizes` from context (normalised by `/3`). Exposes `zoomToFit()` via `useImperativeHandle`. |
-| `GraphToolbar` | Label filter chips, node search input, node/edge counts, zoom-to-fit + refresh buttons. Accepts `nodeColorOverride` prop; uses `useNodeColor()` for chip dot colors |
+| `GraphToolbar` | Label filter chips (split click targets: text toggles filter, dot opens `ColorWheelPopover`), node search input, node/edge counts, zoom-to-fit + refresh buttons. Accepts `nodeColorOverride` + `onSetColor` props; uses `useNodeColor()` for chip dot colors |
 | `GraphTooltip` | Fixed-position tooltip on hover. Uses `framer-motion`. Accepts `nodeColorOverride` prop; uses `useNodeColor()` for dot color. Handles `source`/`target` as both string (before hydration) and object (after). |
-| `GraphContextMenu` | Right-click menu: change display field (pick any property as label), change color (12-color palette). Persisted to `localStorage` keys `graph-display-fields` and `graph-colors`. |
-| `graphConstants.ts` | `NODE_COLORS` and `NODE_SIZES` maps keyed by vertex label (static defaults; overridden by scenario-driven values when available) |
+| `GraphContextMenu` | Right-click menu: change display field (pick any property as label), change color (12-color palette from shared `COLOR_PALETTE`). Persisted to `localStorage` keys `graph-display-fields` and `graph-colors`. |
+| `ColorWheelPopover` | HSL color wheel (hue ring + saturation/lightness square via canvas), hex code text input, and 12-color preset swatch row. Opens anchored below the toolbar dot. Apply button commits; click-outside closes. No external dependencies — pure canvas API. |
+| `graphConstants.ts` | `NODE_COLORS`, `NODE_SIZES` maps keyed by vertex label (static defaults; overridden by scenario-driven values when available), and shared `COLOR_PALETTE` (12-color array used by both `GraphContextMenu` and `ColorWheelPopover`) |
 
 **Node color resolution** (via `useNodeColor` hook, ~42 lines):
 
@@ -1361,8 +1368,10 @@ graph node colors with a 4-tier fallback chain:
 ```
 
 `GraphTopologyViewer` passes `nodeColorOverride` (from its state/localStorage) down to
-`GraphToolbar` and `GraphTooltip`. `GraphCanvas` also receives `nodeColorOverride` and
-calls `useNodeColor()` directly.
+`GraphToolbar`, `GraphTooltip`, and `GraphCanvas`. It also passes `onSetColor` to `GraphToolbar`
+so color changes from both the toolbar color wheel popover and the right-click context menu
+flow to the same `setNodeColorOverride` state setter. `GraphCanvas` also receives
+`nodeColorOverride` and calls `useNodeColor()` directly.
 
 ### Frontend Patterns & Gotchas
 
@@ -1390,6 +1399,12 @@ calls `useNodeColor()` directly.
 10. **UploadBox now uses `uploadWithSSE`** (V8 refactor): Previously hand-rolled SSE parsing; now uses the shared `uploadWithSSE()` utility from `utils/sseStream.ts`, eliminating a duplicate SSE parsing implementation.
 
 11. **Tab navigation in App.tsx**: `activeTab` state (`'investigate' | 'info'`) controls whether the main content area shows the investigation layout (MetricsBar + InvestigationPanel + DiagnosisPanel) or the ScenarioInfoPanel. Clicking an example question in ScenarioInfoPanel calls `setAlert(q)` and switches to the investigate tab.
+
+17. **Example question suggestion chips**: `InvestigationPanel` self-sources example questions from `useScenarios()` + `useScenarioContext()` (no prop threading through App.tsx needed). `AlertInput` accepts an optional `exampleQuestions` prop and renders suggestion chips between the textarea and submit button, but ONLY when the textarea is empty. Clicking a chip populates the textarea; chips auto-hide once the user types. This gives users the same quick-pick functionality as the ScenarioInfoPanel tab but at the point of input.
+
+18. **ColorWheelPopover architecture**: Pure canvas-based HSL color picker. The hue ring is drawn as 360 arc segments with `hsl(angle, 100%, 50%)` fill. Inside the ring, a saturation (x-axis) × lightness (y-axis) square is drawn per-pixel. Drag interaction uses `mousedown` on the specific canvas, `mousemove`/`mouseup` on `window` to support dragging outside the canvas bounds. Hex input field with live preview dot; apply button commits. Preset swatch row shows the shared `COLOR_PALETTE` with a checkmark on the current color. Positioned via `anchorRect` (from `getBoundingClientRect()` of the toolbar dot), clamped to viewport left edge.
+
+19. **ScenarioInfoPanel data loading fix**: `ScenarioInfoPanel` calls `useScenarios()` which initializes `savedScenarios` as `[]`. Without a `fetchSavedScenarios()` call, the array stays empty and the scenario lookup always fails → permanent empty state. Fixed by adding `useEffect(() => fetchSavedScenarios(), [])` on mount.
 
 11. **Vite dev proxy has 5 entries**, not 3: `/api/alert` → :8000 (SSE configured), `/api/logs` → :8000 (SSE configured), `/api` → :8000 (plain), `/health` → :8000, `/query` → :8100 (SSE configured). The SSE-configured entries add `cache-control: no-cache` and `x-accel-buffering: no` headers — without these, SSE streams are buffered during local dev.
 
@@ -2481,7 +2496,7 @@ concept. Now users can create, save, switch, and delete complete scenarios from 
 | `frontend/src/components/ScenarioChip.tsx` | **New** (154 lines) | Header scenario selector chip + flyout |
 | `frontend/src/components/ProvisioningBanner.tsx` | **New** (102 lines) | Non-blocking provisioning feedback banner |
 | `frontend/src/components/TabBar.tsx` | **New** (~31 lines) | Investigate / Scenario Info tab bar |
-| `frontend/src/components/ScenarioInfoPanel.tsx` | **New** (~89 lines) | Scenario detail: description, use cases, clickable example questions |
+| `frontend/src/components/ScenarioInfoPanel.tsx` | **New** (~93 lines) | Scenario detail: description, use cases, clickable example questions. Fetches `savedScenarios` on mount (V9.5 fix) |
 | `frontend/src/hooks/useNodeColor.ts` | **New** (~42 lines) | Centralised node color resolution hook with 4-tier fallback + auto-palette |
 | `frontend/src/context/ScenarioContext.tsx` | **Modified** (~159 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage, `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles` |
 | `frontend/src/types/index.ts` | **Modified** (~77 lines) | Added `SavedScenario`, `SlotKey`, `SlotStatus`, `ScenarioUploadSlot` + graph_styles/use_cases/example_questions/domain fields |
@@ -2490,9 +2505,12 @@ concept. Now users can create, save, switch, and delete complete scenarios from 
 | `frontend/src/components/Header.tsx` | **Modified** (~72 lines) | Added ScenarioChip + ProvisioningBanner + dynamic agent status |
 | `frontend/src/App.tsx` | **Modified** (~187 lines) | Added TabBar + tab state + conditional rendering (investigate vs info tab) |
 | `frontend/src/components/graph/GraphCanvas.tsx` | **Modified** (~184 lines) | Uses `useNodeColor()` hook + scenario-driven sizes |
-| `frontend/src/components/graph/GraphToolbar.tsx` | **Modified** (~102 lines) | Accepts `nodeColorOverride` prop; uses `useNodeColor()` |
+| `frontend/src/components/graph/GraphToolbar.tsx` | **Modified** (~130 lines) | Split label chips into dot (color picker) + text (filter toggle); `onSetColor` prop; renders `ColorWheelPopover` |
 | `frontend/src/components/graph/GraphTooltip.tsx` | **Modified** (~80 lines) | Accepts `nodeColorOverride` prop; uses `useNodeColor()` |
-| `frontend/src/components/GraphTopologyViewer.tsx` | **Modified** (~214 lines) | Passes `nodeColorOverride` to GraphToolbar and GraphTooltip |
+| `frontend/src/components/GraphTopologyViewer.tsx` | **Modified** (~218 lines) | Passes `nodeColorOverride` + `onSetColor` to GraphToolbar and GraphTooltip |
+| `frontend/src/components/graph/ColorWheelPopover.tsx` | **New** (~260 lines) | HSL color wheel + hex input + preset swatches; pure canvas, no deps |
+| `frontend/src/components/AlertInput.tsx` | **Modified** (~65 lines) | Added `exampleQuestions` prop + suggestion chips (visible when textarea empty) |
+| `frontend/src/components/InvestigationPanel.tsx` | **Modified** (~65 lines) | Self-sources example questions from `useScenarios()` + context; passes to AlertInput |
 | `graph-query-api/main.py` | **Modified** | Mounted `router_scenarios` (6th router) |
 | `graph-query-api/router_ingest.py` | **Modified** (~871 lines) | Added `scenario_name` param to all 5 upload endpoints; extracts `scenario_metadata` from manifest |
 

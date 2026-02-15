@@ -1,5 +1,7 @@
+import { useState, useRef } from 'react';
 import { useNodeColor } from '../../hooks/useNodeColor';
 import type { TopologyMeta } from '../../hooks/useTopology';
+import { ColorWheelPopover } from './ColorWheelPopover';
 
 interface GraphToolbarProps {
   meta: TopologyMeta | null;
@@ -14,14 +16,26 @@ interface GraphToolbarProps {
   isPaused?: boolean;
   onTogglePause?: () => void;
   nodeColorOverride: Record<string, string>;
+  onSetColor?: (label: string, color: string) => void;
 }
 
 export function GraphToolbar({
   meta, loading, availableLabels, activeLabels,
   onToggleLabel, searchQuery, onSearchChange, onRefresh, onZoomToFit,
-  isPaused, onTogglePause, nodeColorOverride,
+  isPaused, onTogglePause, nodeColorOverride, onSetColor,
 }: GraphToolbarProps) {
   const getColor = useNodeColor(nodeColorOverride);
+  const [colorPickerLabel, setColorPickerLabel] = useState<string | null>(null);
+  const [colorPickerAnchor, setColorPickerAnchor] = useState<DOMRect | null>(null);
+  const dotRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+
+  const openColorPicker = (label: string) => {
+    const el = dotRefs.current[label];
+    if (!el) return;
+    setColorPickerAnchor(el.getBoundingClientRect());
+    setColorPickerLabel(label);
+  };
+
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 shrink-0">
       {/* Title */}
@@ -32,21 +46,32 @@ export function GraphToolbar({
         {availableLabels.map((label) => {
           const active = activeLabels.length === 0 || activeLabels.includes(label);
           return (
-            <button
+            <span
               key={label}
-              onClick={() => onToggleLabel(label)}
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]
                          border transition-colors
                          ${active
                            ? 'border-white/20 text-text-secondary'
                            : 'border-transparent text-text-muted opacity-40'}`}
             >
+              {/* Color dot — click opens color wheel */}
               <span
-                className="h-2 w-2 rounded-full shrink-0"
+                ref={(el) => { dotRefs.current[label] = el; }}
+                className="h-2.5 w-2.5 rounded-full shrink-0 cursor-pointer
+                           hover:scale-150 transition-transform ring-1 ring-transparent
+                           hover:ring-white/40"
                 style={{ backgroundColor: getColor(label) }}
+                onClick={(e) => { e.stopPropagation(); openColorPicker(label); }}
+                title={`Change color for ${label}`}
               />
-              {label}
-            </button>
+              {/* Label text — click toggles filter */}
+              <button
+                className="hover:text-text-primary transition-colors"
+                onClick={() => onToggleLabel(label)}
+              >
+                {label}
+              </button>
+            </span>
           );
         })}
       </div>
@@ -97,6 +122,16 @@ export function GraphToolbar({
                    ${loading ? 'animate-spin' : ''}`}
         title="Refresh"
       >⟳</button>
+
+      {/* Color wheel popover */}
+      {colorPickerLabel && colorPickerAnchor && onSetColor && (
+        <ColorWheelPopover
+          currentColor={getColor(colorPickerLabel)}
+          anchorRect={colorPickerAnchor}
+          onSelect={(color) => onSetColor(colorPickerLabel, color)}
+          onClose={() => { setColorPickerLabel(null); setColorPickerAnchor(null); }}
+        />
+      )}
     </div>
   );
 }

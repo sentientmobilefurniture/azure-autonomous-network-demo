@@ -6,9 +6,12 @@ interface AlertInputProps {
   onAlertChange: (value: string) => void;
   onSubmit: () => void;
   running: boolean;
+  exampleQuestions?: string[];
 }
 
-export function AlertInput({ alert, onAlertChange, onSubmit, running }: AlertInputProps) {
+export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQuestions }: AlertInputProps) {
+  const showChips = !alert.trim() && exampleQuestions && exampleQuestions.length > 0;
+
   return (
     <div className="glass-card p-4 mb-4">
       <span className="text-[10px] uppercase tracking-wider font-medium text-text-muted block mb-2">
@@ -21,6 +24,30 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running }: AlertInp
         onChange={(e) => onAlertChange(e.target.value)}
         placeholder="Paste a NOC alert..."
       />
+
+      {/* Example question suggestion chips — visible only when textarea is empty */}
+      {showChips && (
+        <div className="mt-2">
+          <span className="text-[10px] uppercase tracking-wider text-text-muted block mb-1.5">
+            Try an example
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {exampleQuestions.map((q, i) => (
+              <button
+                key={i}
+                onClick={() => onAlertChange(q)}
+                className="text-left text-xs px-2.5 py-1.5 rounded-md
+                  bg-white/5 border border-white/10 hover:border-brand/40
+                  text-text-secondary hover:text-text-primary transition-all
+                  cursor-pointer max-w-full"
+              >
+                <span className="line-clamp-1">"{q}"</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <motion.button
         whileHover={{ scale: running ? 1 : 1.02 }}
         whileTap={{ scale: running ? 1 : 0.98 }}
