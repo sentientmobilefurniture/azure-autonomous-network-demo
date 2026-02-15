@@ -16,14 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
-from config import COSMOS_NOSQL_ENDPOINT, get_credential
+from config import COSMOS_NOSQL_ENDPOINT
+from cosmos_helpers import get_or_create_container
 from models import InteractionSaveRequest
 
 logger = logging.getLogger("graph-query-api.interactions")
@@ -34,10 +34,8 @@ INTERACTIONS_DATABASE = "interactions"
 INTERACTIONS_CONTAINER = "interactions"
 
 # ---------------------------------------------------------------------------
-# Cosmos helpers (lazy init)
+# Cosmos helpers (delegated to cosmos_helpers)
 # ---------------------------------------------------------------------------
-
-_interactions_container = None
 
 
 def _get_interactions_container(*, ensure_created: bool = True):
@@ -46,60 +44,11 @@ def _get_interactions_container(*, ensure_created: bool = True):
     Database: interactions (pre-created by Bicep)
     Container: interactions
     Partition key: /scenario
-
-    Database creation is skipped — the shared 'interactions' DB pre-exists
-    from Bicep. Only the container is created via ARM if needed.
     """
-    global _interactions_container
-    if _interactions_container is not None:
-        return _interactions_container
-
-    if not COSMOS_NOSQL_ENDPOINT:
-        raise HTTPException(503, "COSMOS_NOSQL_ENDPOINT not configured")
-
-    if ensure_created:
-        account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
-        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-        rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-
-        if sub_id and rg:
-            try:
-                from azure.mgmt.cosmosdb import CosmosDBManagementClient
-                from azure.identity import DefaultAzureCredential as _DC
-
-                mgmt = CosmosDBManagementClient(_DC(), sub_id)
-
-                # Database "interactions" pre-exists from Bicep — skip creation
-                # Only create container if needed
-                try:
-                    mgmt.sql_resources.begin_create_update_sql_container(
-                        rg,
-                        account_name,
-                        INTERACTIONS_DATABASE,
-                        INTERACTIONS_CONTAINER,
-                        {
-                            "resource": {
-                                "id": INTERACTIONS_CONTAINER,
-                                "partitionKey": {
-                                    "paths": ["/scenario"],
-                                    "kind": "Hash",
-                                },
-                            }
-                        },
-                    ).result()
-                except Exception:
-                    pass  # already exists
-            except Exception as e:
-                logger.warning("ARM interactions container creation failed: %s", e)
-
-    # Data-plane client
-    from azure.cosmos import CosmosClient
-
-    client = CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
-    db = client.get_database_client(INTERACTIONS_DATABASE)
-    container = db.get_container_client(INTERACTIONS_CONTAINER)
-    _interactions_container = container
-    return container
+    return get_or_create_container(
+        INTERACTIONS_DATABASE, INTERACTIONS_CONTAINER, "/scenario",
+        ensure_created=ensure_created,
+    )
 
 
 # ---------------------------------------------------------------------------

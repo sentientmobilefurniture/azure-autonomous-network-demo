@@ -1,79 +1,94 @@
 ---
 name: graph-data-scenarios
-description: Generate complete data scenarios for the autonomous-network-demo graph platform. Guides an AI agent to produce topology CSVs, junction tables, telemetry streams, incident tickets, a graph_schema.yaml manifest, and prompt fragments that conform to the platform's convention contract and just work with the existing ingestion pipeline.
+description: >
+  Generate complete data scenarios for the autonomous-network-demo graph
+  platform. Guides an AI agent to produce topology CSVs, junction tables,
+  telemetry streams, incident tickets, graph_schema.yaml, scenario.yaml,
+  prompt fragments, and runbooks that conform to the platform's convention
+  contract and work with the existing ingestion pipeline out of the box.
 ---
 
 # graph-data-scenarios — Generate Graph Data Scenarios
 
 A reference skill for **generating complete data scenarios** for the autonomous
-network demo platform. Instead of generic scaffolding or templating tools, this
-skill teaches an AI agent how to author data generation scripts that produce
-all artefacts required by the platform's convention contract.
+network demo platform. This skill teaches an AI agent how to author Python data
+generation scripts that produce all artefacts required by the platform's
+convention contract — no loader code changes needed for new domains.
 
 ## When to Use
 
 Use this skill when:
-- Creating a **new scenario** (e.g. `cloud-outage`, `power-grid`)
-- Modifying an existing scenario's topology, telemetry, or tickets
+- Creating a **new scenario** for any domain (telco, cloud, e-commerce, power grid, etc.)
+- Modifying an existing scenario's topology, telemetry, tickets, or prompts
 - Debugging why generated data doesn't load into Cosmos Gremlin / NoSQL / AI Search
-- Understanding the relationship between CSVs, graph_schema.yaml, and prompts
+- Understanding the relationship between CSVs, graph_schema.yaml, prompts, and scenario.yaml
 
-## Reference Implementation
+## Reference Implementations
 
-The `telco-noc` scenario in `data/scenarios/telco-noc/` is the canonical reference:
+Three scenarios demonstrate the pattern across different domains:
+
+| Scenario | Domain | Incident | Dir |
+|----------|--------|----------|-----|
+| `telco-noc` | Telecommunications | Fibre cut → BGP cascade → service degradation | `data/scenarios/telco-noc/` |
+| `cloud-outage` | Cloud infrastructure | CRAC cooling failure → thermal shutdown → VM cascade | `data/scenarios/cloud-outage/` |
+| `customer-recommendation` | E-commerce | Recommendation model bias → returns spike → conversion crash | `data/scenarios/customer-recommendation/` |
+
+Each scenario has identical script structure:
 
 | Script | Output | Purpose |
-|--------|--------|----------|
-| `scripts/generate_topology.py` | 8 entity CSVs → `data/entities/` | Vertices: routers, switches, base stations, links, BGP sessions, MPLS paths, services, SLA policies |
-| `scripts/generate_routing.py` | 2 junction CSVs → `data/entities/` | Edges: MPLS path hops, service dependencies |
-| `scripts/generate_telemetry.py` | 2 telemetry CSVs → `data/telemetry/` | AlertStream (~5k rows: 54h baseline + 90s cascade), LinkTelemetry (~8.6k rows: 72h 5-min samples) |
-| `scripts/generate_tickets.py` | 10 `.txt` files → `data/knowledge/tickets/` | Historical incident tickets for AI Search RAG |
+|--------|--------|---------|
+| `scripts/generate_topology.py` | ~8 `Dim*.csv` → `data/entities/` | Vertices: entity dimension tables with hardcoded rows |
+| `scripts/generate_routing.py` | ~2 `Fact*.csv` → `data/entities/` | Edges: M:N junction tables encoding graph relationships |
+| `scripts/generate_telemetry.py` | 2 CSVs → `data/telemetry/` | AlertStream (~5k rows: 54h baseline + 90s cascade) + domain metrics |
+| `scripts/generate_tickets.py` | 8–10 `.txt` → `data/knowledge/tickets/` | Historical incident tickets for AI Search RAG |
+| `scripts/generate_all.sh` | — | Runner that calls all four Python scripts in order |
 
-Two additional scenarios (`cloud-outage`, `customer-recommendation`) demonstrate
-non-telco domains: cloud infrastructure and e-commerce.
-
-Supporting manifests:
-- `graph_schema.yaml` — at scenario root, declarative schema defining vertex types, edge types, CSV file mappings
+Supporting manifests (at scenario root, NOT in `data/`):
+- `graph_schema.yaml` — declarative schema defining vertex types, edge types, CSV file mappings
 - `scenario.yaml` — scenario manifest with Cosmos mapping, search indexes, graph styles, telemetry baselines
 
 ## Output Structure
 
-A complete scenario lives under `data/scenarios/<scenario-name>/` and produces:
+A complete scenario lives under `data/scenarios/<scenario-name>/`:
 
 ```
 data/scenarios/<scenario-name>/
-├── scenario.yaml                 # Scenario manifest (metadata + cosmos/search config)
-├── graph_schema.yaml             # Graph ontology manifest (at scenario root)
-├── scripts/                      # Data generation scripts
-│   ├── generate_topology.py
-│   ├── generate_routing.py
-│   ├── generate_telemetry.py
-│   └── generate_tickets.py
-└── data/                         # Generated output (entities/telemetry gitignored)
-    ├── entities/                  # Vertex + edge CSVs
-│   ├── Dim*.csv                  # One per vertex type (Dim = dimension/entity)
-│   └── Fact*.csv                 # One per junction/edge table (Fact = relationship)
-├── telemetry/                    # Time-series CSVs for Cosmos NoSQL
-│   ├── AlertStream.csv           # Alert events (required)
-│   └── <OtherMetrics>.csv        # Additional telemetry containers
-├── knowledge/
-│   ├── runbooks/                 # Operational procedures (.md) for AI Search
-│   └── tickets/                  # Historical incidents (.txt) for AI Search
-└── prompts/                      # Scenario-specific prompt fragments
-    ├── orchestrator.md
-    ├── graph_explorer/
-    │   ├── core_schema.md        # Auto-generated from graph_schema.yaml
-    │   └── core_instructions.md
-    ├── telemetry_agent.md
-    ├── runbook_agent.md
-    ├── ticket_agent.md
-    └── default_alert.md
+├── scenario.yaml                    # Scenario manifest (metadata + Cosmos/Search config)
+├── graph_schema.yaml                # Graph ontology manifest (Gremlin loader reads this)
+├── scripts/                         # Data generation scripts (Python + shell)
+│   ├── generate_all.sh              # Runner: calls all generators in order
+│   ├── generate_topology.py         # Vertex dimension CSVs
+│   ├── generate_routing.py          # Junction/edge Fact CSVs
+│   ├── generate_telemetry.py        # AlertStream + domain metrics
+│   └── generate_tickets.py          # Historical incident .txt files
+└── data/                            # Generated output
+    ├── entities/                    # Graph vertex + edge CSVs
+    │   ├── Dim*.csv                 # One per vertex type (dimension/entity)
+    │   └── Fact*.csv                # One per junction table (relationship)
+    ├── telemetry/                   # Time-series CSVs for Cosmos NoSQL
+    │   ├── AlertStream.csv          # Alert events (REQUIRED for every scenario)
+    │   └── <DomainMetrics>.csv      # Additional telemetry (LinkTelemetry, HostMetrics, etc.)
+    ├── knowledge/
+    │   ├── runbooks/                # Operational procedures (.md) → AI Search
+    │   └── tickets/                 # Historical incidents (.txt) → AI Search
+    └── prompts/                     # Scenario-specific prompt fragments
+        ├── foundry_orchestrator_agent.md
+        ├── foundry_telemetry_agent_v2.md
+        ├── foundry_runbook_kb_agent.md
+        ├── foundry_historical_ticket_agent.md
+        ├── alert_storm.md           # Default alert CSV for demo kickoff
+        └── graph_explorer/
+            ├── core_schema.md       # Full entity schema with all instances
+            ├── core_instructions.md # Gremlin traversal patterns + X-Graph rule
+            ├── description.md       # Agent description for Foundry registration
+            ├── language_gremlin.md  # Gremlin query examples
+            └── language_mock.md     # Natural language examples for mock mode
 ```
 
-## Convention Contract
+## Convention Contract Summary
 
-For generated data to "just work" with the platform, these invariants **must**
-hold. See `references/convention-contract.md` for the full specification.
+For generated data to "just work" with the platform, these invariants **must** hold.
+See `references/convention-contract.md` for the full specification.
 
 ### Critical Rules
 
@@ -81,107 +96,138 @@ hold. See `references/convention-contract.md` for the full specification.
    telemetry, and tickets must match a vertex ID in the entity CSVs exactly.
 2. **CSV file naming**: `Dim*.csv` for vertices, `Fact*.csv` for junction tables.
 3. **graph_schema.yaml** must declare every vertex and edge type, map each to
-   its CSV file, and list every property column.
+   its CSV file, and list every property column (see `references/graph-schema-format.md`).
 4. **Telemetry rows must have NO nulls** in numeric columns — the downstream
    anomaly detector rejects rows with missing values. Use normal-range defaults.
 5. **Ticket `.txt` files** use a specific human-readable format with structured
    fields (see `references/ticket-format.md`).
+6. **scenario.yaml** defines Cosmos containers, search indexes, graph styles,
+   and telemetry baselines (see `references/scenario-yaml-format.md`).
+7. **Prompt fragments use concrete values, not placeholders** — the API provisioner
+   does NOT perform `{graph_name}` substitution.
 
 ## How to Generate a New Scenario
 
 ### Step 1: Design the Domain Ontology
 
-Define the entity types, relationships, and a realistic incident:
+Define ~8 entity types, their relationships, and a realistic incident that cascades
+through the graph. Target ~30–60 total vertices for a demo-friendly graph size.
 
 ```
 Domain:       Cloud datacenter
-Entities:     Region, AvailabilityZone, Rack, Host, VirtualMachine, LoadBalancer, Service, SLA
-Relationships: Region→has_zone→AZ, AZ→has_rack→Rack, Rack→hosts→Host, Host→runs→VM, ...
-Incident:     Cooling failure in AZ causes host cascade shutdown
+Entities:     Region, AvailabilityZone, Rack, Host, VirtualMachine, LoadBalancer, Service, SLAPolicy
+Relationships: Region→has_zone→AZ, AZ→has_rack→Rack, Rack→hosts_server→Host, Host→runs→VM, ...
+Incident:     CRAC cooling failure in AZ causes cascading thermal host shutdowns
 ```
+
+**Cross-domain examples:**
+
+| Domain | Core entities | Leaf entities | Incident type |
+|--------|--------------|---------------|---------------|
+| Telco | CoreRouter, TransportLink, BGPSession | AggSwitch, BaseStation, Service | Fibre cut cascade |
+| Cloud | Region, AZ, Rack | Host, VM, LoadBalancer, Service | Cooling failure |
+| E-commerce | CustomerSegment, ProductCategory | Customer, Product, Campaign, Supplier | Model bias |
+| Power grid | Substation, Transformer, Busbar | Generator, Feeder, LoadPoint | Transformer trip |
 
 ### Step 2: Write Topology Generator (`generate_topology.py`)
 
-See `references/topology-patterns.md` for the exact script structure.
+See `references/topology-patterns.md` for the exact script structure with full code.
 
 Key patterns:
 - One function per entity type, each calling a shared `write_csv()` helper
-- Entity IDs follow a readable convention: `{TYPE}-{LOCATION}-{SEQUENCE}`
-- All data is inline (hardcoded rows, not randomized) for reproducibility
-- Foreign key columns reference IDs from other entity tables
+- Entity IDs follow: `{TYPE_PREFIX}-{LOCATION}-{SEQUENCE}` (e.g. `CORE-SYD-01`)
+- **All data is inline (hardcoded rows, NOT randomized)** for reproducibility
+- Foreign key columns reference IDs from parent entity tables
+- Functions called in dependency order: parents before children
+- `OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "entities")`
 
 ### Step 3: Write Routing/Junction Generator (`generate_routing.py`)
 
-Produces `Fact*.csv` files that encode graph edges:
-- Junction tables map M:N relationships between entities
-- Every row references IDs that exist in the entity CSVs
-- Include a `HopOrder` or `DependencyStrength` column for traversal context
+Produces `Fact*.csv` files encoding graph edges that can't be expressed by a single FK:
 
-### Step 4: Write Alert Stream Generator (`generate_telemetry.py`)
+- **Path hops pattern**: ordered traversal — `PathId, HopOrder, NodeId, NodeType`
+- **Dependency pattern**: typed relationships — `ServiceId, DependsOnId, DependsOnType, DependencyStrength`
+- Every row references IDs that exist in the `Dim*.csv` files
+- `NodeType`/`DependsOnType` columns enable `filter` clauses in `graph_schema.yaml`
 
-See `references/telemetry-patterns.md` for the exact structure.
+### Step 4: Write Telemetry Generator (`generate_telemetry.py`)
+
+See `references/telemetry-patterns.md` for the exact cascade timeline and code.
 
 Key patterns:
-- **Baseline period**: Hours of sporadic low-severity noise (~1 alert/min)
-- **Incident cascade**: Root cause → BGP/routing → CPU → packet loss → service degradation → flapping
-- **Timeline fidelity**: Events propagate with realistic delays (seconds between tiers)
-- **Full telemetry snapshot per row**: ALL numeric columns populated, even if the alert is about only one metric
-- **Entity ID lists**: Constants at top of file listing impacted nodes per tier, cross-referencing topology entity IDs
-- **Link telemetry**: Separate CSV with 5-min samples per link, baseline + anomaly at incident time
+- **Baseline**: ~54h of sporadic low-severity noise (~1 alert/min, ~3000 rows)
+- **Incident cascade**: ~2000 alerts over ~90s from root cause → service impact
+- **Full snapshot per row**: ALL numeric columns populated (no nulls)
+- **Entity ID constants**: top-of-file lists of impacted nodes per tier
+- **Domain-specific metrics**: adapt for domain (telco: `OpticalPowerDbm, BitErrorRate, CPUUtilPct, PacketLossPct`; cloud: `TemperatureCelsius, CPUUtilPct, MemoryUtilPct, DiskIOPS`)
+- **Second telemetry CSV**: per-component time-series with baseline + anomaly
+- `random.seed(42)` for reproducibility; sort alerts by timestamp
 
 ### Step 5: Write Ticket Generator (`generate_tickets.py`)
 
 See `references/ticket-format.md` for the required output format.
 
 Key patterns:
-- 8–12 historical incidents covering diverse root cause types
-- Each ticket references entity IDs from the topology (root cause, impacted services)
+- 8–12 incidents covering diverse root cause types (physical, software, config, capacity, etc.)
+- Each ticket references entity IDs from topology (root_cause, customer_impact)
 - Tickets span several months before the "current" incident
-- Include lessons_learned that reference the ontology and suggest improvements
+- `lessons_learned` reference entity types and suggest improvements
 
 ### Step 6: Write `graph_schema.yaml`
 
-See `references/graph-schema-format.md` for the exact YAML structure.
+See `references/graph-schema-format.md` for the exact YAML specification.
 
-This file is the **single source of truth** for the graph:
-- Vertices: label, csv_file, id_column, partition_key, properties
-- Edges: label, csv_file, source/target vertex lookup, properties, optional filter
-- The generic Cosmos Gremlin loader reads this manifest — no code changes needed
+- `data_dir: data/entities` (relative to schema file)
+- **Vertices**: label, csv_file, id_column, partition_key, properties
+- **Edges**: label, csv_file, source/target vertex lookup, optional properties, optional filter
+- Bidirectional connections → **two edge entries**
+- Junction tables with multiple target types → **one entry per type with filter**
+- Expect ~`1.2 × vertex_count + bidirectional_pairs + filtered_variants` edge definitions
 
-### Step 7: Write Prompt Fragments
+### Step 7: Write `scenario.yaml`
 
-These connect the data to the AI agents:
-- `foundry_orchestrator_agent.md` — investigation flow, telemetry baselines, alert types, sub-agent descriptions, scenario context with graph name
-- `foundry_telemetry_agent_v2.md` — Cosmos NoSQL container schemas, partition keys, value ranges, X-Graph header rule
-- `graph_explorer/core_instructions.md` — Gremlin traversal patterns using this scenario's edge labels, X-Graph header rule
-- `graph_explorer/core_schema.md` — full entity schema with all instances and relationships
-- `graph_explorer/description.md` — agent description for Foundry registration
-- `graph_explorer/language_gremlin.md` — Gremlin query examples for this scenario's relationships
-- `graph_explorer/language_mock.md` — natural language examples for mock mode
-- `foundry_runbook_kb_agent.md` — runbook agent prompt with domain-specific runbook descriptions
-- `foundry_historical_ticket_agent.md` — ticket agent prompt with domain-specific ticket descriptions
-- `default_alert.md` — a realistic alert CSV that kicks off the demo investigation
+See `references/scenario-yaml-format.md` for the complete specification.
+
+### Step 8: Write Prompt Fragments
+
+See `references/prompt-fragments.md` for the complete list and X-Graph header rule.
 
 **CRITICAL: X-Graph Header Rule.** Three prompts MUST contain explicit instructions
-telling the agent to include the `X-Graph` header with the concrete scenario graph
-name. This is because the Azure AI Foundry OpenApiTool does NOT reliably enforce
-`default` or `enum` values from OpenAPI specs — the LLM controls the parameter
-value and often ignores schema constraints. The defense-in-depth approach uses
-BOTH an OpenAPI `enum` constraint AND a prompt-level CRITICAL RULE.
+telling the agent to include the `X-Graph` header with the concrete graph name
+(`<scenario-name>-topology`). This is because Azure AI Foundry's `OpenApiTool`
+does NOT reliably enforce `default`/`enum` values from OpenAPI specs.
 
 Files requiring the X-Graph rule:
-1. `foundry_orchestrator_agent.md` — "Scenario Context" section stating the active graph name
-2. `foundry_telemetry_agent_v2.md` — CRITICAL RULE #7: "Always include the X-Graph header with value `<scenario>-topology`"
-3. `graph_explorer/core_instructions.md` — CRITICAL RULE #6: "Always include the X-Graph header with value `<scenario>-topology`"
+1. `foundry_orchestrator_agent.md` — Scenario Context section
+2. `foundry_telemetry_agent_v2.md` — CRITICAL RULE #7
+3. `graph_explorer/core_instructions.md` — CRITICAL RULE #6
 
-The graph name follows the pattern `<scenario-name>-topology` (e.g., `telco-noc-topology`,
-`cloud-outage-topology`, `customer-recommendation-topology`). The telemetry database
-is derived at runtime: `rsplit("-", 1)[0]` + `-telemetry` (e.g., `telco-noc-telemetry`).
+### Step 9: Write `scripts/generate_all.sh`
 
-**Scenario prompts must use concrete values, not placeholders.** The scenario-specific
-prompts (in `data/scenarios/<name>/data/prompts/`) are uploaded to Cosmos DB and used
-by the API provisioner, which does NOT perform placeholder substitution. Use the actual
-graph name (e.g., `cloud-outage-topology`), not `{graph_name}`.
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "=== Generating <scenario-name> scenario data ==="
+python3 "$SCRIPT_DIR/generate_topology.py"
+python3 "$SCRIPT_DIR/generate_routing.py"
+python3 "$SCRIPT_DIR/generate_telemetry.py"
+python3 "$SCRIPT_DIR/generate_tickets.py"
+echo "=== Done ==="
+```
+
+### Step 10: Validation Checklist
+
+- [ ] Every `SourceNodeId` in AlertStream.csv exists as a vertex ID in some `Dim*.csv`
+- [ ] Every `SourceNodeType` in AlertStream.csv matches a vertex `label` in `graph_schema.yaml`
+- [ ] Every ID in `Fact*.csv` columns exists in the corresponding `Dim*.csv`
+- [ ] Every entity ID in tickets (root_cause, customer_impact) exists in `Dim*.csv`
+- [ ] Every `csv_file` in `graph_schema.yaml` actually exists in `data/entities/`
+- [ ] Every column in `graph_schema.yaml` `properties` exists in the CSV header
+- [ ] Every telemetry container in `scenario.yaml` has a corresponding CSV file
+- [ ] All three X-Graph prompt files reference the correct `<scenario>-topology` name
+- [ ] `generate_all.sh` is executable and runs without errors
+- [ ] Telemetry CSVs have zero null values in numeric columns
 
 ## References
 
@@ -189,8 +235,11 @@ Detailed patterns, formats, and examples are in the `references/` directory:
 
 | File | Contents |
 |------|----------|
-| `convention-contract.md` | The full convention contract with all invariants |
-| `topology-patterns.md` | Topology + routing script structure, ID conventions, CSV format |
-| `telemetry-patterns.md` | Alert cascade timeline, baseline generation, link telemetry, no-null rule |
-| `ticket-format.md` | Ticket `.txt` format, structured fields, entity ID cross-references |
-| `graph-schema-format.md` | Complete `graph_schema.yaml` specification with vertex/edge examples |
+| `convention-contract.md` | Full convention contract — all invariants |
+| `topology-patterns.md` | Topology + routing script structure, ID conventions, CSV format, scale guidelines |
+| `telemetry-patterns.md` | Alert cascade timeline, baseline generation, no-null rule, per-component metrics |
+| `ticket-format.md` | Ticket `.txt` format, structured fields, entity ID cross-references, diversity guidelines |
+| `graph-schema-format.md` | Complete `graph_schema.yaml` specification — vertices, edges, filters, bidirectional |
+| `scenario-yaml-format.md` | Complete `scenario.yaml` specification — Cosmos, search, styles, baselines |
+| `prompt-fragments.md` | Prompt file list, X-Graph header rule, concrete value requirements |
+| `complete-examples.md` | Full annotated generate_topology.py + generate_telemetry.py from reference scenarios |

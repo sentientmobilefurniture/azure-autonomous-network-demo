@@ -2,7 +2,7 @@
 
 > **Created:** 2026-02-15
 > **Last audited:** 2026-02-15 ✅ (all claims verified against source; 9 corrections applied)
-> **Status:** ⬜ Not Started
+> **Status:** ✅ Complete
 > **Goal:** Reduce codebase complexity by ~1,826 lines (~13.8%) through
 > dead code removal, pattern deduplication, and structural consolidation —
 > without altering any API contracts, UI behavior, or deployment topology.
@@ -24,21 +24,26 @@
 
 | Phase | Status | Scope |
 |-------|--------|-------|
-| **Phase 1:** Zero-risk cleanup | ⬜ Not started | `router_ingest.py`, `main.py`, `search_indexer.py`, `router_telemetry.py` |
-| **Phase 2:** Backend DRY refactoring | ⬜ Not started | New `cosmos_helpers.py`, `sse_helpers.py`; modify 5 routers + `config.py` + `orchestrator.py` |
-| **Phase 3:** Script consolidation | ⬜ Not started | `provision_agents.py`, `agent_provisioner.py`, `scenario_loader.py` |
-| **Phase 4:** Frontend componentisation | ⬜ Not started | `SettingsModal.tsx`, `AddScenarioModal.tsx`, new shared components |
-| **Phase 5:** Cross-service cleanup | ⬜ Not started | `api/app/main.py`, `graph-query-api/main.py`, `api/app/routers/logs.py` |
+| **Phase 1:** Zero-risk cleanup | ✅ Complete | `router_ingest.py`, `main.py`, `search_indexer.py`, `router_telemetry.py` |
+| **Phase 2:** Backend DRY refactoring | ✅ Complete | New `cosmos_helpers.py`, `sse_helpers.py`; modified 5 routers + `orchestrator.py` |
+| **Phase 3:** Script consolidation | ✅ Complete | `provision_agents.py` → thin CLI wrapper, `scenario_loader.py` deleted |
+| **Phase 4:** Frontend componentisation | ✅ Complete | `SettingsModal.tsx` UploadBox → `uploadWithSSE`, `ActionButton` extracted |
+| **Phase 5:** Cross-service cleanup | ✅ Complete | CORS defaults unified across `api/app/main.py` and `graph-query-api/main.py` |
 
 ### Deviations From Plan
 
 | # | Plan Said | What Was Done | Rationale |
 |---|-----------|---------------|-----------|
-| D-1 | — | — | — |
+| D-1 | Move CosmosClient singleton to `config.py` | Created `cosmos_helpers.py` instead | config.py is env-vars only; cosmos_helpers keeps data-plane logic separate |
+| D-2 | Extract `_ensure_nosql_containers` to cosmos_helpers | Left in `router_ingest.py` | Only used by ingest; calling `get_mgmt_client()` from cosmos_helpers suffices |
+| D-3 | Cache orchestrator_id via `@lru_cache` | Used mtime-based cache globals | Automatically refreshes when agent_ids.json is re-provisioned on disk |
 
 ### Extra Work Not In Plan
 
-- {None yet}
+- Removed unused `json`, `PartitionKey`, `CosmosHttpResponseError`, `EventSourceResponse` imports from `router_ingest.py`
+- Removed unused `os` import from `router_interactions.py` and `router_scenarios.py`
+- Added `_resolve_scenario_name()` helper to DRY scenario name resolution across upload endpoints
+- Added `allow_credentials=True` to graph-query-api CORS (was missing, NOC API had it)
 
 ---
 

@@ -89,6 +89,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -208,18 +209,9 @@ async def _log_sse_generator():
             _log_subscribers.discard(q)
 
 
-@app.get("/api/logs", summary="Stream logs via SSE")
+@app.get("/query/logs", summary="Stream graph-query-api logs via SSE")
 async def stream_logs():
-    return StreamingResponse(
-        _log_sse_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.get("/query/logs", summary="Stream graph-query-api logs via SSE (nginx-accessible)")
-async def stream_logs_query_route():
-    """Alias for /api/logs that's accessible through nginx's /query/* routing."""
+    """Stream graph-query-api logs via SSE (accessible through nginx's /query/* routing)."""
     return StreamingResponse(
         _log_sse_generator(),
         media_type="text/event-stream",

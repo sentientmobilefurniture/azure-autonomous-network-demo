@@ -19,12 +19,12 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from azure.cosmos import CosmosClient
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from config import COSMOS_NOSQL_ENDPOINT, get_credential
+from config import COSMOS_NOSQL_ENDPOINT
+from cosmos_helpers import get_or_create_container, get_mgmt_client
 
 logger = logging.getLogger("graph-query-api.prompts")
 
@@ -33,10 +33,8 @@ router = APIRouter(prefix="/query", tags=["prompts"])
 PROMPTS_DATABASE = "prompts"  # shared DB — pre-created by Bicep
 
 # ---------------------------------------------------------------------------
-# Cosmos helpers (lazy init, per-scenario cache)
+# Cosmos helpers (delegated to cosmos_helpers)
 # ---------------------------------------------------------------------------
-
-_containers: dict[str, object] = {}
 
 
 def _get_prompts_container(scenario: str, *, ensure_created: bool = False):
@@ -45,48 +43,10 @@ def _get_prompts_container(scenario: str, *, ensure_created: bool = False):
     Database: prompts (shared, pre-created by Bicep)
     Container: {scenario} (per-scenario, created on demand)
     Partition key: /agent
-
-    Args:
-        scenario: Scenario name (e.g. "telco-noc")
-        ensure_created: If True, create the container via ARM first.
-            Database creation is skipped — the shared "prompts" DB
-            pre-exists from Bicep. Only needed for write operations.
     """
-    if scenario in _containers:
-        return _containers[scenario]
-
-    if not COSMOS_NOSQL_ENDPOINT:
-        raise HTTPException(503, "COSMOS_NOSQL_ENDPOINT not configured")
-
-    if ensure_created:
-        # Create container via ARM (management plane)
-        # Database "prompts" already exists (Bicep) — skip DB creation
-        account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
-        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-        rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-
-        if sub_id and rg:
-            try:
-                from azure.mgmt.cosmosdb import CosmosDBManagementClient
-                from azure.identity import DefaultAzureCredential as _DC
-                mgmt = CosmosDBManagementClient(_DC(), sub_id)
-                try:
-                    mgmt.sql_resources.begin_create_update_sql_container(
-                        rg, account_name, PROMPTS_DATABASE, scenario,
-                        {"resource": {"id": scenario, "partitionKey": {"paths": ["/agent"], "kind": "Hash"}}},
-                    ).result()
-                except Exception:
-                    pass  # already exists
-            except Exception as e:
-                logger.warning("ARM prompts container creation failed: %s", e)
-
-    # Data-plane client for reads/writes
-    client = CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
-    db = client.get_database_client(PROMPTS_DATABASE)
-    container = db.get_container_client(scenario)
-    _containers[scenario] = container
-    logger.info("Prompts container ready: %s/%s", PROMPTS_DATABASE, scenario)
-    return container
+    return get_or_create_container(
+        PROMPTS_DATABASE, scenario, "/agent", ensure_created=ensure_created,
+    )
 
 
 def _list_prompt_scenarios() -> list[str]:
@@ -97,14 +57,11 @@ def _list_prompt_scenarios() -> list[str]:
     if not COSMOS_NOSQL_ENDPOINT:
         return []
     account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
-    sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
     rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-    if not sub_id or not rg:
+    if not rg:
         return []
     try:
-        from azure.mgmt.cosmosdb import CosmosDBManagementClient
-        from azure.identity import DefaultAzureCredential as _DC
-        mgmt = CosmosDBManagementClient(_DC(), sub_id)
+        mgmt = get_mgmt_client()
         containers = mgmt.sql_resources.list_sql_containers(rg, account_name, PROMPTS_DATABASE)
         return sorted(c.name for c in containers if c.name)
     except Exception as e:
