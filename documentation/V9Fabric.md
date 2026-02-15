@@ -1857,26 +1857,52 @@ onComplete: (data) => {
 - TelemetryAgent created with `OpenApiTool` containing KQL-documented `/query/telemetry` endpoint
 - `GRAPH_BACKEND=cosmosdb POST /api/config/apply` → still works identically (regression test)
 
-### Phase 5: Frontend — Backend Toggle & Fabric Tab
+### Phase 3.5: Fabric Provisioning API
 
-> Depends on Phase 1 (types) and Phase 3 (discovery endpoints).
+> Depends on Phase 3 (reuses Fabric REST helpers and discovery logic).
 
 **Files to create:**
-- `frontend/src/hooks/useFabric.ts` — Fabric discovery hook (~80 lines)
+- `api/app/routers/fabric_provision.py` — Provisioning + CSV upload endpoints (~300 lines)
+- `scripts/fabric/_provisioner.py` — Extracted shared provisioning logic (refactored from standalone scripts)
 
 **Files to modify:**
-- `frontend/src/context/ScenarioContext.tsx` — Add `activeBackendType`, Fabric state fields, localStorage persistence
-- `frontend/src/components/SettingsModal.tsx` — 4-tab layout, backend toggle, Fabric tab content
+- `api/app/main.py` — Register `fabric_provision_router`
+- `api/pyproject.toml` — Add `azure-storage-file-datalake`, `azure-kusto-data`, `azure-kusto-ingest`
+- `scripts/fabric/provision_lakehouse.py` — Refactor to import from `_provisioner.py` (thin CLI wrapper)
+- `scripts/fabric/provision_eventhouse.py` — Refactor to import from `_provisioner.py` (thin CLI wrapper)
+- `scripts/fabric/provision_ontology.py` — Refactor to import from `_provisioner.py` (thin CLI wrapper)
 
 **Verification:**
-- Open Settings → see backend radio buttons (CosmosDB selected by default)
-- Toggle to Fabric → Data Sources tab greys out, Fabric tab activates
-- Enter workspace ID → ontologies and eventhouses populate after 500ms
-- Select ontology → "Load Topology" button works
-- Click "Provision Agents" → SSE stream completes
-- Refresh page → backend toggle persists (localStorage)
-- Toggle back to CosmosDB → Fabric tab greys out, Data Sources tab works
-- **All existing Scenarios/Upload functionality unchanged**
+- `POST /api/fabric/provision { capacity_id: "..." }` → SSE stream completes all 8 steps, `azure_config.env` updated
+- `POST /api/fabric/upload-lakehouse` with CSV files → tables created in Lakehouse
+- `POST /api/fabric/upload-eventhouse` with CSV files → data ingested into KQL tables
+- Standalone scripts still work: `uv run provision_lakehouse.py` → same result as before refactor
+- Missing capacity ID → 400 error with helpful message
+
+### Phase 5: Frontend — Adaptive Backend UI
+
+> Depends on Phase 1 (types), Phase 3 (discovery endpoints), and Phase 3.5 (provisioning endpoints).
+
+**Files to create:**
+- `frontend/src/hooks/useFabric.ts` — Fabric discovery + provisioning hook (~120 lines)
+
+**Files to modify:**
+- `frontend/src/context/ScenarioContext.tsx` — Add `activeBackendType`, Fabric state fields, `fabricCapacityId`, localStorage persistence
+- `frontend/src/components/SettingsModal.tsx` — Context-adaptive tab layout, backend dropdown, Fabric Setup tab, adaptive Upload tab
+- `frontend/src/components/AddScenarioModal.tsx` — Backend-aware upload slot definitions (COSMOS_SLOTS vs FABRIC_SLOTS), multi-file CSV support for Fabric graph/telemetry slots
+
+**Verification:**
+- Open Settings → backend dropdown shows "CosmosDB" (default)
+- Switch to "Fabric" → tab bar changes to `[Scenarios] [Fabric Setup] [Upload]`
+- **No greyed-out tabs** — only relevant tabs are shown
+- Fabric Setup tab: capacity/workspace inputs, provision button, ontology/eventhouse dropdowns
+- Add Scenario (with Fabric selected) → modal shows Lakehouse CSV + Eventhouse CSV slots instead of .tar.gz
+- Drag CSV files into Lakehouse slot → upload with progress, delta tables created
+- Upload tab (Fabric) → shows Lakehouse/Eventhouse CSV upload boxes
+- Switch back to CosmosDB → tab bar restores to `[Scenarios] [Data Sources] [Upload]`
+- CosmosDB Add Scenario → original 5-slot .tar.gz upload (unchanged)
+- Refresh page → backend selection persists (localStorage)
+- **All existing CosmosDB functionality unchanged**
 
 ### Phase 6: End-to-End Integration Testing
 
@@ -1901,12 +1927,20 @@ onComplete: (data) => {
 | `graph-query-api/pyproject.toml` | MODIFY | 2 | Add `httpx>=0.27.0` dependency |
 | `frontend/nginx.conf.template` | MODIFY | 3 | Add `/query/` reverse-proxy location block (currently missing — blocks prod `/query/*` calls) |
 | `graph-query-api/router_fabric.py` | **CREATE** | 3 | Discovery endpoints: ontologies, eventhouses (~120 lines) |
+| `api/app/routers/fabric_provision.py` | **CREATE** | 3.5 | Provisioning + CSV upload SSE endpoints (~300 lines) |
+| `scripts/fabric/_provisioner.py` | **CREATE** | 3.5 | Shared provisioning logic extracted from standalone scripts |
+| `scripts/fabric/provision_lakehouse.py` | MODIFY | 3.5 | Refactor to thin CLI wrapper importing from `_provisioner.py` |
+| `scripts/fabric/provision_eventhouse.py` | MODIFY | 3.5 | Refactor to thin CLI wrapper importing from `_provisioner.py` |
+| `scripts/fabric/provision_ontology.py` | MODIFY | 3.5 | Refactor to thin CLI wrapper importing from `_provisioner.py` |
+| `api/app/main.py` | MODIFY | 3.5 | Register `fabric_provision_router` |
+| `api/pyproject.toml` | MODIFY | 3.5 | Add `azure-storage-file-datalake`, `azure-kusto-data`, `azure-kusto-ingest` |
 | `graph-query-api/openapi/fabric.yaml` | **CREATE** | 4 | OpenAPI spec for GQL + KQL (~160 lines) |
 | `scripts/agent_provisioner.py` | MODIFY | 4 | Add `"fabric"` to `OPENAPI_SPEC_MAP`, `GRAPH_TOOL_DESCRIPTIONS` |
 | `api/app/routers/config.py` | MODIFY | 4 | Add Fabric fields to `ConfigApplyRequest`, pass `backend_type` to provisioner |
-| `frontend/src/hooks/useFabric.ts` | **CREATE** | 5 | Fabric discovery hook (~80 lines) |
-| `frontend/src/context/ScenarioContext.tsx` | MODIFY | 5 | Add `activeBackendType`, Fabric state, localStorage |
-| `frontend/src/components/SettingsModal.tsx` | MODIFY | 5 | 4-tab layout, backend toggle, Fabric tab content |
+| `frontend/src/hooks/useFabric.ts` | **CREATE** | 5 | Fabric discovery + provisioning hook (~120 lines) |
+| `frontend/src/context/ScenarioContext.tsx` | MODIFY | 5 | Add `activeBackendType`, Fabric state, `fabricCapacityId`, localStorage |
+| `frontend/src/components/SettingsModal.tsx` | MODIFY | 5 | Context-adaptive tab layout, backend dropdown, Fabric Setup tab, adaptive Upload tab |
+| `frontend/src/components/AddScenarioModal.tsx` | MODIFY | 5 | Backend-aware upload slots (COSMOS_SLOTS / FABRIC_SLOTS), multi-file CSV support |
 
 ### Files NOT Changed
 
@@ -1919,8 +1953,6 @@ onComplete: (data) => {
 - `graph-query-api/openapi/mock.yaml` — Unchanged
 - `frontend/src/hooks/useScenarios.ts` — Scenarios are backend-agnostic metadata; no changes needed
 - `frontend/src/hooks/useTopology.ts` — Topology hook uses `getQueryHeaders()` which already includes `X-Graph`; works with Fabric backend automatically
-- `frontend/src/components/AddScenarioModal.tsx` — Scenario creation is independent of backend type
-- `fabric_implementation_references/scripts/fabric/` (reference provisioning scripts) — Not ported in v9; these handle Fabric resource provisioning (lakehouse, eventhouse, ontology creation) which is done manually per requirement 1
 
 ---
 
@@ -1956,32 +1988,48 @@ onComplete: (data) => {
 
 **Scope:** In scope (Phase 2) — core implementation concern.
 
+### ~~Gap 4~~ → Resolved: AddScenarioModal not adapted for Fabric
+
+**Original gap:** The plan excluded `AddScenarioModal.tsx` from changes, stating "Scenario creation is independent of backend type." This was incorrect — Fabric data (Lakehouse CSVs, Eventhouse CSVs) uses different formats and upload endpoints than CosmosDB (.tar.gz archives).
+
+**Resolution:** AddScenarioModal now adapts upload slots based on `activeBackendType` (see Item 5). `COSMOS_SLOTS` vs `FABRIC_SLOTS` provide different endpoint, accept, and hint configurations. Shared slots (runbooks, tickets, prompts) remain unchanged.
+
+### ~~Gap 5~~ → Resolved: No Fabric provisioning from UI
+
+**Original gap:** Plan said provisioning scripts "handle Fabric resource provisioning which is done manually per requirement 1."
+
+**Resolution:** New Phase 3.5 wraps provisioning scripts as SSE-streamed API endpoints. One-click "Provision Fabric Resources" button on Fabric Setup tab (see Item 3.5 and Decision 6).
+
 ---
 
 ## UX Priority Matrix
 
 | Priority | Enhancement | Item | Effort | Impact |
 |----------|------------|------|--------|--------|
-| **P0** | Backend toggle (radio buttons) | 5 | Small | High — core requirement |
-| **P0** | 4-tab layout with greying | 5 | Small | High — core requirement |
+| **P0** | Backend dropdown (context-adaptive) | 5 | Small | High — core requirement |
+| **P0** | Context-adaptive tab layout (no greyed tabs) | 5 | Small | High — clean UX, better than greyed tabs |
 | **P0** | Workspace ID input | 5 | Tiny | High — foundation for Fabric |
 | **P0** | Ontology dropdown (from discovery) | 5 | Small | High — requirement 2, 3 |
 | **P0** | Eventhouse dropdown (from discovery) | 5 | Small | High — requirement 4 |
 | **P0** | Provision Agents with Fabric config | 5 | Medium | High — requirement 6 |
+| **P0** | Adaptive AddScenarioModal (CSV slots for Fabric) | 5 | Medium | High — requirement 10 |
+| **P0** | Adaptive Upload tab (Lakehouse/Eventhouse CSVs) | 5 | Small | High — requirement 11 |
+| **P0** | One-click Fabric provisioning (SSE) | 3.5 | Medium | High — requirement 12 |
 | **P1** | Auto-fetch on workspace ID entry | 5a | Tiny | Medium — reduces clicks |
 | **P1** | Loading spinner during discovery | 5b | Tiny | Medium — feedback |
-| **P1** | Auto-tab-switch on backend toggle | 5c | Tiny | Medium — reduces confusion |
-| **P2** | Prompt set selector in Fabric tab | 5 | Small | Medium — completeness |
+| **P1** | Backend dropdown auto-tab-switch | 5c | Tiny | Medium — already built into adaptive layout |
+| **P1** | Post-provisioning auto-populate dropdowns | 5d | Tiny | Medium — seamless flow |
+| **P1** | Prompt set selector in Fabric Setup tab | 5 | Small | Medium — completeness |
 | **P2** | Fabric connection status indicator | 5 | Small | Medium — confidence |
 | **P3** | KQL telemetry queries via UI | Gap 1 | Large | Low — agents handle it |
-| **Backlog** | Fabric resource provisioning from UI | — | Large | Low — manual per req 1 |
 
 ### Implementation Notes
 
-- **P0 items** are requirements from the original spec. Must be in the same PR as Phase 5.
-- **P1 items** are small polish (~5 lines each) that should be included in Phase 5.
+- **P0 items** are core requirements. Must all be in the same PR as Phases 3.5 + 5.
+- **P1 items** are small polish (~5 lines each) that should be included in Phase 5 — they're cheap and greatly improve the flow.
 - **P2 items** can be separate small PRs after the core Fabric feature lands.
-- **P3/Backlog items** are separate work streams.
+- **P3 items** are separate work streams.
+- The old "Backlog: Fabric resource provisioning from UI" is now **P0** via Phase 3.5.
 
 ---
 
@@ -2013,6 +2061,18 @@ onComplete: (data) => {
 
 **Invalid workspace ID format:** Fabric API returns `404` for malformed UUIDs. Endpoint propagates as 404.
 
+### Fabric Provisioning API (Item 3.5)
+
+**Capacity not found:** If `capacity_id` is invalid or the user lacks permissions, workspace creation fails at step 1. SSE stream emits `event: error` with a clear message ("Capacity not found or access denied"). Frontend shows error inline.
+
+**Partial provisioning failure:** If provisioning fails mid-pipeline (e.g., Lakehouse created but Eventhouse creation fails), the SSE stream reports which steps succeeded and where it failed. The next provisioning attempt should detect existing resources (idempotency) — the reference scripts' `create_or_find_*` patterns support this.
+
+**Long-running operations:** Fabric workspace and Lakehouse creation use long-running operations (LRO) with `202 Accepted` + operation polling. The `_wait_for_lro()` pattern from the reference scripts handles this with configurable timeout (default 300s). SSE progress events continue streaming during the poll wait.
+
+**CSV file validation:** `upload-lakehouse` and `upload-eventhouse` endpoints should validate that uploaded CSVs match expected table schemas before attempting delta table creation or KQL ingestion. Return clear error if CSV columns don't match.
+
+**Concurrent provisioning:** If two users trigger provisioning simultaneously, Fabric API may reject the second request (workspace name conflict). Surface the Fabric API error message directly.
+
 ### Agent Provisioner (Item 4)
 
 **Fabric OpenAPI spec not found:** If `openapi/fabric.yaml` is missing, `_load_openapi_spec()` will raise `FileNotFoundError`. The `OPENAPI_SPEC_MAP` must point to the correct path.
@@ -2021,11 +2081,17 @@ onComplete: (data) => {
 
 ### Frontend (Item 5)
 
-**Stale localStorage:** If a user's localStorage has `activeBackendType: "fabric"` but the backend doesn't support it (app redeployed without Fabric), the frontend will attempt to load the Fabric tab. The Fabric discovery calls will fail gracefully (error state), and the user can toggle back to CosmosDB.
+**Stale localStorage:** If a user's localStorage has `activeBackendType: "fabric"` but the backend doesn't support it (app redeployed without Fabric), the frontend will attempt to show Fabric Setup tab. The Fabric discovery calls will fail gracefully (error state), and the user can switch back to CosmosDB via the dropdown.
 
-**Concurrent backend toggle:** If user rapidly toggles between backends, the last toggle wins (React state batching). No race condition.
+**Concurrent backend toggle:** If user rapidly toggles between backends, the last toggle wins (React state batching). No race condition. Tab bar re-renders cleanly because it's driven by `visibleTabs` which is a pure function of `activeBackendType`.
 
 **Workspace ID formatting:** UUIDs are 36 characters. The auto-fetch debounce checks `length === 36` before firing. Partial UUIDs don't trigger unnecessary API calls.
+
+**AddScenarioModal backend mismatch:** If `activeBackendType` changes while AddScenarioModal is open, the slot definitions change. `useEffect` on `open` resets all slots, so re-opening the modal always reflects the current backend. If the modal is already open and backend changes externally (unlikely UX path), the modal should detect the change and reset slots with a warning.
+
+**Multi-file CSV upload in Fabric mode:** The Lakehouse and Eventhouse slots accept multiple CSV files. The upload endpoint receives all files as `FormData` with `files[]` field. If one file fails validation (wrong schema), the endpoint rejects the entire batch — user must fix and retry. Individual file progress is tracked within the SSE stream.
+
+**Tab persistence across backend switch:** When switching from Fabric to CosmosDB, if the active tab was `fabricsetup`, it auto-switches to `datasources`. If the active tab was `scenarios` or `upload` (shared tabs), it stays on that tab. No jarring navigation.
 
 ---
 
@@ -2042,18 +2108,21 @@ All API changes are **additive**:
 - New optional fields on `ScenarioContext` — all default to `None`, no breakage
 - New optional fields on `ConfigApplyRequest` — Pydantic models with defaults
 - New router `/query/fabric/*` — new endpoints, no conflict with existing
+- New router `/api/fabric/*` — provisioning + upload endpoints, no conflict with existing
 - New OpenAPI spec `fabric.yaml` — separate file, no change to existing specs
 
 ### Gradual Adoption
 
 1. **Phase 1-3 can deploy without frontend changes** — backend supports Fabric but UI doesn't expose it. Users can set `GRAPH_BACKEND=fabric` in env var for testing.
-2. **Phase 5 enables UI toggle** — users can switch at runtime. CosmosDB remains the default.
-3. **No forced migration** — `GRAPH_BACKEND=cosmosdb` continues to work exactly as before.
+2. **Phase 3.5 enables provisioning via API** — can be tested via curl/Postman before UI is ready.
+3. **Phase 5 enables full UI** — users can switch backends, provision Fabric resources, and upload data all from the UI. CosmosDB remains the default.
+4. **No forced migration** — `GRAPH_BACKEND=cosmosdb` continues to work exactly as before.
 
 ### Rollback Plan
 
-- Remove `FABRIC` from `GraphBackendType` enum and delete `backends/fabric.py`, `router_fabric.py`, `openapi/fabric.yaml`
+- Remove `FABRIC` from `GraphBackendType` enum and delete `backends/fabric.py`, `router_fabric.py`, `fabric_provision.py`, `openapi/fabric.yaml`
 - Remove Fabric fields from `ScenarioContext` and `ConfigApplyRequest`
-- Revert `SettingsModal.tsx` to 3-tab layout
+- Revert `SettingsModal.tsx` and `AddScenarioModal.tsx` to pre-Fabric state (remove adaptive slot logic)
 - No data cleanup needed — Fabric stores nothing in CosmosDB
-- **Feature flag alternative:** Instead of enum, add `FABRIC_ENABLED=true/false` env var that gates the Fabric code paths. Simpler rollback without code removal.
+- Standalone provisioning scripts (`scripts/fabric/`) remain functional regardless of rollback
+- **Feature flag alternative:** Instead of enum, add `FABRIC_ENABLED=true/false` env var that gates the Fabric code paths. Simpler rollback without code removal. Frontend hides the backend dropdown when `FABRIC_ENABLED=false`.

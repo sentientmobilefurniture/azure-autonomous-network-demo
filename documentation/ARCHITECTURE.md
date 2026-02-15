@@ -156,9 +156,9 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin)
 │   ├── router_telemetry.py     # POST /query/telemetry (per-scenario NoSQL)
 │   ├── router_topology.py      # POST /query/topology (graph visualization)
-│   ├── router_ingest.py        # Upload endpoints + scenario/index listing (~852 lines)
+│   ├── router_ingest.py        # Upload endpoints + scenario/index listing (~871 lines)
 │   ├── router_prompts.py       # Prompts CRUD in Cosmos (~288 lines)
-│   ├── router_scenarios.py     # Scenario metadata CRUD in Cosmos (~212 lines)
+│   ├── router_scenarios.py     # Scenario metadata CRUD in Cosmos (~220 lines)
 │   ├── router_interactions.py  # Interaction history CRUD (~146 lines)
 │   ├── sse_helpers.py          # SSE upload lifecycle helper (~87 lines)
 │   ├── search_indexer.py       # AI Search indexer pipeline creation
@@ -177,31 +177,34 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │   ├── vite.config.ts          # Dev proxy: /api→:8000, /query→:8100, /health→:8000
 │   └── src/
 │       ├── main.tsx            # Wraps App in ScenarioProvider
-│       ├── App.tsx             # 3-zone layout (useInvestigation hook)
-│       ├── types/index.ts      # Shared TypeScript interfaces (StepEvent, SavedScenario, etc.)
+│       ├── App.tsx             # Tab bar + 3-zone layout (useInvestigation hook, ~187 lines)
+│       ├── types/index.ts      # Shared TypeScript interfaces (StepEvent, SavedScenario, etc., ~77 lines)
 │       ├── styles/globals.css  # CSS variables, dark theme, Tailwind imports (159 lines)
 │       ├── context/
 │       │   └── ScenarioContext.tsx  # Full scenario state: activeScenario, bindings,
 │       │                           # provisioningStatus, localStorage persistence,
-│       │                           # auto-derivation (105 lines)
+│       │                           # auto-derivation, scenarioNodeColors/Sizes (~159 lines)
 │       ├── hooks/
 │       │   ├── useInvestigation.ts  # SSE alert investigation (POST, sends X-Graph)
 │       │   ├── useTopology.ts       # Topology fetch (POST, sends X-Graph, auto-refetch)
-│       │   └── useScenarios.ts      # Graph/index discovery + saved scenario CRUD +
-│       │                            # selectScenario with auto-provisioning (180 lines)
+│       │   ├── useScenarios.ts      # Graph/index discovery + saved scenario CRUD +
+│       │   │                        # selectScenario with auto-provisioning (~192 lines)
+│       │   └── useNodeColor.ts      # Centralised node color resolution hook (~42 lines)
 │       ├── utils/
 │       │   └── sseStream.ts         # Shared consumeSSE() + uploadWithSSE() utilities (143 lines)
 │       └── components/
 │           ├── Header.tsx           # Title bar + ScenarioChip + ProvisioningBanner + HealthDot + ⚙
 │           ├── ScenarioChip.tsx     # Header scenario selector chip + flyout dropdown (154 lines)
 │           ├── ProvisioningBanner.tsx # Non-blocking 28px banner during agent provisioning (102 lines)
-│           ├── AddScenarioModal.tsx  # Scenario creation: name + 5 slot file upload + auto-detect (621 lines)
+│           ├── TabBar.tsx            # Investigate / Scenario Info tab bar (~31 lines)
+│           ├── ScenarioInfoPanel.tsx # Scenario detail view: use cases + example questions (~89 lines)
+│           ├── AddScenarioModal.tsx  # Scenario creation: name + 5 slot file upload + auto-detect (~682 lines)
 │           ├── HealthDot.tsx        # Polls /health every 15s
 │           ├── SettingsModal.tsx     # 3 tabs: Scenarios + Data Sources + Upload (~673 lines)
 │           ├── ActionButton.tsx      # Extracted reusable action button with status state machine (~53 lines)
 │           ├── TabbedLogStream.tsx   # Tabbed log stream viewer (~48 lines)
 │           ├── MetricsBar.tsx       # Resizable panel: topology viewer + log stream
-│           ├── GraphTopologyViewer.tsx  # Owns all overlay state, delegates to graph/*
+│           ├── GraphTopologyViewer.tsx  # Owns all overlay state, delegates to graph/* (~214 lines)
 │           ├── InvestigationPanel.tsx   # Alert input + agent timeline
 │           ├── DiagnosisPanel.tsx    # Final markdown report (ReactMarkdown)
 │           ├── AlertInput.tsx       # Textarea + submit button
@@ -211,9 +214,9 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │           ├── ErrorBanner.tsx      # Error display
 │           ├── LogStream.tsx        # SSE log viewer (EventSource → /api/logs)
 │           └── graph/
-│               ├── GraphCanvas.tsx      # ForceGraph2D wrapper (forwardRef, canvas rendering)
-│               ├── GraphToolbar.tsx     # Label filters, search, zoom controls
-│               ├── GraphTooltip.tsx     # Hover tooltip (framer-motion)
+│               ├── GraphCanvas.tsx      # ForceGraph2D wrapper (forwardRef, canvas rendering, ~184 lines)
+│               ├── GraphToolbar.tsx     # Label filters, search, zoom controls (~102 lines)
+│               ├── GraphTooltip.tsx     # Hover tooltip (framer-motion, ~80 lines)
 │               ├── GraphContextMenu.tsx # Right-click: display field + color picker
 │               └── graphConstants.ts    # NODE_COLORS and NODE_SIZES by vertex label
 │
@@ -587,6 +590,12 @@ Uses raw `ReadableStream` parsing of `data:` lines (not named events).
 | `{graph: string, ...}` or `{database: string, ...}` or `{index: string, ...}` | Completion result |
 | `{error: string}` | Error (pct = -1 internally) |
 
+**Graph upload completion** includes `scenario_metadata` dict (display_name, description,
+use_cases, example_questions, graph_styles, domain) extracted from `scenario.yaml` during
+upload. The frontend captures this metadata via `onComplete` and forwards it to the
+`saveScenario()` call, allowing scenario metadata to flow from data pack → upload → save
+without a separate entry step.
+
 Server-side event types: `progress`, `complete`, `error`.
 
 ### Agent Provisioning SSE (`POST /api/config/apply`)
@@ -807,13 +816,20 @@ in the V8 refactor). Also imports `close_cosmos_client` for shutdown cleanup.
 
 ### `graph-query-api/router_ingest.py` — Upload + Listing Endpoints
 
-**IMPORTANT CODE ORGANIZATION (post-V8 refactor, ~852 lines):**
+**IMPORTANT CODE ORGANIZATION (post-V8 refactor, ~871 lines):**
 - Lines ~1-30: imports (includes `SSEProgress`, `sse_upload_response` from `sse_helpers`, `get_cosmos_client` from `cosmos_helpers`)
 - Lines ~30-100: helpers (`_gremlin_client`, `_gremlin_submit`, `_read_csv`, `_ensure_gremlin_graph`, `_extract_tar`, `_resolve_scenario_name`)
 - Lines ~100-200: listing endpoints (`GET /query/scenarios`, `DELETE /query/scenario/{name}`, `GET /query/indexes`)
 - Lines ~200-560: per-type upload endpoints (`upload_graph`, `upload_telemetry`)
 - Lines ~560-700: shared `_upload_knowledge_files()` helper + `upload_runbooks`/`upload_tickets` endpoints
-- Lines ~700-852: `upload_prompts` endpoint
+- Lines ~700-871: `upload_prompts` endpoint
+
+**Scenario metadata extraction** (added in minorQOL): During graph upload, after parsing
+`scenario.yaml`, the handler extracts `scenario_metadata` dict containing `display_name`,
+`description`, `use_cases`, `example_questions`, `graph_styles`, and `domain` from the
+manifest. This metadata is included in the SSE `complete` event payload alongside the
+standard graph upload results (vertex/edge counts), allowing the frontend to capture
+scenario metadata without a separate API call.
 
 All 5 upload endpoints use `sse_upload_response()` from `sse_helpers.py` instead of
 inline SSE dispatch scaffolds. Runbooks and tickets share `_upload_knowledge_files()`
@@ -929,7 +945,16 @@ references to graphs, indexes, and databases.
     "runbooks": { "status": "complete", "timestamp": "...", "index": "cloud-outage-runbooks-index" },
     "tickets": { "status": "complete", "timestamp": "...", "index": "cloud-outage-tickets-index" },
     "prompts": { "status": "complete", "timestamp": "...", "prompt_count": 6 }
-  }
+  },
+  "use_cases": ["Monitor fibre degradation in metro rings", "..."],
+  "example_questions": ["What is the root cause of the outage?", "..."],
+  "graph_styles": {
+    "node_types": {
+      "CoreRouter": { "color": "#E74C3C", "size": 12 },
+      "AggSwitch": { "color": "#3498DB", "size": 10 }
+    }
+  },
+  "domain": "telecommunications"
 }
 ```
 
@@ -1035,7 +1060,7 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
 
 ```
 <React.StrictMode>
-  <ScenarioProvider>                    ← Global context (scenario + provisioning state)
+  <ScenarioProvider>                    ← Global context (scenario + provisioning state + graph styles)
     <App>                               ← useInvestigation() hook
       ├── <Header>                      ← Fixed 48px top bar
       │   ├── <ScenarioChip>            ← Flyout dropdown: scenario switching + "+ New Scenario"
@@ -1043,22 +1068,29 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
       │   ├── Dynamic agent status      ← "5 Agents ✓" / "Provisioning..." / "Not configured"
       │   └── <SettingsModal>           ← useScenarios(), useScenarioContext()
       ├── <ProvisioningBanner>          ← Non-blocking 28px banner during agent provisioning
-      ├── <MetricsBar>                  ← Vertically resizable panel (default 30%)
-      │   ├── <GraphTopologyViewer>     ← useTopology(), owns overlay state
-      │   │   ├── <GraphToolbar>
-      │   │   ├── <GraphCanvas>         ← ForceGraph2D wrapper (forwardRef)
-      │   │   ├── <GraphTooltip>        ← Hover tooltip (framer-motion)
-      │   │   └── <GraphContextMenu>    ← Right-click menu
-      │   └── <TabbedLogStream>             ← Tabs: "API" (/api/logs) + "Graph API" (/query/logs)
-      │       └── <LogStream> (×2)          ← Both kept mounted for SSE continuity
-      ├── <InvestigationPanel>
-      │   ├── <AlertInput>              ← Textarea + submit button
-      │   ├── <AgentTimeline>
-      │   │   ├── <StepCard> (×n)
-      │   │   └── <ThinkingDots>
-      │   └── <ErrorBanner>
-      ├── <DiagnosisPanel>              ← ReactMarkdown rendering
-      └── <AddScenarioModal>            ← Opened from ScenarioChip or SettingsModal
+      ├── <TabBar>                      ← "▸ Investigate" | "ℹ Scenario Info" tabs
+      │
+      ├── [activeTab === 'investigate']
+      │   ├── <MetricsBar>                  ← Vertically resizable panel (default 30%)
+      │   │   ├── <GraphTopologyViewer>     ← useTopology(), owns overlay state
+      │   │   │   ├── <GraphToolbar>        ← +nodeColorOverride prop → useNodeColor()
+      │   │   │   ├── <GraphCanvas>         ← useNodeColor() + scenario-driven sizes
+      │   │   │   ├── <GraphTooltip>        ← +nodeColorOverride prop → useNodeColor()
+      │   │   │   └── <GraphContextMenu>    ← Right-click menu
+      │   │   └── <TabbedLogStream>             ← Tabs: "API" (/api/logs) + "Graph API" (/query/logs)
+      │   │       └── <LogStream> (×2)          ← Both kept mounted for SSE continuity
+      │   ├── <InvestigationPanel>
+      │   │   ├── <AlertInput>              ← Textarea + submit button
+      │   │   ├── <AgentTimeline>
+      │   │   │   ├── <StepCard> (×n)
+      │   │   │   └── <ThinkingDots>
+      │   │   └── <ErrorBanner>
+      │   ├── <DiagnosisPanel>              ← ReactMarkdown rendering
+      │   └── <AddScenarioModal>            ← Opened from ScenarioChip or SettingsModal
+      │
+      └── [activeTab === 'info']
+          └── <ScenarioInfoPanel>           ← Scenario description, use cases, example questions
+              └── onClick(question) → setAlert(q), switch to 'investigate' tab
 ```
 
 Layout uses `react-resizable-panels` with vertical orientation: MetricsBar (30%) | InvestigationPanel + DiagnosisPanel (70% side-by-side).
@@ -1080,12 +1112,15 @@ interface ScenarioState {
   activeTicketsIndex: string;       // default: "tickets-index"
   activePromptSet: string;          // Prompt scenario name (default: "")
   provisioningStatus: ProvisioningStatus; // Agent provisioning state
+  scenarioNodeColors: Record<string, string>;  // Graph style: node label → hex color
+  scenarioNodeSizes: Record<string, number>;   // Graph style: node label → size
   setActiveScenario(name: string | null): void; // Auto-derives all bindings when non-null
   setActiveGraph(g: string): void;
   setActiveRunbooksIndex(i: string): void;
   setActiveTicketsIndex(i: string): void;
   setActivePromptSet(name: string): void;
   setProvisioningStatus(status: ProvisioningStatus): void;
+  setScenarioStyles(styles: { node_types?: Record<string, { color: string; size: number }> } | null): void;
   getQueryHeaders(): Record<string, string>;  // { "X-Graph": activeGraph }
 }
 ```
@@ -1101,7 +1136,9 @@ interface ScenarioState {
 `localStorage` on mount. On page refresh, all bindings are re-derived from the
 persisted scenario name. This does NOT re-trigger agent provisioning — agents are
 long-lived in AI Foundry. It only restores frontend state so `X-Graph` headers
-and UI indicators are correct.
+and UI indicators are correct. Scenario graph styles (`scenarioNodeColors`, `scenarioNodeSizes`)
+are NOT persisted to localStorage — they are re-populated from saved scenario data when
+`selectScenario()` runs.
 
 `getQueryHeaders()` is memoized on `activeGraph`. It's consumed by `useInvestigation` and `useTopology`.
 
@@ -1154,6 +1191,12 @@ interface SavedScenario {
     timestamp: string;
     [key: string]: unknown;       // vertices, edges, containers, etc.
   }>;
+  graph_styles?: {                // Scenario-driven graph visualization styles
+    node_types?: Record<string, { color: string; size: number; icon?: string }>;
+  };
+  use_cases?: string[];           // Scenario use case descriptions
+  example_questions?: string[];   // Clickable example investigation prompts
+  domain?: string;                // Scenario domain (e.g. "telecommunications")
 }
 
 type SlotKey = 'graph' | 'telemetry' | 'runbooks' | 'tickets' | 'prompts';
@@ -1221,12 +1264,14 @@ interface SearchIndex {
 |------|---------|---------------|
 | `useInvestigation()` | `{alert, setAlert, steps, thinking, finalMessage, errorMessage, running, runStarted, runMeta, submitAlert}` | Aborts prior SSE stream; 5min auto-abort timeout; uses refs for step counter (closure capture issue); injects `X-Graph` header |
 | `useTopology()` | `{data, loading, error, refetch}` | Auto-refetches when `getQueryHeaders` changes (activeGraph change triggers `useEffect`); aborts prior in-flight request |
-| `useScenarios()` | `{scenarios, indexes, savedScenarios, loading, error, fetchScenarios, fetchIndexes, fetchSavedScenarios, saveScenario, deleteSavedScenario, selectScenario}` | `fetchScenarios()` → GET `/query/scenarios`; `fetchIndexes()` → GET `/query/indexes` (failure non-fatal); `fetchSavedScenarios()` → GET `/query/scenarios/saved`; `selectScenario(name)` → auto-provisions agents via `consumeSSE` + updates `provisioningStatus` |
+| `useScenarios()` | `{scenarios, indexes, savedScenarios, loading, error, fetchScenarios, fetchIndexes, fetchSavedScenarios, saveScenario, deleteSavedScenario, selectScenario}` | `fetchScenarios()` → GET `/query/scenarios`; `fetchIndexes()` → GET `/query/indexes` (failure non-fatal); `fetchSavedScenarios()` → GET `/query/scenarios/saved`; `selectScenario(name)` → auto-provisions agents via `consumeSSE` + updates `provisioningStatus` + pushes `graph_styles` into context |
+| `useNodeColor(nodeColorOverride)` | `(label: string) => string` | Centralised color resolution hook — 4-tier fallback: `nodeColorOverride → scenarioNodeColors → NODE_COLORS → autoColor`. Uses a 12-color auto-palette with stable string hash for unknown labels |
 
 **`selectScenario(name)` flow** (in `useScenarios`):
 1. Calls `setActiveScenario(name)` → auto-derives all bindings
-2. Sets `provisioningStatus` to `{ state: 'provisioning', step: 'Starting...', scenarioName: name }`
-3. POSTs to `/api/config/apply` with `{graph, runbooks_index, tickets_index, prompt_scenario}`
+2. Looks up saved scenario's `graph_styles` and calls `setScenarioStyles()` to push colors/sizes into context
+3. Sets `provisioningStatus` to `{ state: 'provisioning', step: 'Starting...', scenarioName: name }`
+4. POSTs to `/api/config/apply` with `{graph, runbooks_index, tickets_index, prompt_scenario}`
 4. Consumes SSE stream via shared `consumeSSE()` utility from `utils/sseStream.ts`
 5. Updates `provisioningStatus.step` on each progress event
 6. On complete: sets `provisioningStatus` to `{ state: 'done', scenarioName: name }`
@@ -1297,11 +1342,27 @@ upload/provisioning). Uses `aria-modal="true"` and `role="dialog"` attributes.
 
 | Component | Role |
 |-----------|------|
-| `GraphCanvas` | `forwardRef` wrapper around `react-force-graph-2d`. Custom canvas rendering for nodes (colored circles + labels) and edges (mid-point labels). Exposes `zoomToFit()` via `useImperativeHandle`. |
-| `GraphToolbar` | Label filter chips, node search input, node/edge counts, zoom-to-fit + refresh buttons |
-| `GraphTooltip` | Fixed-position tooltip on hover. Uses `framer-motion`. Handles `source`/`target` as both string (before hydration) and object (after). |
+| `GraphCanvas` | `forwardRef` wrapper around `react-force-graph-2d`. Uses `useNodeColor()` hook for color resolution (replaces direct `NODE_COLORS` lookup). Scenario-driven node sizes via `scenarioNodeSizes` from context (normalised by `/3`). Exposes `zoomToFit()` via `useImperativeHandle`. |
+| `GraphToolbar` | Label filter chips, node search input, node/edge counts, zoom-to-fit + refresh buttons. Accepts `nodeColorOverride` prop; uses `useNodeColor()` for chip dot colors |
+| `GraphTooltip` | Fixed-position tooltip on hover. Uses `framer-motion`. Accepts `nodeColorOverride` prop; uses `useNodeColor()` for dot color. Handles `source`/`target` as both string (before hydration) and object (after). |
 | `GraphContextMenu` | Right-click menu: change display field (pick any property as label), change color (12-color palette). Persisted to `localStorage` keys `graph-display-fields` and `graph-colors`. |
-| `graphConstants.ts` | `NODE_COLORS` and `NODE_SIZES` maps keyed by vertex label |
+| `graphConstants.ts` | `NODE_COLORS` and `NODE_SIZES` maps keyed by vertex label (static defaults; overridden by scenario-driven values when available) |
+
+**Node color resolution** (via `useNodeColor` hook, ~42 lines):
+
+The `useNodeColor(nodeColorOverride)` hook provides a single source of truth for all
+graph node colors with a 4-tier fallback chain:
+
+```
+1. nodeColorOverride[label]    ← User right-click override (localStorage-persisted)
+2. scenarioNodeColors[label]   ← Scenario-defined colors from graph_styles.node_types
+3. NODE_COLORS[label]          ← Static defaults in graphConstants.ts
+4. autoColor(label)            ← Deterministic auto-palette (12 colors, stable hash)
+```
+
+`GraphTopologyViewer` passes `nodeColorOverride` (from its state/localStorage) down to
+`GraphToolbar` and `GraphTooltip`. `GraphCanvas` also receives `nodeColorOverride` and
+calls `useNodeColor()` directly.
 
 ### Frontend Patterns & Gotchas
 
@@ -1322,11 +1383,13 @@ upload/provisioning). Uses `aria-modal="true"` and `role="dialog"` attributes.
 
 7. **`activePromptSet`** is now in `ScenarioContext` (previously was local state in `SettingsModal` — see SCENARIOHANDLING.md deviation D-4).
 
-8. **ScenarioContext has localStorage persistence** for `activeScenario`: scenario selection survives browser refresh. All bindings are re-derived from the persisted scenario name on mount. Other individual bindings (`activeGraph`, etc.) are NOT independently persisted — they're derived.
+8. **ScenarioContext has localStorage persistence** for `activeScenario`: scenario selection survives browser refresh. All bindings are re-derived from the persisted scenario name on mount. Other individual bindings (`activeGraph`, etc.) are NOT independently persisted — they're derived. Graph styles (`scenarioNodeColors`, `scenarioNodeSizes`) are not localStorage-persisted — they reload from saved scenario data.
 
 9. **UploadBox `onComplete` gap** — After uploading prompts, the Prompt Set dropdown is NOT auto-refreshed. User must close/reopen the modal. Graph upload triggers `fetchScenarios()`, Runbooks/Tickets trigger `fetchIndexes()`, but Prompts and Telemetry trigger nothing.
 
 10. **UploadBox now uses `uploadWithSSE`** (V8 refactor): Previously hand-rolled SSE parsing; now uses the shared `uploadWithSSE()` utility from `utils/sseStream.ts`, eliminating a duplicate SSE parsing implementation.
+
+11. **Tab navigation in App.tsx**: `activeTab` state (`'investigate' | 'info'`) controls whether the main content area shows the investigation layout (MetricsBar + InvestigationPanel + DiagnosisPanel) or the ScenarioInfoPanel. Clicking an example question in ScenarioInfoPanel calls `setAlert(q)` and switches to the investigate tab.
 
 11. **Vite dev proxy has 5 entries**, not 3: `/api/alert` → :8000 (SSE configured), `/api/logs` → :8000 (SSE configured), `/api` → :8000 (plain), `/health` → :8000, `/query` → :8100 (SSE configured). The SSE-configured entries add `cache-control: no-cache` and `x-accel-buffering: no` headers — without these, SSE streams are buffered during local dev.
 
@@ -1337,7 +1400,7 @@ upload/provisioning). Uses `aria-modal="true"` and `role="dialog"` attributes.
     - `uploadWithSSE(endpoint, file, handlers, params?, signal?)` — High-level: takes a `File` (not `FormData`), builds `FormData` internally, appends optional `params` as URL query parameters, wraps `fetch` + `consumeSSE` for form upload endpoints
     - Completion detection uses heuristic field-checking (`scenario`, `index`, `graph`, `prompts_stored` keys in parsed JSON) because backend SSE streams use `data:` lines only, not `event:` type markers (deviation D-5)
 
-14. **AddScenarioModal auto-slot detection**: `detectSlot(filename)` parses the last hyphen-separated segment before `.tar.gz` to match file to upload slot. E.g., `cloud-outage-graph.tar.gz` → slot `graph`, scenarioName `cloud-outage`. Auto-fills scenario name input if empty. Multi-file drop assigns all matching files in one gesture.
+14. **AddScenarioModal auto-slot detection**: `detectSlot(filename)` parses the last hyphen-separated segment before `.tar.gz` to match file to upload slot. E.g., `cloud-outage-graph.tar.gz` → slot `graph`, scenarioName `cloud-outage`. Auto-fills scenario name input if empty. Multi-file drop assigns all matching files in one gesture. On graph upload completion, captures `scenario_metadata` (display_name, description, use_cases, example_questions, graph_styles, domain) from the SSE response and stores it in a `scenarioMetadataRef`; these metadata fields are forwarded to `saveScenario()` when the user clicks Save.
 
 15. **ProvisioningBanner lifecycle**: Appears during provisioning, shows current step from SSE stream, auto-dismisses 3s after completion with green flash. On error, banner turns red and stays until manually dismissed. Workspace remains interactive during provisioning — only "Submit Alert" is disabled.
 
@@ -1393,6 +1456,15 @@ display_name: "Telecom NOC"
 description: "..."
 version: "1.0"
 domain: telecommunications
+
+use_cases:                          # Human-readable scenario use cases (displayed in Scenario Info panel)
+  - "Monitor fibre degradation in metro rings"
+  - "Investigate MPLS path failures"
+  - "Correlate BGP flaps with physical layer events"
+
+example_questions:                  # Clickable example prompts (injected into alert input)
+  - "What is the root cause of the fibre cut?"
+  - "Which customers are affected by the outage?"
 
 paths:
   entities: data/entities
@@ -2341,6 +2413,10 @@ cd frontend && npm run dev
 | First Cosmos DB access slow (~20-30s) | ARM database/container creation on first use. See QOL backlog item #1 for pre-provisioning in Bicep |
 | Need to change dark theme colors | `frontend/src/styles/globals.css` — CSS custom properties for the entire color scheme |
 | Upload retry logic differs from query retry | `router_ingest.py` `_gremlin_submit` vs `cosmosdb.py` `_submit_query` — different retry capabilities |
+| Graph node colors wrong after scenario switch | Check `useNodeColor.ts` fallback chain; verify `setScenarioStyles()` called in `selectScenario()`; check `scenarioNodeColors` in `ScenarioContext` |
+| Scenario info tab empty | Check `activeScenario` set in context; verify saved scenario has `use_cases` / `example_questions` populated |
+| Example question not injecting into chat | Check `onSelectQuestion` callback in `ScenarioInfoPanel` → `App.tsx`; verify `setAlert` + tab switch logic |
+| Scenario metadata not saved | Check `scenarioMetadataRef` in `AddScenarioModal.tsx`; verify graph upload `onComplete` captures `data.scenario_metadata` |
 
 ---
 
@@ -2399,18 +2475,26 @@ concept. Now users can create, save, switch, and delete complete scenarios from 
 
 | File | Type | Purpose |
 |------|------|---------|
-| `graph-query-api/router_scenarios.py` | **New** (~212 lines) | Scenario CRUD endpoints + `_get_scenarios_container()` |
+| `graph-query-api/router_scenarios.py` | **New** (~220 lines) | Scenario CRUD endpoints + `_get_scenarios_container()` + metadata fields (use_cases, example_questions, graph_styles, domain) |
 | `frontend/src/utils/sseStream.ts` | **New** (143 lines) | Shared `consumeSSE()` + `uploadWithSSE()` utilities |
-| `frontend/src/components/AddScenarioModal.tsx` | **New** (621 lines) | Multi-slot file upload with auto-detect |
+| `frontend/src/components/AddScenarioModal.tsx` | **New** (~682 lines) | Multi-slot file upload with auto-detect; captures `scenario_metadata` from graph upload onComplete |
 | `frontend/src/components/ScenarioChip.tsx` | **New** (154 lines) | Header scenario selector chip + flyout |
 | `frontend/src/components/ProvisioningBanner.tsx` | **New** (102 lines) | Non-blocking provisioning feedback banner |
-| `frontend/src/context/ScenarioContext.tsx` | **Modified** (~105 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage |
-| `frontend/src/types/index.ts` | **Modified** (~55 lines) | Added `SavedScenario`, `SlotKey`, `SlotStatus`, `ScenarioUploadSlot` |
-| `frontend/src/hooks/useScenarios.ts` | **Modified** (~180 lines) | Added scenario CRUD + selection; removed dead `uploadScenario()` code |
+| `frontend/src/components/TabBar.tsx` | **New** (~31 lines) | Investigate / Scenario Info tab bar |
+| `frontend/src/components/ScenarioInfoPanel.tsx` | **New** (~89 lines) | Scenario detail: description, use cases, clickable example questions |
+| `frontend/src/hooks/useNodeColor.ts` | **New** (~42 lines) | Centralised node color resolution hook with 4-tier fallback + auto-palette |
+| `frontend/src/context/ScenarioContext.tsx` | **Modified** (~159 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage, `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles` |
+| `frontend/src/types/index.ts` | **Modified** (~77 lines) | Added `SavedScenario`, `SlotKey`, `SlotStatus`, `ScenarioUploadSlot` + graph_styles/use_cases/example_questions/domain fields |
+| `frontend/src/hooks/useScenarios.ts` | **Modified** (~192 lines) | Added scenario CRUD + selection + `graph_styles` push to context on scenario select |
 | `frontend/src/components/SettingsModal.tsx` | **Modified** (~673 lines) | 3-tab layout, scenario cards, read-only Data Sources when active |
-| `frontend/src/components/Header.tsx` | **Modified** | Added ScenarioChip + ProvisioningBanner + dynamic agent status |
+| `frontend/src/components/Header.tsx` | **Modified** (~72 lines) | Added ScenarioChip + ProvisioningBanner + dynamic agent status |
+| `frontend/src/App.tsx` | **Modified** (~187 lines) | Added TabBar + tab state + conditional rendering (investigate vs info tab) |
+| `frontend/src/components/graph/GraphCanvas.tsx` | **Modified** (~184 lines) | Uses `useNodeColor()` hook + scenario-driven sizes |
+| `frontend/src/components/graph/GraphToolbar.tsx` | **Modified** (~102 lines) | Accepts `nodeColorOverride` prop; uses `useNodeColor()` |
+| `frontend/src/components/graph/GraphTooltip.tsx` | **Modified** (~80 lines) | Accepts `nodeColorOverride` prop; uses `useNodeColor()` |
+| `frontend/src/components/GraphTopologyViewer.tsx` | **Modified** (~214 lines) | Passes `nodeColorOverride` to GraphToolbar and GraphTooltip |
 | `graph-query-api/main.py` | **Modified** | Mounted `router_scenarios` (6th router) |
-| `graph-query-api/router_ingest.py` | **Modified** | Added `scenario_name` param to all 5 upload endpoints |
+| `graph-query-api/router_ingest.py` | **Modified** (~871 lines) | Added `scenario_name` param to all 5 upload endpoints; extracts `scenario_metadata` from manifest |
 
 **V8 refactor files (from V8REFACTOR.md):**
 
@@ -2477,7 +2561,7 @@ Names must match: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`
 
 ## Planned Work & QOL Backlog
 
-> **Source:** `documentation/QOLimprovements.md`
+> **Source:** `documentation/QOLimprovements.md` + `documentation/minorQOL.md`
 
 | # | Improvement | Status | Architecture Impact |
 |---|-------------|--------|---------------------|
@@ -2487,6 +2571,9 @@ Names must match: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`
 | 4 | **Graph pause/unpause on mouse hover** — stop force simulation when mouse is over the graph | ⬜ Not done | `GraphCanvas.tsx` change; reference implementation may exist in `custom_skills/react-force-graph-2d/` |
 | 5 | **Right sidebar interaction history** — save/retrieve past investigations in Cosmos NoSQL (`interactions` database), show in sidebar with timestamps and scenario names, clickable to replay | ⬜ Not done | Requires new Cosmos database, new API endpoints, new frontend component + sidebar layout. Significant feature |
 | 6 | **Per-scenario topology databases** — move graph data from shared `networkgraph` database to scenario-specific databases (like telemetry/prompts pattern) for faster loading | ⬜ Not done | Would change the graph naming from `networkgraph/{scenario}-topology` to `{scenario}-graph/{scenario}-topology`. Affects `config.py`, `router_ingest.py`, `cosmosdb.py`, `agent_provisioner.py`. Breaking change for existing data |
+| 7 | **Scenario-driven graph node colors** — `graph_styles.node_types` in `scenario.yaml` defines per-label colors and sizes; flow: scenario.yaml → graph upload → Cosmos → frontend context → graph rendering | ✅ Done (minorQOL) | New `useNodeColor` hook centralises 4-tier color fallback; `ScenarioContext` extended with `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles`; `GraphCanvas`, `GraphToolbar`, `GraphTooltip` updated |
+| 8 | **Scenario Info tab** — tab bar in App.tsx switches between "Investigate" and "Scenario Info" views; info panel shows description, use cases, clickable example questions | ✅ Done (minorQOL) | New `TabBar` + `ScenarioInfoPanel` components; `App.tsx` gains `activeTab` state + conditional rendering; clicking example question injects into alert input + switches to investigate tab |
+| 9 | **Scenario metadata in data packs** — `use_cases`, `example_questions`, `graph_styles`, `domain` fields in `scenario.yaml`; extracted during graph upload and persisted with scenario save | ✅ Done (minorQOL) | `ScenarioSaveRequest` model extended; `router_ingest.py` extracts `scenario_metadata` from manifest; `AddScenarioModal` captures metadata from upload onComplete + forwards to save; `SavedScenario` type extended |
 
 ---
 
@@ -2550,6 +2637,7 @@ but are NOT in the template and NOT consumed by any runtime code.
 |----------|---------|
 | `documentation/SCENARIOHANDLING.md` | Scenario management feature spec — UX design, backend schema, implementation phases, deviations |
 | `documentation/V8REFACTOR.md` | V8 codebase simplification & refactor — dead code removal, SSE/Cosmos helper extraction, credential centralisation, frontend componentisation, CORS unification (~1,826 lines removed) |
+| `documentation/minorQOL.md` | Minor QOL improvements — scenario-driven graph colors, scenario info tab, metadata persistence, data generators. 4 phases, all complete |
 | `documentation/azure_deployment_lessons.md` | Detailed Azure deployment lessons (Private Endpoints, Policy, VNet, Bicep patterns) |
 | `documentation/CUSTOM_SKILLS.md` | Custom skills documentation (neo4j, cosmosdb gremlin, etc.) |
 | `documentation/v11customizableagentworkflows.md` | V11 customizable agent workflows (placeholder — currently empty) |
