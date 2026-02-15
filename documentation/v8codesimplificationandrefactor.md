@@ -1,0 +1,3 @@
+1. Topologies are currently added as new items in networkgraph db in cosmos-gremlin. Telemetry and prompts should go to a telemetry db and prompts db in cosmos gremlin nosql and be instantiated in scenario specific containers. This will speed up loading time 
+2. Scenario upload should have a timer so users can time the progress 
+3. Can we have the graph api container logs stream to a third pane in the header? CUrrently we have graph topology and fabric container log stream in there. Let's get the graph API log stream there too.

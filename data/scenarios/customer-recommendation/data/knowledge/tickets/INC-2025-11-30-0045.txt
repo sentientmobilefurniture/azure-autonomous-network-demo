@@ -1,0 +1,31 @@
+Incident: INC-2025-11-30-0045
+Title: Black Friday inventory sync failure — overselling 3 products
+Severity: P1
+Root Cause: WH-US-EAST
+Root Cause Type: INVENTORY_SYNC_FAILURE
+Created: 2025-11-30T06:00:00Z
+Resolved: 2025-11-30T10:30:00Z
+SLA Breached: Yes
+
+Description:
+Inventory sync between WH-US-EAST and the product database lagged by 45 minutes during Black Friday traffic. PROD-ACC-001, PROD-PHONE-002, and PROD-KITCHEN-001 were oversold by 120, 45, and 80 units respectively.
+
+Detection Method:
+Automated stock-level discrepancy alert (delayed)
+
+Resolution:
+Halted sales of affected products. Sourced additional inventory from WH-US-WEST. Offered affected customers expedited shipping or full refund.
+
+Customer Impact:
+- SEG-VIP
+- SEG-LOYAL
+- SEG-CASUAL
+
+Services Affected: 3
+Alerts Generated: 456
+Alerts Suppressed: 400
+Time to Detect: 2700 seconds
+Time to Resolve: 270 minutes
+
+Lessons Learned:
+Implement real-time inventory reservation (not batch sync) for high-traffic periods. Add StockQty real-time field to Product entity for immediate availability checks.

@@ -1,0 +1,559 @@
+# Architecture — AI Incident Investigator
+
+> **Last updated:** 2026-02-15 — reflects V8 data management plane with
+> per-type uploads, per-request graph routing, and Cosmos-backed prompts.
+
+---
+
+## System Overview
+
+Multi-agent incident investigation platform. Five AI agents collaborate
+(via Azure AI Foundry) to diagnose operational incidents across any domain—
+telecommunications, cloud infrastructure, e-commerce, etc.
+
+The platform is **scenario-agnostic**: users upload scenario data packs via
+the browser UI. The Container App ingests graph data, telemetry, knowledge
+bases, and prompts into Azure services. No CLI-based data loading required.
+
+### Available Scenarios
+
+| Scenario | Domain | Entity Types | Incident |
+|----------|--------|-------------|----------|
+| `telco-noc` | Telecom | CoreRouter, AggSwitch, BaseStation, TransportLink, MPLSPath, Service, SLAPolicy, BGPSession | Fibre cut → cascading alert storm |
+| `cloud-outage` | Cloud | Region, AZ, Rack, Host, VM, LoadBalancer, Service, SLAPolicy | Cooling failure → thermal shutdown cascade |
+| `customer-recommendation` | E-Commerce | CustomerSegment, Customer, ProductCategory, Product, Campaign, Supplier, Warehouse, SLAPolicy | Recommendation model bias → return rate spike |
+
+---
+
+## Unified Container Architecture
+
+All three services run in a **single container** managed by supervisord:
+
+| Process | Port | Role |
+|---------|------|------|
+| nginx | `:80` (external) | Reverse proxy + React SPA |
+| API (uvicorn) | `127.0.0.1:8000` | Agent orchestrator, SSE streaming, config endpoints |
+| graph-query-api (uvicorn) | `127.0.0.1:8100` | Graph/telemetry queries, data upload, prompt CRUD |
+
+nginx routes:
+- `/` → React SPA
+- `/api/*` → uvicorn :8000 (SSE enabled, 300s timeout)
+- `/health` → uvicorn :8000
+- `/query/*` → uvicorn :8100 (SSE enabled, 600s timeout, `client_max_body_size 100m`)
+
+```
+Browser ─── POST /api/alert ──▶ nginx :80 ──▶ API :8000 ──▶ AI Foundry
+       ◀── SSE stream ─────────                              (5 agents)
+                                                                │
+Browser ─── POST /query/upload/graph ──▶ nginx :80 ──▶ graph-query-api :8100
+       ◀── SSE progress ──────────                    ├── Cosmos Gremlin
+                                                      ├── Cosmos NoSQL
+                                                      ├── AI Search
+                                                      └── Blob Storage
+```
+
+---
+
+## Project Structure (as of 2026-02-15)
+
+```
+.
+├── deploy.sh                   # Deployment: infra only (Steps 0-3, 6-7)
+├── Dockerfile                  # Unified container (nginx + API + graph-query-api)
+├── nginx.conf                  # Reverse proxy (100m upload, SSE support)
+├── supervisord.conf            # Process manager
+├── azure.yaml                  # azd service definition
+├── azure_config.env            # Runtime config (gitignored, auto-populated)
+├── azure_config.env.template   # Config template
+│
+├── api/                        # FastAPI backend (:8000)
+│   ├── pyproject.toml          # Deps: fastapi, sse-starlette, azure-ai-agents, pyyaml
+│   └── app/
+│       ├── main.py             # Mounts 4 routers + /health
+│       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE)
+│       └── routers/
+│           ├── alert.py        # POST /api/alert → SSE investigation stream
+│           ├── agents.py       # GET /api/agents
+│           ├── config.py       # POST /api/config/apply (re-provision agents)
+│           └── logs.py         # GET /api/logs → SSE log stream
+│
+├── graph-query-api/            # Data management + query microservice (:8100)
+│   ├── pyproject.toml          # Deps: fastapi, gremlinpython, azure-cosmos,
+│   │                           #       azure-mgmt-cosmosdb, azure-storage-blob,
+│   │                           #       azure-search-documents, sse-starlette, pyyaml
+│   ├── config.py               # ScenarioContext, X-Graph header, env vars
+│   ├── main.py                 # Mounts 6 routers + /health + SSE logs
+│   ├── models.py               # Pydantic request/response models
+│   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin)
+│   ├── router_telemetry.py     # POST /query/telemetry (per-scenario NoSQL)
+│   ├── router_topology.py      # POST /query/topology (graph visualization)
+│   ├── router_ingest.py        # Upload endpoints + scenario/index listing
+│   ├── router_prompts.py       # Prompts CRUD in Cosmos
+│   ├── search_indexer.py       # AI Search indexer pipeline creation
+│   └── backends/
+│       ├── __init__.py         # GraphBackend Protocol + per-graph cache
+│       ├── cosmosdb.py         # CosmosDBGremlinBackend(graph_name=...)
+│       └── mock.py             # Static topology (offline demos)
+│
+├── frontend/                   # React/Vite dashboard
+│   └── src/
+│       ├── main.tsx            # Wraps App in ScenarioProvider
+│       ├── App.tsx             # 3-zone layout
+│       ├── context/
+│       │   └── ScenarioContext.tsx  # activeGraph, activeIndexes, X-Graph headers
+│       ├── hooks/
+│       │   ├── useInvestigation.ts  # SSE alert investigation (sends X-Graph)
+│       │   ├── useTopology.ts       # Topology fetch (sends X-Graph, refetches on change)
+│       │   └── useScenarios.ts      # Scenario listing, index listing, upload
+│       └── components/
+│           ├── Header.tsx           # "AI Incident Investigator" + ⚙ Settings
+│           ├── SettingsModal.tsx     # 2 tabs: Data Sources + Upload
+│           │                        # Data Sources: 4 agent dropdowns + prompt set
+│           │                        #   + Load Topology + Provision Agents buttons
+│           │                        # Upload: 5 UploadBox (graph/telemetry/runbooks/tickets/prompts)
+│           └── graph/               # Force-directed graph viewer
+│
+├── data/
+│   ├── generate_all.sh         # Generate + package all scenarios as per-type tarballs
+│   ├── prompts                 # Symlink → scenarios/telco-noc/data/prompts
+│   └── scenarios/
+│       ├── telco-noc/          # scenario.yaml, graph_schema.yaml, scripts/, data/
+│       ├── cloud-outage/       # Same structure
+│       └── customer-recommendation/  # Same structure
+│
+├── scripts/
+│   ├── scenario_loader.py      # ScenarioLoader class (resolves scenario paths)
+│   ├── agent_provisioner.py    # AgentProvisioner class (importable)
+│   ├── provision_agents.py     # CLI wrapper for agent provisioning
+│   ├── agent_ids.json          # Output of provisioning (agent IDs)
+│   └── testing_scripts/        # CLI test tools
+│
+├── infra/                      # Bicep IaC
+│   ├── main.bicep              # Subscription-scoped (passes 18 env vars to container)
+│   └── modules/                # 9 modules (AI Foundry, Search, Storage, Cosmos, VNet, Roles)
+│
+├── hooks/
+│   ├── preprovision.sh         # Syncs azure_config.env → azd env (5 vars)
+│   └── postprovision.sh        # Populates azure_config.env + Cosmos credentials (no blob uploads)
+│
+└── deprecated/                 # Superseded scripts (kept for reference)
+    └── scripts/                # Old CLI-based indexers + Cosmos provisioners
+```
+
+---
+
+## Data Flow
+
+### Upload Flow (5 independent paths)
+
+Each data type has its own tarball and upload endpoint. All uploads stream
+SSE progress events and run sync Azure SDK calls in background threads.
+
+```
+./data/generate_all.sh telco-noc
+  → telco-noc-graph.tar.gz      (scenario.yaml + graph_schema.yaml + data/entities/*.csv)
+  → telco-noc-telemetry.tar.gz  (scenario.yaml + data/telemetry/*.csv)
+  → telco-noc-runbooks.tar.gz   (scenario.yaml + data/knowledge/runbooks/*.md)
+  → telco-noc-tickets.tar.gz    (scenario.yaml + data/knowledge/tickets/*.txt)
+  → telco-noc-prompts.tar.gz    (scenario.yaml + data/prompts/*.md + graph_explorer/)
+```
+
+| Upload Box | Endpoint | Backend | Storage |
+|------------|----------|---------|---------|
+| 🔗 Graph | `POST /query/upload/graph` | Gremlin addV/addE (key auth, single thread) | Cosmos Gremlin graph `{scenario}-topology` |
+| 📊 Telemetry | `POST /query/upload/telemetry` | ARM create db/containers + data-plane upsert | Cosmos NoSQL db `{scenario}-telemetry` |
+| 📋 Runbooks | `POST /query/upload/runbooks` | Blob upload + AI Search indexer pipeline | Blob `{scenario}-runbooks` → index `{scenario}-runbooks-index` |
+| 🎫 Tickets | `POST /query/upload/tickets` | Blob upload + AI Search indexer pipeline | Blob `{scenario}-tickets` → index `{scenario}-tickets-index` |
+| 📝 Prompts | `POST /query/upload/prompts` | ARM create db/container + data-plane upsert | Cosmos `platform-config.prompts` container |
+
+**Critical pattern:** All Azure SDK calls (Gremlin, Cosmos, Blob, Search, ARM)
+MUST run inside `asyncio.to_thread()` because `DefaultAzureCredential` and
+`gremlinpython` internally use event loops that conflict with FastAPI's async loop.
+Each upload endpoint wraps its entire SDK chain in a single sync function called
+via `to_thread`.
+
+### Per-Request Graph Routing
+
+Every `/query/*` request can target a different graph via the `X-Graph` header:
+
+```
+Frontend → X-Graph: telco-noc-topology → graph-query-api reads header
+  → ScenarioContext(graph_name="telco-noc-topology",
+                    telemetry_database="telco-noc-telemetry")
+  → get_backend_for_context(ctx) → cached CosmosDBGremlinBackend per graph
+```
+
+The telemetry database is auto-derived: `telco-noc-topology` → `telco-noc-telemetry`.
+
+### Agent Provisioning
+
+Agents are provisioned via `POST /api/config/apply` which:
+1. Fetches prompts from Cosmos (`GET /query/prompts` on localhost:8100) for the
+   selected `prompt_scenario`
+2. Falls back to placeholder prompts if Cosmos has no prompts for that scenario
+3. Creates 5 Foundry agents via `AgentProvisioner` class
+4. Attaches OpenAPI tools (graph/telemetry) and AzureAISearch tools (runbooks/tickets)
+5. Stores agent IDs in memory + `agent_ids.json`
+
+**Known issue:** The `AgentProvisioner` needs `GRAPH_QUERY_API_URI` to be set
+(the Container App's public URL) for OpenAPI tool registration. Without it,
+GraphExplorer and Telemetry agents are created WITHOUT tools.
+
+### Investigation Flow
+
+```
+User pastes alert → POST /api/alert {text: "..."}
+  → orchestrator.py creates thread + run (azure-ai-agents SDK)
+  → Orchestrator delegates to sub-agents via ConnectedAgentTool:
+      ├─ GraphExplorerAgent → OpenApiTool → /query/graph (X-Graph header)
+      ├─ TelemetryAgent → OpenApiTool → /query/telemetry (X-Graph header)
+      ├─ RunbookKBAgent → AzureAISearchTool → {scenario}-runbooks-index
+      └─ HistoricalTicketAgent → AzureAISearchTool → {scenario}-tickets-index
+  → SSE events streamed to frontend (step_start, step_complete, message)
+```
+
+---
+
+## Key Components Detail
+
+### `graph-query-api/config.py` — ScenarioContext
+
+```python
+@dataclass
+class ScenarioContext:
+    graph_name: str              # e.g. "telco-noc-topology"
+    gremlin_database: str        # "networkgraph" (shared)
+    telemetry_database: str      # "telco-noc-telemetry" (derived)
+    backend_type: GraphBackendType
+
+def get_scenario_context(
+    x_graph: str | None = Header(default=None, alias="X-Graph")
+) -> ScenarioContext:
+    # Falls back to COSMOS_GREMLIN_GRAPH env var if no header
+```
+
+### `graph-query-api/backends/` — Per-Graph Client Cache
+
+```python
+_backend_cache: dict[str, GraphBackend] = {}
+
+def get_backend_for_context(ctx: ScenarioContext) -> GraphBackend:
+    # Returns cached CosmosDBGremlinBackend per graph_name
+    # Each instance has its own Gremlin WSS client
+
+class CosmosDBGremlinBackend:
+    def __init__(self, graph_name: str | None = None):
+        # Creates WSS client targeting /dbs/networkgraph/colls/{graph_name}
+        # Key-based auth (COSMOS_GREMLIN_PRIMARY_KEY)
+```
+
+### `graph-query-api/router_ingest.py` — Upload Endpoints
+
+All upload endpoints follow the same pattern:
+```python
+@router.post("/upload/{type}")
+async def upload_type(file: UploadFile):
+    content = await file.read()
+    async def stream():
+        progress = asyncio.Queue()
+        def emit(step, detail, pct): progress.put_nowait({...})
+        async def run():
+            # Extract tarball to temp dir
+            # Read scenario.yaml for scenario name
+            # Run ALL SDK calls in asyncio.to_thread(_load)
+            # _load() is a sync function with Cosmos/Blob/Search calls
+        task = asyncio.create_task(run())
+        while True:
+            ev = await progress.get()
+            if ev is None: break
+            yield SSE event
+    return EventSourceResponse(stream())
+```
+
+**CRITICAL:** The telemetry and prompts uploads use a two-phase approach:
+1. ARM management plane (`azure-mgmt-cosmosdb`) to create databases/containers
+   (because the data-plane RBAC role `00000000-0000-0000-0000-000000000002`
+   does NOT include database creation permissions)
+2. Data plane (`CosmosClient` with `DefaultAzureCredential`) to upsert documents
+
+**NOTE:** Lines ~125-605 of `router_ingest.py` contain OLD commented-out code
+from the monolithic upload endpoint. This dead code should be removed in cleanup.
+The active per-type upload endpoints start after ~line 720.
+
+### `graph-query-api/router_prompts.py` — Prompts CRUD
+
+Prompts stored in Cosmos NoSQL: database `platform-config`, container `prompts`,
+partition key `/agent`.
+
+Document schema:
+```json
+{
+  "id": "telco-noc/foundry_orchestrator_agent/v1",
+  "agent": "orchestrator",
+  "scenario": "telco-noc",
+  "name": "foundry_orchestrator_agent",
+  "version": 1,
+  "content": "# Orchestrator System Prompt\n...",
+  "is_active": true,
+  "deleted": false
+}
+```
+
+The prompts container is created via ARM on first access (same two-phase pattern).
+
+Key endpoints:
+- `GET /query/prompts` — list (filter by agent, scenario)
+- `GET /query/prompts/scenarios` — distinct scenario names with prompt counts
+- `GET /query/prompts/{id}?agent={name}` — get prompt with content
+- `POST /query/prompts` — create (auto-versions)
+- `PUT /query/prompts/{id}` — update metadata
+- `DELETE /query/prompts/{id}` — soft-delete
+
+### `api/app/routers/config.py` — Agent Provisioning
+
+`POST /api/config/apply` accepts:
+```json
+{
+  "graph": "telco-noc-topology",
+  "runbooks_index": "telco-noc-runbooks-index",
+  "tickets_index": "telco-noc-tickets-index",
+  "prompt_scenario": "telco-noc"
+}
+```
+
+Prompt resolution order:
+1. `req.prompts` (explicit content, if provided)
+2. Cosmos lookup: calls `GET http://127.0.0.1:8100/query/prompts` filtered by `prompt_scenario`
+3. Fallback defaults: "You are a {role} agent."
+
+The `AgentProvisioner` class is imported from `/app/scripts/agent_provisioner.py`.
+`config.py` adds both `PROJECT_ROOT/scripts` and `PROJECT_ROOT/../scripts` to
+`sys.path` to handle both local dev and container paths.
+
+### `api/app/orchestrator.py` — Agent Bridge
+
+- Reads agent IDs from `agent_ids.json` (path from `AGENT_IDS_PATH` env var)
+- Falls back to stub responses if not configured
+- Creates thread + run via `azure-ai-agents` SDK
+- Streams SSE events to frontend
+- Retry logic: `MAX_RUN_ATTEMPTS = 2`
+
+### `scripts/agent_provisioner.py` — AgentProvisioner Class
+
+```python
+class AgentProvisioner:
+    def provision_all(self, model, prompts, graph_query_api_uri,
+                      graph_backend, runbooks_index, tickets_index,
+                      search_connection_id, force=True, on_progress=None) -> dict
+```
+
+Creates 5 agents:
+1. GraphExplorerAgent (OpenApiTool → `/query/graph`)
+2. TelemetryAgent (OpenApiTool → `/query/telemetry`)
+3. RunbookKBAgent (AzureAISearchTool)
+4. HistoricalTicketAgent (AzureAISearchTool)
+5. Orchestrator (ConnectedAgentTool → all 4 above)
+
+OpenAPI specs loaded from `graph-query-api/openapi/{cosmosdb|mock}.yaml`.
+`{base_url}` placeholder replaced with `GRAPH_QUERY_API_URI`.
+
+---
+
+## RBAC Roles (Container App Managed Identity)
+
+| Role | Scope | Purpose |
+|------|-------|---------|
+| Cognitive Services OpenAI User | Foundry | Invoke GPT models |
+| Cognitive Services Contributor | Foundry | Manage agents |
+| Azure AI Developer | Resource group | Agent invocation |
+| Cognitive Services User | Foundry | Broad data-plane |
+| Cosmos DB Built-in Data Contributor | NoSQL account | Query/upsert telemetry + prompts |
+| DocumentDB Account Contributor | Gremlin account | Create graphs via ARM |
+| DocumentDB Account Contributor | NoSQL account | Create databases/containers via ARM |
+| Storage Blob Data Contributor | Storage account | Upload runbooks/tickets to blob |
+| Search Service Contributor | AI Search | Create indexes/indexers |
+| Search Index Data Contributor | AI Search | Read/write index data |
+
+All defined in `infra/modules/roles.bicep`.
+
+---
+
+## Deployment
+
+### `deploy.sh` — 5 steps (no data loading, no agent provisioning)
+
+| Step | What |
+|------|------|
+| 0 | Prerequisites check (Python, uv, Node, az, azd) |
+| 1 | Azure environment selection |
+| 2 | Configure azure_config.env |
+| 3 | `azd up` (Bicep infra + container deploy) |
+| 6 | Health check |
+| 7 | Local dev servers (optional) |
+
+Steps 4, 5, old-7 (search indexes, Cosmos data, agent provisioning) were removed.
+All data + agent operations happen through the UI.
+
+### Post-Deployment Workflow
+
+1. `./data/generate_all.sh` → creates 5 per-type tarballs per scenario
+2. Open app → ⚙ Settings → Upload tab → upload each tarball (graph first, then others)
+3. Data Sources tab → select graph, indexes, prompt set
+4. Click "Load Topology" → verifies graph data loads in viewer
+5. Click "Provision Agents" → creates 5 agents with prompts from Cosmos
+
+### `hooks/postprovision.sh`
+
+- Does NOT upload any blob data (removed in V8)
+- Populates `azure_config.env` with Bicep outputs (subscription, RG, endpoints)
+- Fetches Cosmos DB Gremlin primary key via `az cosmosdb keys list`
+- Populates NoSQL endpoint from the `-nosql` account
+
+---
+
+## Frontend Architecture
+
+### ScenarioContext (React Context)
+
+```typescript
+interface ScenarioState {
+  activeGraph: string;          // e.g. "telco-noc-topology"
+  activeRunbooksIndex: string;
+  activeTicketsIndex: string;
+  getQueryHeaders(): Record<string, string>;  // { "X-Graph": activeGraph }
+}
+```
+
+All `/query/*` fetches include `X-Graph` header via `getQueryHeaders()`.
+`useTopology` refetches when `getQueryHeaders` changes (activeGraph changes).
+
+### SettingsModal — 2 Tabs
+
+**Data Sources tab:**
+- GraphExplorer Agent → Cosmos Graph dropdown (from `GET /query/scenarios`)
+- Telemetry Agent → auto-derived NoSQL database name (read-only)
+- RunbookKB Agent → AI Search Index dropdown (from `GET /query/indexes`)
+- HistoricalTicket Agent → AI Search Index dropdown
+- Prompt Set → dropdown (from `GET /query/prompts/scenarios`)
+- 🔗 Load Topology button → `POST /query/topology` with X-Graph
+- 🤖 Provision Agents button → `POST /api/config/apply` with all selections
+
+**Upload tab:**
+- 5 independent UploadBox components: Graph, Telemetry, Runbooks, Tickets, Prompts
+- Each has its own progress bar, success/error state, retry button
+- Loaded Data section shows graphs from `GET /query/scenarios`
+
+---
+
+## Error Resilience
+
+### Layer 1: Errors as 200 + Error Payload
+Graph and telemetry endpoints catch all exceptions and return HTTP 200 with
+an `error` field. The agent LLM reads the error and self-corrects.
+
+### Layer 2: Orchestrator Run Retry
+`MAX_RUN_ATTEMPTS = 2`. On failure, posts recovery message to thread.
+
+### Layer 3: Graceful Degradation (Prompt Rule)
+Orchestrator prompt instructs: "If a sub-agent fails, continue with
+remaining agents and produce a partial report."
+
+---
+
+## Known Issues & Gotchas
+
+### async/await + Azure SDK
+**All Azure SDK calls MUST be in `asyncio.to_thread()`**. The `DefaultAzureCredential`,
+`gremlinpython` WebSocket client, `CosmosClient`, and ARM management clients
+all internally use event loops that conflict with FastAPI's async loop. Every
+upload endpoint wraps its entire SDK chain in a sync function called via `to_thread`.
+
+### Cosmos NoSQL RBAC — Two-Phase Pattern
+The built-in data contributor role (`00000000-0000-0000-0000-000000000002`)
+does NOT include database/container creation permissions. Upload endpoints use:
+1. ARM (`azure-mgmt-cosmosdb`) for `create_database` / `create_container` — uses
+   `DocumentDB Account Contributor` role
+2. Data plane (`CosmosClient`) for `upsert_item` / `query_items` — uses
+   `Cosmos DB Built-in Data Contributor` role
+
+**IMPORTANT:** The ARM calls in `router_prompts.py` and `router_ingest.py` create
+a fresh `DefaultAzureCredential()` inside the thread function — do NOT reuse
+the shared `get_credential()` from config.py, as it may have been initialized
+in the async context.
+
+### Agent Provisioning Dependencies
+- `GRAPH_QUERY_API_URI` must point to the Container App's public URL
+  (set in `azure_config.env` by postprovision.sh as `APP_URI`)
+- `agent_provisioner.py` is at `/app/scripts/` in the container;
+  `config.py` adds both `PROJECT_ROOT/scripts` and `PROJECT_ROOT/../scripts` to sys.path
+- OpenAPI specs at `/app/graph-query-api/openapi/{cosmosdb|mock}.yaml`
+
+### Dead Code in router_ingest.py
+Lines ~125-605 contain OLD commented-out monolithic upload code + old list_scenarios.
+Should be removed in cleanup. Active endpoints start after ~line 720.
+
+### Graph Listing (GET /query/scenarios)
+Tries ARM listing first (`CosmosDBManagementClient` with fresh credential in thread),
+falls back to Gremlin key-auth count query on default graph. Can be slow (~5-10s).
+
+---
+
+## Configuration Reference
+
+All config lives in `azure_config.env`. Key variables:
+
+| Variable | Set by | Used by |
+|----------|--------|---------|
+| `AZURE_SUBSCRIPTION_ID` | postprovision | ARM calls, agent provisioner |
+| `AZURE_RESOURCE_GROUP` | postprovision | ARM calls |
+| `PROJECT_ENDPOINT` | postprovision | agent provisioner |
+| `AI_FOUNDRY_PROJECT_NAME` | postprovision | agent provisioner |
+| `AI_FOUNDRY_NAME` | postprovision | search connection ID |
+| `MODEL_DEPLOYMENT_NAME` | user (default: gpt-4.1) | agent model |
+| `GRAPH_BACKEND` | user (default: cosmosdb) | backend selector |
+| `COSMOS_GREMLIN_ENDPOINT` | postprovision | Gremlin WSS |
+| `COSMOS_GREMLIN_PRIMARY_KEY` | postprovision | Gremlin auth |
+| `COSMOS_GREMLIN_DATABASE` | Bicep (default: networkgraph) | Gremlin db |
+| `COSMOS_GREMLIN_GRAPH` | Bicep (default: topology) | fallback graph |
+| `COSMOS_NOSQL_ENDPOINT` | postprovision | telemetry + prompts |
+| `COSMOS_NOSQL_DATABASE` | Bicep (default: telemetry) | telemetry fallback db |
+| `AI_SEARCH_NAME` | Bicep | search indexer, index listing |
+| `STORAGE_ACCOUNT_NAME` | Bicep | blob upload |
+| `APP_URI` / `GRAPH_QUERY_API_URI` | postprovision | agent OpenAPI tool base URL |
+| `EMBEDDING_MODEL` | Bicep (default: text-embedding-3-small) | search vectorizer |
+| `EMBEDDING_DIMENSIONS` | Bicep (default: 1536) | vector field |
+
+---
+
+## Quick Reference: Where to Fix Things
+
+| Problem | File(s) to check |
+|---------|-----------------|
+| Upload fails with event loop error | Wrap ALL SDK calls in `asyncio.to_thread()` — see `router_ingest.py` |
+| Upload fails with auth/forbidden | Check RBAC in `infra/modules/roles.bicep`, `azd up` to re-apply |
+| NoSQL create_database forbidden | Need ARM two-phase: create via `azure-mgmt-cosmosdb`, then data plane |
+| Graph not in dropdown | `GET /query/scenarios` in `router_ingest.py` (~line 607) |
+| Topology viewer empty | `X-Graph` header in `useTopology.ts`, `ScenarioContext` state |
+| Agent provisioning fails | `api/app/routers/config.py`, `scripts/agent_provisioner.py` |
+| Agents created without prompts | Upload prompts tarball, check `GET /query/prompts/scenarios` |
+| Agents created without tools | Check `GRAPH_QUERY_API_URI` env var = Container App public URL |
+| Container build fails | `.dockerignore`, `Dockerfile` COPY paths |
+| Search index not created | `AI_SEARCH_NAME` env var, RBAC roles, `search_indexer.py` |
+| Health check HTML splash | Container still deploying; wait for revision |
+| `No module named agent_provisioner` | `sys.path` in `config.py` — check both `scripts/` paths |
+
+---
+
+## SDK Versions
+
+| Package | Version | Notes |
+|---------|---------|-------|
+| `azure-ai-agents` | `1.2.0b6` | OpenApiTool, ConnectedAgentTool, AzureAISearchTool |
+| `azure-ai-projects` | `>=1.0.0,<2.0.0` | AIProjectClient |
+| `azure-cosmos` | `>=4.9.0` | NoSQL queries + upserts |
+| `azure-mgmt-cosmosdb` | `>=9.0.0` | ARM database/graph creation |
+| `azure-storage-blob` | `>=12.19.0` | Blob uploads |
+| `azure-search-documents` | `>=11.6.0` | Search indexer pipelines |
+| `gremlinpython` | `>=3.7.0` | Cosmos Gremlin data-plane |
+| `fastapi` | `>=0.115` | ASGI framework |
+| `sse-starlette` | `>=1.6` | SSE streaming |

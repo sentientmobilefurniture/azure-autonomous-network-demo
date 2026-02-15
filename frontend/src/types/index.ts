@@ -16,3 +16,44 @@ export interface RunMeta {
   steps: number;
   time: string;
 }
+
+// ---------------------------------------------------------------------------
+// Scenario management types
+// ---------------------------------------------------------------------------
+
+export interface SavedScenario {
+  id: string;               // scenario name (e.g. "cloud-outage")
+  display_name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  resources: {
+    graph: string;
+    telemetry_database: string;
+    runbooks_index: string;
+    tickets_index: string;
+    prompts_database: string;
+  };
+  upload_status: Record<string, {
+    status: string;
+    timestamp: string;
+    [key: string]: unknown;
+  }>;
+}
+
+export type SlotKey = 'graph' | 'telemetry' | 'runbooks' | 'tickets' | 'prompts';
+
+export type SlotStatus = 'empty' | 'staged' | 'uploading' | 'done' | 'error';
+
+export interface ScenarioUploadSlot {
+  key: SlotKey;
+  label: string;
+  icon: string;
+  file: File | null;
+  status: SlotStatus;
+  progress: string;
+  pct: number;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}

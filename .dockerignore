@@ -2,6 +2,9 @@
 **/node_modules
 **/.venv
 **/__pycache__
+.venv
+api/.venv
+graph-query-api/.venv
 
 # Git
 .git
@@ -15,15 +18,42 @@ hooks
 # Documentation
 documentation
 fabric_implementation_references
+deprecated
 *.md
 
 # Frontend build artifacts (built inside Docker)
 frontend/dist
 
-# Data files (uploaded separately)
+# Data symlinks (point into scenarios/ — don't follow)
 data/telemetry
 data/tickets
 data/runbooks
+data/network
+data/prompts
+data/scripts
+data/graph_schema.yaml
+
+# Generated scenario data (uploaded via UI, not baked into image)
+data/scenarios/*/data/entities
+data/scenarios/*/data/entities/
+data/scenarios/*/data/telemetry
+data/scenarios/*/data/telemetry/
+data/scenarios/*/data/knowledge
+data/scenarios/*/data/knowledge/
+data/scenarios/*/scripts
+data/scenarios/*/scripts/
+
+# Custom skills (not needed at runtime)
+custom_skills
+
+# Env files
+*.env
+envs
+
+# Root-level project files (not needed in container)
+/pyproject.toml
+/uv.lock
+*.tar.gz
 
 # Misc
 **/.DS_Store
@@ -31,3 +61,4 @@ data/runbooks
 **/.mypy_cache
 **/.pytest_cache
 **/.ruff_cache
+**/*.so

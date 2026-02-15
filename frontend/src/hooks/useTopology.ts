@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useScenarioContext } from '../context/ScenarioContext';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ export function useTopology() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const { getQueryHeaders } = useScenarioContext();
 
   const fetchTopology = useCallback(async (vertexLabels?: string[]) => {
     abortRef.current?.abort();
@@ -53,7 +55,7 @@ export function useTopology() {
     try {
       const res = await fetch('/query/topology', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getQueryHeaders() },
         body: JSON.stringify({ vertex_labels: vertexLabels }),
         signal: ctrl.signal,
       });
@@ -67,9 +69,9 @@ export function useTopology() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [getQueryHeaders]);
 
-  // Fetch full topology on mount
+  // Refetch when active graph changes
   useEffect(() => {
     fetchTopology();
   }, [fetchTopology]);

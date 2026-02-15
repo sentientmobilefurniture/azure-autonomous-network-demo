@@ -1,0 +1,179 @@
+import { useState, useCallback } from 'react';
+import { SavedScenario } from '../types';
+import { consumeSSE } from '../utils/sseStream';
+import { useScenarioContext } from '../context/ScenarioContext';
+
+export interface ScenarioInfo {
+  graph_name: string;
+  vertex_count: number;
+  has_data: boolean;
+}
+
+export interface SearchIndex {
+  name: string;
+  type: 'runbooks' | 'tickets' | 'other';
+  document_count: number | null;
+  fields: number;
+}
+
+export function useScenarios() {
+  // Existing: graph scenarios & search indexes (discovery endpoints)
+  const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
+  const [indexes, setIndexes] = useState<SearchIndex[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // New: saved scenario records from Cosmos
+  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+
+  const {
+    setActiveScenario,
+    setProvisioningStatus,
+  } = useScenarioContext();
+
+  // Fetch graph scenarios (existing discovery endpoint)
+  const fetchScenarios = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/query/scenarios');
+      const data = await res.json();
+      setScenarios(data.scenarios || []);
+      if (data.error) setError(data.error);
+    } catch (e) {
+      setError(`Failed to fetch scenarios: ${e}`);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Fetch search indexes
+  const fetchIndexes = useCallback(async () => {
+    try {
+      const res = await fetch('/query/indexes');
+      const data = await res.json();
+      setIndexes(data.indexes || []);
+    } catch (e) {
+      console.warn('Failed to fetch indexes:', e);
+    }
+  }, []);
+
+  // Fetch saved scenario records from Cosmos
+  const fetchSavedScenarios = useCallback(async () => {
+    setSavedLoading(true);
+    try {
+      const res = await fetch('/query/scenarios/saved');
+      const data = await res.json();
+      setSavedScenarios(data.scenarios || []);
+    } catch (e) {
+      console.warn('Failed to fetch saved scenarios:', e);
+    } finally {
+      setSavedLoading(false);
+    }
+  }, []);
+
+  // Save a scenario record to Cosmos (after all uploads succeed)
+  const saveScenario = useCallback(async (meta: {
+    name: string;
+    display_name?: string;
+    description?: string;
+    upload_results: Record<string, unknown>;
+  }) => {
+    const res = await fetch('/query/scenarios/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(meta),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Save failed: ${res.status} ${text}`);
+    }
+    const data = await res.json();
+    // Refresh the list
+    await fetchSavedScenarios();
+    return data;
+  }, [fetchSavedScenarios]);
+
+  // Delete a saved scenario record
+  const deleteSavedScenario = useCallback(async (name: string) => {
+    const res = await fetch(`/query/scenarios/saved/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Delete failed: ${res.status} ${text}`);
+    }
+    // Refresh the list
+    await fetchSavedScenarios();
+  }, [fetchSavedScenarios]);
+
+  // Select a saved scenario: update context bindings + auto-provision agents
+  const selectScenario = useCallback(async (name: string) => {
+    // 1. Update all frontend bindings instantly
+    setActiveScenario(name);
+
+    // 2. Auto-provision agents with SSE progress tracking
+    setProvisioningStatus({ state: 'provisioning', step: 'Starting...', scenarioName: name });
+
+    try {
+      const res = await fetch('/api/config/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          graph: `${name}-topology`,
+          runbooks_index: `${name}-runbooks-index`,
+          tickets_index: `${name}-tickets-index`,
+          prompt_scenario: name,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      await consumeSSE(res, {
+        onProgress: (data) => {
+          setProvisioningStatus({
+            state: 'provisioning',
+            step: data.detail || data.step,
+            scenarioName: name,
+          });
+        },
+        onComplete: () => {
+          setProvisioningStatus({ state: 'done', scenarioName: name });
+        },
+        onError: (data) => {
+          setProvisioningStatus({ state: 'error', error: data.error, scenarioName: name });
+        },
+      });
+
+      // Auto-clear "done" state after 3 seconds
+      setTimeout(() => {
+        setProvisioningStatus({ state: 'idle' });
+      }, 3000);
+    } catch (e) {
+      setProvisioningStatus({
+        state: 'error',
+        error: String(e),
+        scenarioName: name,
+      });
+    }
+  }, [setActiveScenario, setProvisioningStatus]);
+
+  return {
+    // Existing discovery
+    scenarios,
+    indexes,
+    loading,
+    error,
+    fetchScenarios,
+    fetchIndexes,
+
+    // Saved scenario management
+    savedScenarios,
+    savedLoading,
+    fetchSavedScenarios,
+    saveScenario,
+    deleteSavedScenario,
+    selectScenario,
+  };
+}

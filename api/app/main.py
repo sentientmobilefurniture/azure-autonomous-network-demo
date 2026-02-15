@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import alert, agents, logs
+from app.routers import alert, agents, logs, config
 
 # Configure logging so app.* loggers emit INFO
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -45,6 +45,7 @@ app.add_middleware(
 app.include_router(alert.router)
 app.include_router(agents.router)
 app.include_router(logs.router)
+app.include_router(config.router)
 
 
 @app.get("/health")

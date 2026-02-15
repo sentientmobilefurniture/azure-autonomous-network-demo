@@ -1,9 +1,8 @@
 """
 Router: POST /query/telemetry — SQL queries against Cosmos DB NoSQL containers.
 
-Telemetry data (AlertStream, LinkTelemetry) is stored in a Cosmos DB NoSQL
-database.  The agent writes Cosmos SQL queries (SELECT / FROM / WHERE / etc.)
-which are forwarded to the appropriate container.
+Telemetry data is stored in scenario-prefixed Cosmos DB NoSQL databases.
+The target database is derived from the X-Graph header via ScenarioContext.
 """
 
 from __future__ import annotations
@@ -14,11 +13,13 @@ import threading
 
 from azure.cosmos import CosmosClient
 from azure.cosmos.exceptions import CosmosHttpResponseError
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from config import (
     COSMOS_NOSQL_ENDPOINT,
     COSMOS_NOSQL_DATABASE,
+    ScenarioContext,
+    get_scenario_context,
     get_credential,
 )
 from models import TelemetryQueryRequest, TelemetryQueryResponse
@@ -26,12 +27,6 @@ from models import TelemetryQueryRequest, TelemetryQueryResponse
 logger = logging.getLogger("graph-query-api")
 
 router = APIRouter()
-
-# ---------------------------------------------------------------------------
-# Valid container names (agents may only query these)
-# ---------------------------------------------------------------------------
-
-VALID_CONTAINERS = {"AlertStream", "LinkTelemetry"}
 
 # ---------------------------------------------------------------------------
 # Cosmos NoSQL helpers
@@ -125,35 +120,37 @@ def _execute_cosmos_sql(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Endpoint
+# ---------------------------------------------------------------------------
+
+
 @router.post(
     "/query/telemetry",
     response_model=TelemetryQueryResponse,
-    summary="Execute a SQL query against telemetry data in Cosmos DB",
+    summary="Execute a SQL query against telemetry",
     description=(
-        "Submits a Cosmos SQL query to a telemetry container (AlertStream or "
-        "LinkTelemetry) in Azure Cosmos DB NoSQL. Returns columns and rows. "
-        "If the query has a syntax error, the response will contain an "
-        "'error' field with the details — read it, fix your query, and retry."
+        "Submits a Cosmos SQL query to a telemetry container in Azure Cosmos "
+        "DB NoSQL. The target database is derived from the X-Graph header. "
+        "Returns columns and rows. If the query has a syntax error, the "
+        "response will contain an 'error' field — read it, fix your query, and retry."
     ),
 )
-async def query_telemetry(req: TelemetryQueryRequest):
+async def query_telemetry(
+    req: TelemetryQueryRequest,
+    ctx: ScenarioContext = Depends(get_scenario_context),
+):
     logger.info(
-        "POST /query/telemetry — container=%s  query=%.200s",
-        req.container_name, req.query,
+        "POST /query/telemetry — db=%s  container=%s  query=%.200s",
+        ctx.telemetry_database, req.container_name, req.query,
     )
     endpoint = COSMOS_NOSQL_ENDPOINT
-    db = COSMOS_NOSQL_DATABASE
-    if not endpoint or not db:
+    db = ctx.telemetry_database
+    if not endpoint:
         return TelemetryQueryResponse(
             columns=[],
             rows=[],
-            error="Cosmos NoSQL endpoint and database name are required (set COSMOS_NOSQL_ENDPOINT and COSMOS_NOSQL_DATABASE env vars)",
-        )
-    if req.container_name not in VALID_CONTAINERS:
-        return TelemetryQueryResponse(
-            columns=[],
-            rows=[],
-            error=f"Invalid container_name '{req.container_name}'. Must be one of: {', '.join(sorted(VALID_CONTAINERS))}",
+            error="Cosmos NoSQL endpoint not configured (set COSMOS_NOSQL_ENDPOINT env var)",
         )
     try:
         result = await asyncio.to_thread(

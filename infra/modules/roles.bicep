@@ -29,6 +29,9 @@ param containerAppPrincipalId string = ''
 @description('Principal ID of the API Container App managed identity (for Foundry agent invocation)')
 param apiContainerAppPrincipalId string = ''
 
+@description('Name of the Cosmos DB Gremlin account (for ARM graph creation RBAC)')
+param cosmosGremlinAccountName string = ''
+
 // ---------------------------------------------------------------------------
 // Built-in Role Definition GUIDs
 // ---------------------------------------------------------------------------
@@ -257,6 +260,73 @@ resource apiCognitiveServicesUser 'Microsoft.Authorization/roleAssignments@2022-
   properties: {
     principalId: apiContainerAppPrincipalId
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesUser)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ============================================================================
+// COSMOS DB GREMLIN ACCOUNT CONTRIBUTOR (ARM graph creation from Container App)
+// ============================================================================
+
+resource cosmosGremlinAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = if (!empty(cosmosGremlinAccountName)) {
+  name: cosmosGremlinAccountName
+}
+
+resource containerAppGremlinContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(cosmosGremlinAccountName) && !empty(containerAppPrincipalId)) {
+  name: guid(cosmosGremlinAccount.id, containerAppPrincipalId, 'DocumentDBAccountContributor')
+  scope: cosmosGremlinAccount
+  properties: {
+    principalId: containerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5bd9cd88-fe45-4216-938b-f97437e15450')
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Container App MI → DocumentDB Account Contributor on NoSQL account
+// Required for create_database_if_not_exists during telemetry upload
+resource containerAppNoSqlContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(cosmosNoSqlAccountName) && !empty(containerAppPrincipalId)) {
+  name: guid(cosmosNoSqlAccount.id, containerAppPrincipalId, 'DocumentDBAccountContributor-nosql')
+  scope: cosmosNoSqlAccount
+  properties: {
+    principalId: containerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5bd9cd88-fe45-4216-938b-f97437e15450')
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ============================================================================
+// STORAGE + SEARCH ROLES FOR CONTAINER APP (scenario upload feature)
+// ============================================================================
+
+// Container App MI → Storage Blob Data Contributor (upload runbooks/tickets to blob)
+resource containerAppStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(containerAppPrincipalId)) {
+  name: guid(storageAccount.id, containerAppPrincipalId, roles.storageBlobDataContributor)
+  scope: storageAccount
+  properties: {
+    principalId: containerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.storageBlobDataContributor)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Container App MI → Search Service Contributor (create indexes, skillsets, indexers)
+resource containerAppSearchServiceContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(containerAppPrincipalId)) {
+  name: guid(search.id, containerAppPrincipalId, roles.searchServiceContributor)
+  scope: search
+  properties: {
+    principalId: containerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchServiceContributor)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Container App MI → Search Index Data Contributor (read/write index data)
+resource containerAppSearchIndexDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(containerAppPrincipalId)) {
+  name: guid(search.id, containerAppPrincipalId, roles.searchIndexDataContributor)
+  scope: search
+  properties: {
+    principalId: containerAppPrincipalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchIndexDataContributor)
     principalType: 'ServicePrincipal'
   }
 }

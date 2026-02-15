@@ -36,6 +36,15 @@ paths:
                     A query string (natural language or formal syntax).
                     The mock backend returns representative sample data.
                     Example: "find all core routers"
+      parameters:
+        - name: X-Graph
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: ["{graph_name}"]
+          description: |
+            The graph name to route this request to. Always use the value shown.
       responses:
         "200":
           description: Query results (check 'error' field for query failures)
@@ -73,6 +82,15 @@ paths:
         Returns columns and rows of alert or telemetry data.
         Containers available: AlertStream (~5000 docs), LinkTelemetry (~8640 docs).
         Use standard SQL syntax: SELECT, FROM c, WHERE, ORDER BY, TOP, GROUP BY.
+      parameters:
+        - name: X-Graph
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: ["{graph_name}"]
+          description: |
+            The graph name to route this request to. Always use the value shown.
       requestBody:
         required: true
         content:

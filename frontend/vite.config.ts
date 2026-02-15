@@ -39,6 +39,13 @@ export default defineConfig({
       '/query': {
         target: 'http://localhost:8100',
         changeOrigin: true,
+        // SSE support for scenario upload progress streaming
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['cache-control'] = 'no-cache';
+            proxyRes.headers['x-accel-buffering'] = 'no';
+          });
+        },
       },
     },
   },

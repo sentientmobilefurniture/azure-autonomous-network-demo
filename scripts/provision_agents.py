@@ -123,9 +123,18 @@ def load_prompt(filename: str) -> tuple[str, str]:
 
     Returns (instructions, description) where description is the last
     paragraph after '## Foundry Agent Description'.
+
+    Substitutes {graph_name} and {scenario_prefix} placeholders with
+    values from the environment (COSMOS_GREMLIN_GRAPH).
     """
     path = PROMPTS_DIR / filename
     text = path.read_text(encoding="utf-8").strip()
+
+    # Substitute scenario placeholders
+    graph_name = os.environ.get("COSMOS_GREMLIN_GRAPH", "topology")
+    scenario_prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
+    text = text.replace("{graph_name}", graph_name)
+    text = text.replace("{scenario_prefix}", scenario_prefix)
 
     # Extract description (last line after "## Foundry Agent Description")
     description = ""
@@ -157,6 +166,12 @@ def load_graph_explorer_prompt() -> tuple[str, str]:
         (base / language_file).read_text(encoding="utf-8").strip(),
     ])
 
+    # Substitute scenario placeholders
+    graph_name = os.environ.get("COSMOS_GREMLIN_GRAPH", "topology")
+    scenario_prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
+    instructions = instructions.replace("{graph_name}", graph_name)
+    instructions = instructions.replace("{scenario_prefix}", scenario_prefix)
+
     # Read description
     desc_text = (base / "description.md").read_text(encoding="utf-8").strip()
     desc_lines = [
@@ -182,8 +197,12 @@ def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
     removed from the spec so the agent only sees its own endpoint.
     """
     raw = _get_openapi_spec_file().read_text(encoding="utf-8")
+    # Resolve graph_name from env (set during scenario upload / apply)
+    graph_name = os.environ.get("COSMOS_GREMLIN_GRAPH", "topology")
+
     replacements = {
         "{base_url}": config["graph_query_api_uri"].rstrip("/"),
+        "{graph_name}": graph_name,
     }
     for placeholder, value in replacements.items():
         raw = raw.replace(placeholder, value)

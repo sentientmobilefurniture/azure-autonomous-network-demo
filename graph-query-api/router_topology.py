@@ -3,6 +3,8 @@ Router: POST /query/topology — returns graph topology for the frontend viewer.
 
 Returns {nodes, edges, meta} instead of the tabular {columns, data} shape
 used by /query/graph (which is designed for agent consumption).
+
+Supports per-request graph selection via the X-Graph header (ScenarioContext).
 """
 
 from __future__ import annotations
@@ -10,10 +12,11 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from backends import get_backend_for_context
+from config import ScenarioContext, get_scenario_context
 from models import TopologyRequest, TopologyResponse, TopologyMeta
-from router_graph import get_graph_backend  # reuse the lazy-init singleton
 
 logger = logging.getLogger("graph-query-api")
 
@@ -25,14 +28,19 @@ router = APIRouter()
     response_model=TopologyResponse,
     summary="Get graph topology for visualization",
     description=(
-        "Returns the network topology as separate nodes and edges arrays, "
-        "suitable for graph rendering libraries. Optionally filter by vertex labels."
+        "Returns the graph topology as separate nodes and edges arrays, "
+        "suitable for graph rendering libraries. Optionally filter by vertex labels. "
+        "Use the X-Graph header to target a specific scenario's graph."
     ),
 )
-async def topology(req: TopologyRequest) -> TopologyResponse:
-    backend = get_graph_backend()
+async def topology(
+    req: TopologyRequest,
+    ctx: ScenarioContext = Depends(get_scenario_context),
+) -> TopologyResponse:
+    backend = get_backend_for_context(ctx)
     logger.info(
-        "POST /query/topology — vertex_labels=%s  query=%s",
+        "POST /query/topology — graph=%s  vertex_labels=%s  query=%s",
+        ctx.graph_name,
         req.vertex_labels,
         f"{req.query[:100]}..." if req.query else None,
     )

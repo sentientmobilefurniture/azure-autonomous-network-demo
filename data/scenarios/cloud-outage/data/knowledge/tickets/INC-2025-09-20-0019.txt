@@ -1,0 +1,30 @@
+Incident: INC-2025-09-20-0019
+Title: Kernel panic on Dell hosts after security patch — rolling restart
+Severity: P2
+Root Cause: HOST-USE-A-01-01
+Root Cause Type: KERNEL_PANIC
+Created: 2025-09-20T22:15:00Z
+Resolved: 2025-09-21T01:30:00Z
+SLA Breached: No
+
+Description:
+Kernel 5.15.0-87 security patch caused panic on boot for Dell PowerEdge hosts with specific BIOS version. 3 hosts failed to restart after planned maintenance.
+
+Detection Method:
+Automated host health check — no heartbeat after reboot window
+
+Resolution:
+Booted affected hosts from rescue image, rolled back kernel to 5.15.0-86. Blacklisted BIOS+kernel combination in deployment matrix.
+
+Customer Impact:
+- SVC-ECOMMERCE-WEB
+- SVC-ECOMMERCE-API
+
+Services Affected: 2
+Alerts Generated: 456
+Alerts Suppressed: 440
+Time to Detect: 15 seconds
+Time to Resolve: 195 minutes
+
+Lessons Learned:
+Add BIOS version to Host entity properties for compatibility matrix. Test kernel patches on representative hardware profiles before fleet-wide rollout.

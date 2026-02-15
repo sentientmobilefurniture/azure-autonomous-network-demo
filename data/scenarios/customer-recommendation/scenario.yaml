@@ -1,0 +1,112 @@
+# ============================================================================
+# Scenario Manifest — Customer Recommendation Engine
+# ============================================================================
+
+name: customer-recommendation
+display_name: "Customer Recommendation Engine — Model Bias Incident"
+description: >
+  A recommendation model update introduces a price-insensitivity bias,
+  surfacing high-value products ($1000+) to budget-conscious customer
+  segments (New, Casual, Win-Back). Return rates spike to 25%, conversion
+  crashes, and customer satisfaction plummets. The AI investigates which
+  segments, campaigns, and products are affected.
+version: "1.0"
+domain: e-commerce
+
+# ---------------------------------------------------------------------------
+# Data layout — paths relative to this file's parent directory
+# ---------------------------------------------------------------------------
+
+paths:
+  entities: data/entities
+  graph_schema: graph_schema.yaml
+  telemetry: data/telemetry
+  runbooks: data/knowledge/runbooks
+  tickets: data/knowledge/tickets
+  prompts: data/prompts
+  default_alert: data/prompts/default_alert.md
+
+# ---------------------------------------------------------------------------
+# Cosmos DB mapping
+# ---------------------------------------------------------------------------
+
+cosmos:
+  gremlin:
+    database: networkgraph
+    graph: topology
+  nosql:
+    database: telemetry
+    containers:
+      - name: AlertStream
+        partition_key: /SourceNodeType
+        csv_file: AlertStream.csv
+        id_field: AlertId
+        numeric_fields: [ClickRatePct, ConversionRatePct, ReturnRatePct, AvgOrderValueUSD]
+      - name: RecommendationMetrics
+        partition_key: /SegmentId
+        csv_file: RecommendationMetrics.csv
+        id_field: MetricId
+        numeric_fields: [ClickRatePct, ConversionRatePct, ReturnRatePct, AvgOrderValueUSD]
+
+# ---------------------------------------------------------------------------
+# AI Search indexes
+# ---------------------------------------------------------------------------
+
+search_indexes:
+  - name: runbooks-index
+    container: runbooks
+    source: data/knowledge/runbooks
+  - name: tickets-index
+    container: tickets
+    source: data/knowledge/tickets
+
+# ---------------------------------------------------------------------------
+# Graph visualisation hints
+# ---------------------------------------------------------------------------
+
+graph_styles:
+  node_types:
+    CustomerSegment:  { color: "#ef4444", size: 28, icon: "users" }
+    Customer:         { color: "#f97316", size: 14, icon: "user" }
+    ProductCategory:  { color: "#eab308", size: 22, icon: "folder" }
+    Product:          { color: "#22c55e", size: 16, icon: "box" }
+    Campaign:         { color: "#3b82f6", size: 20, icon: "megaphone" }
+    Supplier:         { color: "#8b5cf6", size: 18, icon: "truck" }
+    Warehouse:        { color: "#06b6d4", size: 20, icon: "warehouse" }
+    SLAPolicy:        { color: "#94a3b8", size: 12, icon: "policy" }
+
+# ---------------------------------------------------------------------------
+# Telemetry baselines
+# ---------------------------------------------------------------------------
+
+telemetry_baselines:
+  recommendation_metrics:
+    - metric: ClickRatePct
+      normal: "3–8%"
+      degraded: "> 12% (curiosity clicks on wrong products)"
+      down: "< 1%"
+    - metric: ConversionRatePct
+      normal: "2–5%"
+      degraded: "< 1%"
+      down: "< 0.3%"
+    - metric: ReturnRatePct
+      normal: "1–3%"
+      degraded: "> 10%"
+      down: "> 25% (model bias confirmed)"
+    - metric: AvgOrderValueUSD
+      normal: "$50–200 (segment-dependent)"
+      degraded: "> $500 for budget segments"
+      down: "> $1000 for SEG-NEW/SEG-CASUAL"
+  alert_stream:
+    - metric: ClickRatePct
+      normal: "3–8%"
+      anomalous: "> 12%"
+    - metric: ConversionRatePct
+      normal: "2–5%"
+      anomalous: "< 1%"
+    - metric: ReturnRatePct
+      normal: "1–3%"
+      anomalous: "> 10%"
+    - metric: AvgOrderValueUSD
+      normal: "$50–200"
+      anomalous: "> $500 for non-VIP segments"

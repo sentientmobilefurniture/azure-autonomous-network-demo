@@ -48,7 +48,10 @@ Thumbs.db
 htmlcov/
 .mypy_cache/
 
-# --- Generated data (recreated by data/scripts/) ---
+# --- Generated data (recreated by scenario scripts) ---
+data/scenarios/*/data/entities/
+data/scenarios/*/data/telemetry/
+data/scenarios/*.tar.gz
 data/network/
 data/telemetry/
 data/cosmosdb/

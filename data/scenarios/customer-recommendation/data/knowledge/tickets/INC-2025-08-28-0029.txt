@@ -1,0 +1,30 @@
+Incident: INC-2025-08-28-0029
+Title: Search relevance regression — category filters broken
+Severity: P2
+Root Cause: CAT-ELECTRONICS
+Root Cause Type: SEARCH_RELEVANCE_BUG
+Created: 2025-08-28T14:30:00Z
+Resolved: 2025-08-28T16:00:00Z
+SLA Breached: No
+
+Description:
+Search index rebuild introduced a bug where CAT-ELECTRONICS subcategory filters returned products from all categories. Users searching for phones saw furniture results.
+
+Detection Method:
+Automated click-through rate drop alert
+
+Resolution:
+Rebuilt search index with correct category mapping. Added integration test for category filter accuracy.
+
+Customer Impact:
+- SEG-LOYAL
+- SEG-CASUAL
+
+Services Affected: 1
+Alerts Generated: 78
+Alerts Suppressed: 60
+Time to Detect: 30 seconds
+Time to Resolve: 90 minutes
+
+Lessons Learned:
+Add search relevance regression test to CI/CD pipeline. Monitor category-specific click-through rates as leading indicator of search quality.
