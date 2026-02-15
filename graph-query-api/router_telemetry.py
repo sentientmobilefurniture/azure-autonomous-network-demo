@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
+import time
 
-from azure.cosmos import CosmosClient
 from azure.cosmos.exceptions import CosmosHttpResponseError
 from fastapi import APIRouter, Depends
 
@@ -20,49 +19,18 @@ from config import (
     COSMOS_NOSQL_DATABASE,
     ScenarioContext,
     get_scenario_context,
-    get_credential,
 )
+from cosmos_helpers import get_cosmos_client, close_cosmos_client
 from models import TelemetryQueryRequest, TelemetryQueryResponse
 
 logger = logging.getLogger("graph-query-api")
 
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
-# Cosmos NoSQL helpers
-# ---------------------------------------------------------------------------
-
-_cosmos_lock = threading.Lock()
-_cosmos_client: CosmosClient | None = None
-_cosmos_endpoint: str = ""
-
-
-def _get_cosmos_client(endpoint: str) -> CosmosClient:
-    """Return a cached CosmosClient, creating a new one if endpoint changes."""
-    global _cosmos_client, _cosmos_endpoint
-    with _cosmos_lock:
-        if _cosmos_client is None or endpoint != _cosmos_endpoint:
-            # Close the old client if endpoint changed to avoid resource leak
-            if _cosmos_client is not None:
-                try:
-                    _cosmos_client.close()
-                except Exception:
-                    pass
-            _cosmos_client = CosmosClient(url=endpoint, credential=get_credential())
-            _cosmos_endpoint = endpoint
-        return _cosmos_client
-
 
 def close_telemetry_backend() -> None:
     """Close the cached CosmosClient (called during app lifespan shutdown)."""
-    global _cosmos_client
-    with _cosmos_lock:
-        if _cosmos_client is not None:
-            try:
-                _cosmos_client.close()
-            except Exception:
-                pass
-            _cosmos_client = None
+    close_cosmos_client()
 
 
 def _execute_cosmos_sql(
@@ -72,24 +40,22 @@ def _execute_cosmos_sql(
     cosmos_database: str = "",
 ) -> dict:
     """Execute a Cosmos SQL query against a named container and return structured results."""
-    import time as _time  # TODO: move to module level when convenient
-
     endpoint = cosmos_endpoint or COSMOS_NOSQL_ENDPOINT
     db_name = cosmos_database or COSMOS_NOSQL_DATABASE
 
     logger.info("Cosmos SQL request: db=%s  container=%s  endpoint=%s", db_name, container_name, endpoint)
     logger.debug("Cosmos SQL query:\n%s", query)
 
-    client = _get_cosmos_client(endpoint)
+    client = get_cosmos_client()
     database = client.get_database_client(db_name)
     container = database.get_container_client(container_name)
 
-    t0 = _time.time()
+    t0 = time.time()
     items = list(container.query_items(
         query=query,
         enable_cross_partition_query=True,
     ))
-    elapsed_ms = (_time.time() - t0) * 1000
+    elapsed_ms = (time.time() - t0) * 1000
 
     if not items:
         logger.info("Cosmos SQL returned 0 rows (%.0fms)", elapsed_ms)
@@ -120,11 +86,6 @@ def _execute_cosmos_sql(
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Endpoint
-# ---------------------------------------------------------------------------
-
-
 @router.post(
     "/query/telemetry",
     response_model=TelemetryQueryResponse,
@@ -140,9 +101,15 @@ async def query_telemetry(
     req: TelemetryQueryRequest,
     ctx: ScenarioContext = Depends(get_scenario_context),
 ):
+    # Prefix container name with scenario prefix for shared DB isolation
+    container_name = (
+        f"{ctx.telemetry_container_prefix}-{req.container_name}"
+        if ctx.telemetry_container_prefix
+        else req.container_name
+    )
     logger.info(
         "POST /query/telemetry — db=%s  container=%s  query=%.200s",
-        ctx.telemetry_database, req.container_name, req.query,
+        ctx.telemetry_database, container_name, req.query,
     )
     endpoint = COSMOS_NOSQL_ENDPOINT
     db = ctx.telemetry_database
@@ -156,7 +123,7 @@ async def query_telemetry(
         result = await asyncio.to_thread(
             _execute_cosmos_sql,
             req.query,
-            container_name=req.container_name,
+            container_name=container_name,
             cosmos_endpoint=endpoint,
             cosmos_database=db,
         )

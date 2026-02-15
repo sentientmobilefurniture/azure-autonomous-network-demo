@@ -105,8 +105,10 @@ export function useInvestigation() {
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('SSE stream error:', err);
+      setErrorMessage((prev) => prev || 'Connection to server lost — the investigation may still be running. Try again.');
     } finally {
       clearTimeout(timeoutId);
+      setThinking(null);
       setRunning(false);
       // Ensure runMeta is set with correct step count from ref
       setRunMeta((m) => ({

@@ -65,6 +65,10 @@ interface Props {
     name: string;
     display_name?: string;
     description?: string;
+    use_cases?: string[];
+    example_questions?: string[];
+    graph_styles?: Record<string, unknown>;
+    domain?: string;
     upload_results: Record<string, unknown>;
   }) => Promise<unknown>;
 }
@@ -74,6 +78,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   const [nameAutoDetected, setNameAutoDetected] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
+  const scenarioMetadataRef = useRef<Record<string, unknown> | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [slots, setSlots] = useState<Record<SlotKey, ScenarioUploadSlot>>(() => makeEmptySlots());
   const [modalState, setModalState] = useState<ModalState>('idle');
@@ -83,6 +88,24 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   const [showOverrideConfirm, setShowOverrideConfirm] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+
+  // Upload timer
+  const uploadStartRef = useRef<number>(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function formatElapsed(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return m > 0 ? `${m}m ${s.toString().padStart(2, '0')}s` : `${s}s`;
+  }
+
+  function stopTimer() {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+  }
 
   function makeEmptySlots(): Record<SlotKey, ScenarioUploadSlot> {
     const result: Partial<Record<SlotKey, ScenarioUploadSlot>> = {};
@@ -116,8 +139,15 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       setCurrentUploadStep('');
       setGlobalError('');
       setShowOverrideConfirm(false);
+      setElapsedSeconds(0);
+      stopTimer();
     }
   }, [open]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => stopTimer();
+  }, []);
 
   // Close on Escape (when not uploading)
   useEffect(() => {
@@ -201,6 +231,13 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     setGlobalError('');
     abortRef.current = new AbortController();
 
+    // Start upload timer
+    uploadStartRef.current = Date.now();
+    setElapsedSeconds(0);
+    timerIntervalRef.current = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - uploadStartRef.current) / 1000));
+    }, 1000);
+
     const uploadResults: Record<string, unknown> = {};
 
     // Upload sequentially: graph → telemetry → runbooks → tickets → prompts
@@ -233,6 +270,10 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
             onComplete: (data) => {
               updateSlot(def.key, { status: 'done', result: data, progress: 'Complete', pct: 100 });
               uploadResults[def.key] = data;
+              // Capture metadata from graph upload for save call
+              if (def.key === 'graph' && data.scenario_metadata) {
+                scenarioMetadataRef.current = data.scenario_metadata as Record<string, unknown>;
+              }
             },
             onError: (data) => {
               updateSlot(def.key, { status: 'error', error: data.error });
@@ -269,14 +310,20 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     setOverallPct(95);
 
     try {
+      const meta = scenarioMetadataRef.current;
       await saveScenarioMeta({
         name,
-        display_name: displayName || undefined,
-        description: description || undefined,
+        display_name: (meta?.display_name as string) || displayName || undefined,
+        description: (meta?.description as string) || description || undefined,
+        use_cases: meta?.use_cases as string[] | undefined,
+        example_questions: meta?.example_questions as string[] | undefined,
+        graph_styles: meta?.graph_styles as Record<string, unknown> | undefined,
+        domain: meta?.domain as string | undefined,
         upload_results: uploadResults,
       });
       setModalState('done');
       setOverallPct(100);
+      stopTimer();
       // Auto-close after brief delay
       setTimeout(() => {
         onSaved();
@@ -285,12 +332,14 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     } catch (e) {
       setGlobalError(String(e));
       setModalState('error');
+      stopTimer();
     }
   }, [canSave, allDone, existingNames, name, showOverrideConfirm, slots, updateSlot, saveScenarioMeta, displayName, description, onSaved, onClose]);
 
   const handleCancel = useCallback(() => {
     if (modalState === 'uploading') {
       abortRef.current?.abort();
+      stopTimer();
       setModalState('idle');
     } else {
       onClose();
@@ -471,6 +520,16 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
                   style={{ width: `${Math.max(overallPct, 3)}%` }}
                 />
               </div>
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-xs text-text-secondary">
+                  Overall: {SLOT_DEFS.filter(d => slots[d.key].status === 'done').length} of {SLOT_DEFS.length}
+                </span>
+                <span className={`text-xs font-mono tabular-nums ${
+                  elapsedSeconds > 30 ? 'text-text-secondary' : 'text-text-muted'
+                }`}>
+                  ⏱ {formatElapsed(elapsedSeconds)}
+                </span>
+              </div>
             </div>
           )}
 
@@ -478,6 +537,9 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           {modalState === 'done' && (
             <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 text-center">
               <p className="text-sm text-status-success">Scenario "{name}" saved successfully</p>
+              <p className="text-xs text-status-success/70 mt-1 font-mono tabular-nums">
+                Total: {formatElapsed(elapsedSeconds)}
+              </p>
             </div>
           )}
 

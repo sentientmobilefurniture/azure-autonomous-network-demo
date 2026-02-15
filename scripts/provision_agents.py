@@ -1,83 +1,48 @@
 """
-provision_agents.py — Create Foundry Agents for the Autonomous Network NOC Demo.
+provision_agents.py — CLI wrapper for agent provisioning.
 
-Uses the Azure AI Agents SDK to programmatically create all 5 agents:
-  1. GraphExplorerAgent   — OpenApiTool (graph via graph-query-api)
-  2. TelemetryAgent       — OpenApiTool (KQL via graph-query-api)
-  3. RunbookKBAgent       — AzureAISearchTool (runbooks-index)
-  4. HistoricalTicketAgent — AzureAISearchTool (tickets-index)
-  5. Orchestrator          — ConnectedAgentTool (wired to all 4 above)
-
-Prerequisites:
-  - 'azd up' completed (infra deployed, azure_config.env populated)
-  - graph-query-api deployed and healthy (GRAPH_QUERY_API_URI set)
-  - Search indexes created (create_runbook_indexer.py, create_tickets_indexer.py)
+Thin CLI that loads config + prompts from disk and delegates to
+AgentProvisioner (agent_provisioner.py) for all Foundry API calls.
 
 Usage:
-  uv run python provision_agents.py [--force]
+    uv run python provision_agents.py [--force]
 
 Options:
-  --force   Delete any existing agents with matching names before creating new ones
+    --force   Delete any existing agents with matching names before creating
 """
+
+from __future__ import annotations
 
 import os
 import sys
-import json
 from pathlib import Path
 
-import yaml
 from dotenv import load_dotenv
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-from azure.ai.agents.models import (
-    AzureAISearchTool,
-    AzureAISearchQueryType,
-    ConnectedAgentTool,
-    OpenApiTool,
-    OpenApiAnonymousAuthDetails,
+
+from agent_provisioner import (
+    AgentProvisioner,
+    AGENT_IDS_FILE,
+    _build_connection_id,
+    AI_SEARCH_CONNECTION_NAME,
 )
 
-
-# ── Paths ───────────────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
-AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
-OPENAPI_DIR = PROJECT_ROOT / "graph-query-api" / "openapi"
-
-# ── Graph backend (resolved lazily after load_dotenv in load_config) ─
-
-OPENAPI_SPEC_MAP = {
-    "cosmosdb": OPENAPI_DIR / "cosmosdb.yaml",
-    "mock": OPENAPI_DIR / "mock.yaml",
-}
 
 LANGUAGE_FILE_MAP = {
     "cosmosdb": "language_gremlin.md",
     "mock": "language_mock.md",
 }
 
-GRAPH_TOOL_DESCRIPTIONS = {
-    "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore network topology and relationships.",
-    "mock": "Query the network topology graph (offline mock mode).",
-}
+
+# ── Config helpers ────────────────────────────────────────────────
 
 
-def _get_graph_backend() -> str:
-    """Return the graph backend value (resolved after load_dotenv)."""
-    return os.environ.get("GRAPH_BACKEND", "cosmosdb").lower()
-
-
-def _get_openapi_spec_file() -> Path:
-    backend = _get_graph_backend()
-    return OPENAPI_SPEC_MAP.get(backend, OPENAPI_DIR / "cosmosdb.yaml")
-
-
-# ── Config ──────────────────────────────────────────────────────────
-
-def load_config() -> dict:
-    """Load azure_config.env and return as dict."""
+def _load_config() -> dict:
+    """Load azure_config.env and return validated config dict."""
     load_dotenv(CONFIG_FILE, override=True)
 
     required = [
@@ -98,9 +63,8 @@ def load_config() -> dict:
     graph_query_api_uri = os.environ.get("GRAPH_QUERY_API_URI", "")
     if not graph_query_api_uri:
         print("WARNING: GRAPH_QUERY_API_URI not set. GraphExplorer and Telemetry agents")
-        print("         will be created WITHOUT tools. Deploy graph-query-api first.")
+        print("         will be created WITHOUT tools.")
 
-    # Compute project-scoped endpoint
     base_endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
     project_name = os.environ["AI_FOUNDRY_PROJECT_NAME"]
     project_endpoint = f"{base_endpoint}/api/projects/{project_name}"
@@ -115,297 +79,52 @@ def load_config() -> dict:
         "foundry_name": os.environ["AI_FOUNDRY_NAME"],
         "project_name": project_name,
         "graph_query_api_uri": graph_query_api_uri,
+        "graph_backend": os.environ.get("GRAPH_BACKEND", "cosmosdb").lower(),
+        "graph_name": os.environ.get("COSMOS_GREMLIN_GRAPH", "topology"),
     }
 
 
-def load_prompt(filename: str) -> tuple[str, str]:
-    """Load a prompt file and extract the instructions and description.
+# ── Prompt loaders ────────────────────────────────────────────────
 
-    Returns (instructions, description) where description is the last
-    paragraph after '## Foundry Agent Description'.
 
-    Substitutes {graph_name} and {scenario_prefix} placeholders with
-    values from the environment (COSMOS_GREMLIN_GRAPH).
-    """
-    path = PROMPTS_DIR / filename
-    text = path.read_text(encoding="utf-8").strip()
-
-    # Substitute scenario placeholders
-    graph_name = os.environ.get("COSMOS_GREMLIN_GRAPH", "topology")
+def _substitute_placeholders(text: str, graph_name: str) -> str:
+    """Replace {graph_name} and {scenario_prefix} in prompt text."""
     scenario_prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
-    text = text.replace("{graph_name}", graph_name)
-    text = text.replace("{scenario_prefix}", scenario_prefix)
-
-    # Extract description (last line after "## Foundry Agent Description")
-    description = ""
-    if "## Foundry Agent Description" in text:
-        desc_section = text.split("## Foundry Agent Description")[-1].strip()
-        # Description is the text between > markers
-        for line in desc_section.splitlines():
-            line = line.strip()
-            if line.startswith(">"):
-                description += line.lstrip("> ").strip() + " "
-        description = description.strip()
-
-    return text, description
+    return text.replace("{graph_name}", graph_name).replace("{scenario_prefix}", scenario_prefix)
 
 
-def load_graph_explorer_prompt() -> tuple[str, str]:
-    """Compose the GraphExplorer prompt from parts based on GRAPH_BACKEND.
+def _load_prompt(filename: str, graph_name: str) -> str:
+    """Load a prompt file from disk, with placeholder substitution."""
+    path = PROMPTS_DIR / filename
+    return _substitute_placeholders(path.read_text(encoding="utf-8").strip(), graph_name)
 
-    Assembles: core_instructions + core_schema + language_{backend}
-    Also reads description.md for the agent description.
-    """
+
+def _load_graph_explorer_prompt(backend: str, graph_name: str) -> str:
+    """Compose the GraphExplorer prompt from parts."""
     base = PROMPTS_DIR / "graph_explorer"
-    backend = _get_graph_backend()
     language_file = LANGUAGE_FILE_MAP.get(backend, "language_gremlin.md")
-
     instructions = "\n\n---\n\n".join([
         (base / "core_instructions.md").read_text(encoding="utf-8").strip(),
         (base / "core_schema.md").read_text(encoding="utf-8").strip(),
         (base / language_file).read_text(encoding="utf-8").strip(),
     ])
-
-    # Substitute scenario placeholders
-    graph_name = os.environ.get("COSMOS_GREMLIN_GRAPH", "topology")
-    scenario_prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
-    instructions = instructions.replace("{graph_name}", graph_name)
-    instructions = instructions.replace("{scenario_prefix}", scenario_prefix)
-
-    # Read description
-    desc_text = (base / "description.md").read_text(encoding="utf-8").strip()
-    desc_lines = [
-        line.lstrip("> ").strip()
-        for line in desc_text.splitlines()
-        if line.strip().startswith(">")
-    ]
-    description = " ".join(desc_lines) if desc_lines else desc_text
-
-    print(f"  GraphExplorer prompt: {len(instructions)} chars, backend={backend}, language={language_file}")
-    return instructions, description
+    return _substitute_placeholders(instructions, graph_name)
 
 
-# ── OpenAPI tool helpers ────────────────────────────────────────────
-
-def _load_openapi_spec(config: dict, *, keep_path: str | None = None) -> dict:
-    """Load the OpenAPI spec from disk and substitute all placeholders.
-
-    Placeholders replaced:
-      {base_url}              — graph-query-api Container App URI
-
-    If *keep_path* is given (e.g. "/query/graph"), all other paths are
-    removed from the spec so the agent only sees its own endpoint.
-    """
-    raw = _get_openapi_spec_file().read_text(encoding="utf-8")
-    # Resolve graph_name from env (set during scenario upload / apply)
-    graph_name = os.environ.get("COSMOS_GREMLIN_GRAPH", "topology")
-
-    replacements = {
-        "{base_url}": config["graph_query_api_uri"].rstrip("/"),
-        "{graph_name}": graph_name,
+def _load_all_prompts(config: dict) -> dict[str, str]:
+    """Load all 5 agent prompts from disk."""
+    gn = config["graph_name"]
+    return {
+        "orchestrator": _load_prompt("foundry_orchestrator_agent.md", gn),
+        "graph_explorer": _load_graph_explorer_prompt(config["graph_backend"], gn),
+        "telemetry": _load_prompt("foundry_telemetry_agent_v2.md", gn),
+        "runbook": _load_prompt("foundry_runbook_kb_agent.md", gn),
+        "ticket": _load_prompt("foundry_historical_ticket_agent.md", gn),
     }
-    for placeholder, value in replacements.items():
-        raw = raw.replace(placeholder, value)
-    spec = yaml.safe_load(raw)
-
-    # Filter to a single endpoint when requested
-    if keep_path and "paths" in spec:
-        spec["paths"] = {k: v for k, v in spec["paths"].items() if k == keep_path}
-
-    return spec
 
 
-def _make_graph_openapi_tool(config: dict) -> OpenApiTool:
-    """Build an OpenApiTool for the /query/graph endpoint only."""
-    spec = _load_openapi_spec(config, keep_path="/query/graph")
-    return OpenApiTool(
-        name="query_graph",
-        spec=spec,
-        description=GRAPH_TOOL_DESCRIPTIONS.get(_get_graph_backend(), GRAPH_TOOL_DESCRIPTIONS["cosmosdb"]),
-        auth=OpenApiAnonymousAuthDetails(),
-    )
+# ── Main ──────────────────────────────────────────────────────────
 
-
-def _make_telemetry_openapi_tool(config: dict) -> OpenApiTool:
-    """Build an OpenApiTool for the /query/telemetry endpoint only."""
-    spec = _load_openapi_spec(config, keep_path="/query/telemetry")
-    return OpenApiTool(
-        name="query_telemetry",
-        spec=spec,
-        description="Execute a Cosmos SQL query against telemetry data (AlertStream or LinkTelemetry) in Azure Cosmos DB.",
-        auth=OpenApiAnonymousAuthDetails(),
-    )
-
-
-# ── Agent cleanup ───────────────────────────────────────────────────
-
-AGENT_NAMES = [
-    "GraphExplorerAgent",
-    "TelemetryAgent",
-    "RunbookKBAgent",
-    "HistoricalTicketAgent",
-    "Orchestrator",
-]
-
-
-def cleanup_existing_agents(agents_client, force: bool):
-    """Delete existing agents with known names if --force is set."""
-    if not force:
-        return
-
-    print("\n  Cleaning up existing agents (--force)...")
-    existing = agents_client.list_agents()
-    for agent in existing:
-        if agent.name in AGENT_NAMES:
-            print(f"    Deleting {agent.name} ({agent.id})...")
-            agents_client.delete_agent(agent.id)
-    print("    Done.")
-
-
-# ── Connection ID helpers ───────────────────────────────────────────
-
-AI_SEARCH_CONNECTION_NAME = "aisearch-connection"  # from infra/modules/ai-foundry.bicep
-
-
-def _build_connection_id(config: dict, connection_name: str) -> str:
-    """Build a project-scoped connection ID from config values.
-
-    Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/
-            Microsoft.CognitiveServices/accounts/{foundry}/
-            projects/{project}/connections/{name}
-    """
-    return (
-        f"/subscriptions/{config['subscription_id']}"
-        f"/resourceGroups/{config['resource_group']}"
-        f"/providers/Microsoft.CognitiveServices"
-        f"/accounts/{config['foundry_name']}"
-        f"/projects/{config['project_name']}"
-        f"/connections/{connection_name}"
-    )
-
-
-def get_search_connection_id(config: dict) -> str:
-    """Build the full connection ID for the AI Search connection."""
-    conn_id = _build_connection_id(config, AI_SEARCH_CONNECTION_NAME)
-    print(f"  AI Search connection ID: {conn_id}")
-    return conn_id
-
-
-def create_graph_explorer_agent(agents_client, model: str, config: dict) -> dict:
-    """Create the GraphExplorerAgent with OpenApiTool (graph backend via graph-query-api)."""
-    instructions, description = load_graph_explorer_prompt()
-
-    tools = []
-    if config["graph_query_api_uri"]:
-        openapi_tool = _make_graph_openapi_tool(config)
-        tools = openapi_tool.definitions
-
-    agent = agents_client.create_agent(
-        model=model,
-        name="GraphExplorerAgent",
-        instructions=instructions,
-        tools=tools,
-    )
-    print(f"  Created GraphExplorerAgent: {agent.id}")
-    return {"id": agent.id, "name": agent.name, "description": description}
-
-
-def create_telemetry_agent(agents_client, model: str, config: dict) -> dict:
-    """Create the TelemetryAgent with OpenApiTool (Cosmos SQL via graph-query-api)."""
-    instructions, description = load_prompt("foundry_telemetry_agent_v2.md")
-
-    tools = []
-    if config["graph_query_api_uri"]:
-        openapi_tool = _make_telemetry_openapi_tool(config)
-        tools = openapi_tool.definitions
-
-    agent = agents_client.create_agent(
-        model=model,
-        name="TelemetryAgent",
-        instructions=instructions,
-        tools=tools,
-    )
-    print(f"  Created TelemetryAgent: {agent.id}")
-    return {"id": agent.id, "name": agent.name, "description": description}
-
-
-def create_runbook_kb_agent(agents_client, model: str, search_conn_id: str, index_name: str) -> dict:
-    """Create the RunbookKBAgent with AzureAISearchTool."""
-    instructions, description = load_prompt("foundry_runbook_kb_agent.md")
-
-    ai_search = AzureAISearchTool(
-        index_connection_id=search_conn_id,
-        index_name=index_name,
-        query_type=AzureAISearchQueryType.SEMANTIC,
-        top_k=5,
-    )
-
-    agent = agents_client.create_agent(
-        model=model,
-        name="RunbookKBAgent",
-        instructions=instructions,
-        tools=ai_search.definitions,
-        tool_resources=ai_search.resources,
-    )
-    print(f"  Created RunbookKBAgent: {agent.id}")
-    return {"id": agent.id, "name": agent.name, "description": description}
-
-
-def create_historical_ticket_agent(agents_client, model: str, search_conn_id: str, index_name: str) -> dict:
-    """Create the HistoricalTicketAgent with AzureAISearchTool."""
-    instructions, description = load_prompt("foundry_historical_ticket_agent.md")
-
-    ai_search = AzureAISearchTool(
-        index_connection_id=search_conn_id,
-        index_name=index_name,
-        query_type=AzureAISearchQueryType.SEMANTIC,
-        top_k=5,
-    )
-
-    agent = agents_client.create_agent(
-        model=model,
-        name="HistoricalTicketAgent",
-        instructions=instructions,
-        tools=ai_search.definitions,
-        tool_resources=ai_search.resources,
-    )
-    print(f"  Created HistoricalTicketAgent: {agent.id}")
-    return {"id": agent.id, "name": agent.name, "description": description}
-
-
-def create_orchestrator(agents_client, model: str, sub_agents: list[dict]) -> dict:
-    """Create the Orchestrator wired to all sub-agents via ConnectedAgentTool."""
-    instructions, description = load_prompt("foundry_orchestrator_agent.md")
-
-    # Wire each sub-agent as a ConnectedAgentTool
-    connected_tools = []
-    for sa in sub_agents:
-        ct = ConnectedAgentTool(
-            id=sa["id"],
-            name=sa["name"],
-            description=sa["description"],
-        )
-        connected_tools.extend(ct.definitions)
-
-    agent = agents_client.create_agent(
-        model=model,
-        name="Orchestrator",
-        instructions=instructions,
-        tools=connected_tools,
-    )
-    print(f"  Created Orchestrator: {agent.id}")
-    return {"id": agent.id, "name": agent.name, "description": description}
-
-
-# ── Save results ────────────────────────────────────────────────────
-
-def save_agent_ids(agents: dict):
-    """Save agent IDs to agent_ids.json for use by test scripts."""
-    AGENT_IDS_FILE.write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
-    print(f"\n  Agent IDs saved to {AGENT_IDS_FILE.name}")
-
-
-# ── Main ────────────────────────────────────────────────────────────
 
 def main():
     force = "--force" in sys.argv
@@ -414,102 +133,43 @@ def main():
     print("  Autonomous Network NOC Demo — Agent Provisioning")
     print("=" * 72)
 
-    # 1. Load config
-    print("\n[1/5] Loading configuration...")
-    config = load_config()
-    print(f"  Project endpoint: {config['project_endpoint']}")
+    config = _load_config()
+    print(f"\n  Project endpoint: {config['project_endpoint']}")
     print(f"  Model: {config['model']}")
-    print(f"  Graph backend: {_get_graph_backend()}")
-    api_uri = config["graph_query_api_uri"]
-    if api_uri:
-        print(f"  Graph Query API: {api_uri}")
+    print(f"  Graph backend: {config['graph_backend']}")
+    if config["graph_query_api_uri"]:
+        print(f"  Graph Query API: {config['graph_query_api_uri']}")
 
-    # 2. Connect to Foundry
-    print("\n[2/5] Connecting to AI Foundry...")
-    credential = DefaultAzureCredential()
-    project_client = AIProjectClient(
-        endpoint=config["project_endpoint"],
-        credential=credential,
+    prompts = _load_all_prompts(config)
+
+    search_conn_id = _build_connection_id(
+        config["subscription_id"],
+        config["resource_group"],
+        config["foundry_name"],
+        config["project_name"],
+        AI_SEARCH_CONNECTION_NAME,
+    )
+    print(f"  AI Search connection: {search_conn_id}")
+
+    provisioner = AgentProvisioner(config["project_endpoint"])
+    result = provisioner.provision_all(
+        model=config["model"],
+        prompts=prompts,
+        graph_query_api_uri=config["graph_query_api_uri"],
+        graph_backend=config["graph_backend"],
+        graph_name=config["graph_name"],
+        runbooks_index=config["runbooks_index"],
+        tickets_index=config["tickets_index"],
+        search_connection_id=search_conn_id,
+        force=force,
+        on_progress=lambda step, detail: print(f"  [{step}] {detail}"),
     )
 
-    with project_client:
-        agents_client = project_client.agents
-
-        # Clean up if --force
-        cleanup_existing_agents(agents_client, force)
-
-        # Resolve connection IDs
-        print("\n[3/5] Resolving connections...")
-        search_conn_id = get_search_connection_id(config)
-
-        # 3. Create sub-agents (with partial-failure recovery)
-        print("\n[4/5] Creating specialist agents...")
-        agent_specs = [
-            ("GraphExplorerAgent", create_graph_explorer_agent,
-             (agents_client, config["model"], config)),
-            ("TelemetryAgent", create_telemetry_agent,
-             (agents_client, config["model"], config)),
-            ("RunbookKBAgent", create_runbook_kb_agent,
-             (agents_client, config["model"], search_conn_id, config["runbooks_index"])),
-            ("HistoricalTicketAgent", create_historical_ticket_agent,
-             (agents_client, config["model"], search_conn_id, config["tickets_index"])),
-        ]
-
-        sub_agents: list[dict] = []
-        try:
-            for name, create_fn, create_args in agent_specs:
-                agent = create_fn(*create_args)
-                sub_agents.append(agent)
-        except Exception as exc:
-            print(f"\n  ✗ Failed to create {name}: {exc}")
-            if sub_agents:
-                print(f"  {len(sub_agents)} agent(s) were created before the failure:")
-                for sa in sub_agents:
-                    print(f"    {sa['name']}: {sa['id']}")
-                print("\n  Re-run with --force to clean up orphaned agents and retry.")
-            sys.exit(1)
-
-        # 4. Create orchestrator wired to sub-agents
-        print("\n[5/5] Creating orchestrator...")
-        try:
-            orchestrator = create_orchestrator(
-                agents_client, config["model"], sub_agents,
-            )
-        except Exception as exc:
-            print(f"\n  ✗ Failed to create orchestrator: {exc}")
-            print(f"  {len(sub_agents)} sub-agents were created successfully.")
-            print("  Re-run with --force to clean up and retry.")
-            sys.exit(1)
-
-    # 5. Save results
-    all_agents = {
-        "orchestrator": {"id": orchestrator["id"], "name": orchestrator["name"]},
-        "sub_agents": {
-            sa["name"]: {"id": sa["id"], "name": sa["name"]}
-            for sa in sub_agents
-        },
-    }
-    save_agent_ids(all_agents)
-
-    # Summary
     print("\n" + "=" * 72)
     print("  Provisioning complete!")
     print("=" * 72)
-    print(f"\n  Orchestrator ID: {orchestrator['id']}")
-    print(f"  Sub-agents:")
-    for sa in sub_agents:
-        if sa["name"] in ("GraphExplorerAgent", "TelemetryAgent"):
-            has_tool = "OpenApiTool" if api_uri else "(no tool)"
-        elif sa["name"] in ("RunbookKBAgent", "HistoricalTicketAgent"):
-            has_tool = "AzureAISearchTool"
-        else:
-            has_tool = "(unknown)"
-        print(f"    {sa['name']:30s} {sa['id']}  [{has_tool}]")
-
-    if not api_uri:
-        print("\n  WARNING: GraphExplorerAgent and TelemetryAgent were created WITHOUT tools.")
-        print("  To fix: deploy graph-query-api, set GRAPH_QUERY_API_URI, re-run with --force")
-
+    print(f"\n  Orchestrator ID: {result['orchestrator']['id']}")
+    print(f"  Agent IDs saved to: {AGENT_IDS_FILE}")
     print(f"\n  To test: uv run python test_orchestrator.py")
     print()
 

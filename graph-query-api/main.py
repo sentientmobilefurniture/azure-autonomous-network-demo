@@ -42,6 +42,7 @@ from router_topology import router as topology_router
 from router_ingest import router as ingest_router
 from router_prompts import router as prompts_router
 from router_scenarios import router as scenarios_router
+from router_interactions import router as interactions_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -88,6 +89,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -131,6 +133,7 @@ app.include_router(topology_router)
 app.include_router(ingest_router)
 app.include_router(prompts_router)
 app.include_router(scenarios_router)
+app.include_router(interactions_router)
 
 
 # ---------------------------------------------------------------------------
@@ -206,8 +209,9 @@ async def _log_sse_generator():
             _log_subscribers.discard(q)
 
 
-@app.get("/api/logs", summary="Stream logs via SSE")
+@app.get("/query/logs", summary="Stream graph-query-api logs via SSE")
 async def stream_logs():
+    """Stream graph-query-api logs via SSE (accessible through nginx's /query/* routing)."""
     return StreamingResponse(
         _log_sse_generator(),
         media_type="text/event-stream",

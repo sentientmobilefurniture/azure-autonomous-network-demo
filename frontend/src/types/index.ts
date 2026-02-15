@@ -31,15 +31,23 @@ export interface SavedScenario {
   resources: {
     graph: string;
     telemetry_database: string;
+    telemetry_container_prefix?: string;   // NEW — scenario prefix for container names
     runbooks_index: string;
     tickets_index: string;
     prompts_database: string;
+    prompts_container?: string;            // NEW — per-scenario container in shared DB
   };
   upload_status: Record<string, {
     status: string;
     timestamp: string;
     [key: string]: unknown;
   }>;
+  graph_styles?: {
+    node_types?: Record<string, { color: string; size: number; icon?: string }>;
+  };
+  use_cases?: string[];
+  example_questions?: string[];
+  domain?: string;
 }
 
 export type SlotKey = 'graph' | 'telemetry' | 'runbooks' | 'tickets' | 'prompts';
@@ -56,4 +64,14 @@ export interface ScenarioUploadSlot {
   pct: number;
   result: Record<string, unknown> | null;
   error: string | null;
+}
+
+export interface Interaction {
+  id: string;
+  scenario: string;
+  query: string;
+  steps: StepEvent[];
+  diagnosis: string;
+  run_meta: RunMeta | null;
+  created_at: string;
 }

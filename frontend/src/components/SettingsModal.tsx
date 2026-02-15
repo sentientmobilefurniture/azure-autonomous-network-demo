@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useScenarios } from '../hooks/useScenarios';
 import { useScenarioContext } from '../context/ScenarioContext';
 import { AddScenarioModal } from './AddScenarioModal';
-import { consumeSSE } from '../utils/sseStream';
+import { ActionButton } from './ActionButton';
+import { consumeSSE, uploadWithSSE } from '../utils/sseStream';
 
 interface UploadBoxProps {
   label: string;
@@ -12,8 +13,6 @@ interface UploadBoxProps {
   accept: string;
   onComplete?: () => void;
 }
-
-type ActionStatus = 'idle' | 'working' | 'done' | 'error';
 
 function UploadBox({ label, icon, hint, endpoint, accept, onComplete }: UploadBoxProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -28,40 +27,17 @@ function UploadBox({ label, icon, hint, endpoint, accept, onComplete }: UploadBo
     setPct(0);
     setResult('');
 
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const res = await fetch(endpoint, { method: 'POST', body: formData });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-
-      if (!reader) throw new Error('No response body');
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const d = JSON.parse(line.slice(6));
-              if ('pct' in d) { setProgress(d.detail || d.step); setPct(d.pct); }
-              if ('error' in d) { setStatus('error'); setResult(d.error); return; }
-              if ('scenario' in d || 'index' in d || 'database' in d || 'graph' in d) {
-                setStatus('done');
-                setResult(JSON.stringify(d));
-                onComplete?.();
-              }
-            } catch { /* skip */ }
-          }
-        }
-      }
+      await uploadWithSSE(endpoint, file, {
+        onProgress: (d) => { setProgress(d.detail || d.step); setPct(d.pct); },
+        onError: (d) => { setStatus('error'); setResult(d.error); },
+        onComplete: (d) => {
+          setStatus('done');
+          setResult(JSON.stringify(d));
+          onComplete?.();
+        },
+      });
+      // If no complete event was received but stream ended OK
       if (status !== 'done' && status !== 'error') setStatus('done');
     } catch (e) {
       setStatus('error');
@@ -116,53 +92,6 @@ function UploadBox({ label, icon, hint, endpoint, accept, onComplete }: UploadBo
         </div>
       )}
     </div>
-  );
-}
-
-function ActionButton({ label, icon, description, onClick }: {
-  label: string;
-  icon: string;
-  description: string;
-  onClick: () => Promise<string>;
-}) {
-  const [status, setStatus] = useState<ActionStatus>('idle');
-  const [result, setResult] = useState('');
-
-  const handleClick = useCallback(async () => {
-    setStatus('working');
-    setResult('');
-    try {
-      const msg = await onClick();
-      setResult(msg);
-      setStatus('done');
-    } catch (e) {
-      setResult(String(e));
-      setStatus('error');
-    }
-  }, [onClick]);
-
-  return (
-    <button
-      onClick={handleClick}
-      disabled={status === 'working'}
-      className={`flex-1 p-3 rounded-lg border text-left transition-colors ${
-        status === 'done' ? 'border-status-success/30 bg-status-success/5' :
-        status === 'error' ? 'border-status-error/30 bg-status-error/5' :
-        status === 'working' ? 'border-brand/30 bg-brand/5 animate-pulse' :
-        'border-white/10 bg-neutral-bg1 hover:border-white/20'
-      }`}
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <span>{icon}</span>
-        <span className="text-sm font-medium text-text-primary">{label}</span>
-        {status === 'done' && <span className="text-xs text-status-success ml-auto">✓</span>}
-        {status === 'error' && <span className="text-xs text-status-error ml-auto">✗</span>}
-        {status === 'working' && <span className="text-xs text-text-muted ml-auto">...</span>}
-      </div>
-      <p className="text-xs text-text-muted">
-        {status === 'done' ? result : status === 'error' ? result.substring(0, 80) : description}
-      </p>
-    </button>
   );
 }
 

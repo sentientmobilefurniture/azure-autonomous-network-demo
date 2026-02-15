@@ -70,13 +70,33 @@ def is_configured() -> bool:
 
 
 def _load_orchestrator_id() -> str:
-    data = json.loads(AGENT_IDS_FILE.read_text())
-    return data["orchestrator"]["id"]
+    return _cached_agent_data()["orchestrator"]["id"]
+
+
+# ---------------------------------------------------------------------------
+# mtime-based cache for agent_ids.json
+# ---------------------------------------------------------------------------
+
+_agent_ids_mtime: float = 0.0
+_agent_ids_data: dict = {}
+
+
+def _cached_agent_data() -> dict:
+    """Read agent_ids.json, reloading only when the file changes on disk."""
+    global _agent_ids_mtime, _agent_ids_data
+    try:
+        mtime = AGENT_IDS_FILE.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    if mtime != _agent_ids_mtime or not _agent_ids_data:
+        _agent_ids_data = json.loads(AGENT_IDS_FILE.read_text())
+        _agent_ids_mtime = mtime
+    return _agent_ids_data
 
 
 def _load_agent_names() -> dict[str, str]:
     """Map of agent_id → display name for resolving connected-agent calls."""
-    data = json.loads(AGENT_IDS_FILE.read_text())
+    data = _cached_agent_data()
     names: dict[str, str] = {}
     orch = data.get("orchestrator", {})
     if orch.get("id"):

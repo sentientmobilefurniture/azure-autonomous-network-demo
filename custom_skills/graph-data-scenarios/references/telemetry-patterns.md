@@ -1,8 +1,5 @@
 # Telemetry Generation Patterns
 
-Extracted from the reference implementation in
-`data/scripts/generate_alert_stream.py` (409 lines).
-
 ## AlertStream CSV
 
 ### Structure
@@ -13,13 +10,15 @@ AlertType, Severity, Description,
 <Metric1>, <Metric2>, <Metric3>, <Metric4>
 ```
 
-The metric columns are domain-specific. For telco-noc:
-`OpticalPowerDbm, BitErrorRate, CPUUtilPct, PacketLossPct`
+The metric columns are domain-specific:
 
-For a cloud scenario these might be:
-`TemperatureCelsius, CPUUtilPct, MemoryUtilPct, DiskIOPS`
+| Domain | Metric Columns |
+|--------|----------------|
+| Telco | `OpticalPowerDbm`, `BitErrorRate`, `CPUUtilPct`, `PacketLossPct` |
+| Cloud | `TemperatureCelsius`, `CPUUtilPct`, `MemoryUtilPct`, `DiskIOPS` |
+| E-commerce | `ClickRatePct`, `ConversionRatePct`, `ReturnRatePct`, `AvgOrderValueUSD` |
 
-### The No-Null Rule (Critical)
+### The No-Null Rule (CRITICAL)
 
 **Every numeric column must be populated in every row.** The downstream anomaly
 detector (`scripts/cosmos/query_anomaly.py`) sends batches of rows to the Azure
@@ -46,22 +45,58 @@ def add(offset, node_id, node_type, alert_type, severity, description,
     ])
 ```
 
+### Normal-Range Value Generators
+
+Define functions that return normal-range values for each metric:
+
+```python
+def normal_optical() -> float:
+    """Normal optical power: -3.5 to -2.5 dBm."""
+    return round(random.uniform(-3.5, -2.5), 1)
+
+def normal_cpu() -> float:
+    """Normal CPU: 15-45%."""
+    return round(random.uniform(15, 45), 1)
+
+def baseline_snapshot() -> dict:
+    """Full telemetry snapshot with all-normal values."""
+    return {
+        "optical": normal_optical(),
+        "ber": normal_ber(),
+        "cpu": normal_cpu(),
+        "pkt_loss": normal_pkt_loss(),
+    }
+```
+
+For cloud scenarios:
+
+```python
+def normal_temperature() -> float:
+    """Normal data center temperature: 22-28°C."""
+    return round(random.uniform(22, 28), 1)
+
+def normal_disk_iops() -> int:
+    """Normal IOPS: 200-800."""
+    return random.randint(200, 800)
+```
+
 ### Baseline Period
 
-The **baseline** is critical for anomaly detection. Without it, the model has
+The **baseline** is critical for anomaly detection — without it, the model has
 no "normal" to compare against.
 
 ```
 Duration:   54 hours (2 days 6h) before the incident
 Alert rate: ~1 per minute (~3,000 total)
 Severity:   WARNING / MINOR only
-Types:      HIGH_CPU, PACKET_LOSS_THRESHOLD, DUPLICATE_ALERT, SERVICE_DEGRADATION
-Values:     Slightly elevated but within normal range (e.g. CPU 55-75%)
+Types:      Domain-appropriate low-severity alert types
+Values:     Slightly elevated but within normal range
 ```
 
-Implementation pattern:
-
 ```python
+INCIDENT_START = datetime(2026, 2, 6, 14, 30, 0, tzinfo=timezone.utc)
+random.seed(42)
+
 baseline_start = -54 * 3600   # seconds before incident
 baseline_end = -60             # stop 1 minute before storm
 num_baseline_alerts = random.randint(2800, 3400)
@@ -69,7 +104,6 @@ num_baseline_alerts = random.randint(2800, 3400)
 for _ in range(num_baseline_alerts):
     offset = random.uniform(baseline_start, baseline_end)
     node, node_type = random.choice(all_nodes)
-    # Select a random low-severity alert type appropriate for this node type
     alert_def = random.choice(baseline_alerts_by_type[node_type])
     add(offset, node, node_type, alert_def.type, alert_def.severity, ...)
 ```
@@ -78,6 +112,7 @@ for _ in range(num_baseline_alerts):
 for all node types:
 
 ```python
+# Telco example
 baseline_alerts_by_type = {
     "CoreRouter": [
         ("HIGH_CPU", "WARNING", "CPU utilization {cpu}% — routine process spike"),
@@ -87,74 +122,100 @@ baseline_alerts_by_type = {
         ("HIGH_CPU", "WARNING", "CPU utilization {cpu}% — routine process spike"),
         ("DUPLICATE_ALERT", "MINOR", "Periodic keepalive timeout — auto-recovered"),
     ],
-    # ...
+    "TransportLink": [
+        ("PACKET_LOSS_THRESHOLD", "MINOR", "Packet loss {pkt}% — transient microloop"),
+        ("SERVICE_DEGRADATION", "MINOR", "Brief latency increase — within SLA"),
+    ],
+}
+
+# Cloud example
+baseline_alerts_by_type = {
+    "Host": [
+        ("HIGH_CPU", "WARNING", "CPU utilization {cpu}% — batch job spike"),
+        ("HIGH_MEMORY", "MINOR", "Memory {mem}% — cache pressure"),
+    ],
+    "VirtualMachine": [
+        ("HIGH_CPU", "WARNING", "vCPU utilization {cpu}% — container scaling"),
+        ("DISK_IO_HIGH", "MINOR", "IOPS {iops} — log rotation"),
+    ],
+    "LoadBalancer": [
+        ("HEALTH_CHECK_FLAP", "MINOR", "Backend health check timeout — recovered"),
+    ],
 }
 ```
 
 ### Incident Cascade Timeline
 
-The cascade models how a physical failure propagates through the network stack.
+The cascade models how a failure propagates through the infrastructure.
 Each tier fires after a realistic delay:
 
 ```
 T+0s     ROOT_CAUSE on the failing component                      (1 alert)
-T+2s     PROTOCOL_LOSS (BGP/OSPF/connectivity)                    (~2-4 alerts)
-T+5s     ADJACENCY_DOWN (routing protocol adjacencies)            (~4 alerts)
-T+10s    ROUTE_WITHDRAWAL (prefix withdrawals)                    (~20 alerts)
-T+15s    HIGH_CPU (reconvergence processing)                      (~50 alerts)
-T+30s    PACKET_LOSS_THRESHOLD (downstream propagation)           (~200 alerts)
-T+60s    SERVICE_DEGRADATION (customer-facing impact)             (~500 alerts)
-T+70-90s DUPLICATE_ALERT + flapping (alert storm tail)            (fills to ~2000)
+T+2s     PROTOCOL_LOSS / CONNECTIVITY_LOSS                        (~2-4 alerts)
+T+5s     SECOND_ORDER_FAILURE (adjacencies/shutdowns)             (~4 alerts)
+T+10s    PROPAGATION (withdrawals/VM unreachable)                  (~20 alerts)
+T+15s    RESOURCE_EXHAUSTION (CPU/memory/temperature)             (~50 alerts)
+T+30s    DOWNSTREAM_IMPACT (packet loss/latency)                   (~200 alerts)
+T+60s    SERVICE_DEGRADATION (customer-facing impact)              (~500 alerts)
+T+70-90s FLAPPING / DUPLICATE_ALERT (storm tail)                   (fills to ~2000)
 ```
+
+**Domain-specific cascade examples:**
+
+| Domain | Root Cause | Cascade |
+|--------|-----------|---------|
+| Telco | Fibre cut | `LINK_DOWN` → `BGP_PEER_LOSS` → `OSPF_ADJACENCY_DOWN` → `ROUTE_WITHDRAWAL` → `HIGH_CPU` → `PACKET_LOSS_THRESHOLD` → `SERVICE_DEGRADATION` |
+| Cloud | Cooling failure | `COOLING_FAILURE` → `THERMAL_WARNING` → `THERMAL_SHUTDOWN` → `VM_UNREACHABLE` → `SERVICE_DEGRADATION` → `FAILOVER_TRIGGERED` |
+| E-commerce | Model deploy | `MODEL_DEPLOYED` → `RECOMMENDATION_DRIFT` → `CLICK_ANOMALY` → `CONVERSION_DROP` → `RETURN_SPIKE` → `REVENUE_IMPACT` |
 
 **Key implementation details:**
 
-1. **Jitter** — add ±2s random jitter to each tier's offset so alerts don't
-   all land on the exact same timestamp:
+1. **Jitter** — add ±2s random jitter so alerts don't all land on the exact timestamp:
    ```python
    def jitter(base: float, spread: float = 2.0) -> float:
        return base + random.uniform(-spread, spread)
    ```
 
-2. **Escalating severity** — `CRITICAL` at the root cause, `MAJOR` for
-   infrastructure, `WARNING` for downstream, `MINOR` for flapping.
+2. **Escalating severity** — `CRITICAL` at root cause, `MAJOR` for infra, `WARNING` downstream
 
-3. **Escalating metric values** — CPU climbs from 78% → 99%, packet loss
-   from 2% → 25% as you move down the cascade.
+3. **Escalating metric values** — CPU climbs 78% → 99%, packet loss 2% → 25%
 
-4. **Entity ID lists** — define constants at the top of the file listing
-   which nodes are impacted per tier:
+4. **Entity ID lists** — define constants listing impacted nodes per tier:
    ```python
    IMPACTED_CORE_ROUTERS = ["CORE-SYD-01", "CORE-MEL-01"]
    IMPACTED_AGG = ["AGG-SYD-NORTH-01", "AGG-SYD-SOUTH-01", ...]
    IMPACTED_SERVICES = ["VPN-ACME-CORP", "VPN-BIGBANK", ...]
-   REROUTE_LINKS = ["LINK-SYD-BNE-FIBRE-01", "LINK-MEL-BNE-FIBRE-01"]
    ```
 
-5. **Sort by timestamp** before writing — the anomaly detector expects
-   chronological order:
+5. **Sort by timestamp** before writing:
    ```python
    alerts.sort(key=lambda r: r[1])
    ```
 
-### Adapting the Cascade for Other Domains
+### Timestamp Helper
 
-| Domain | Root Cause | Cascade Pattern |
-|--------|-----------|-----------------|
-| Telco | Fibre cut | LINK_DOWN → BGP_PEER_LOSS → OSPF_DOWN → ROUTE_WITHDRAWAL → HIGH_CPU → PACKET_LOSS → SERVICE_DEGRADATION |
-| Cloud | Cooling failure | COOLING_FAILURE → THERMAL_WARNING → THERMAL_SHUTDOWN → VM_UNREACHABLE → SERVICE_DEGRADATION → FAILOVER_TRIGGERED |
-| Power grid | Transformer failure | TRANSFORMER_TRIP → BREAKER_OPEN → LOAD_SHED → FREQUENCY_DEVIATION → GENERATOR_RAMP → ISLAND_DETECTED |
+```python
+INCIDENT_START = datetime(2026, 2, 6, 14, 30, 0, tzinfo=timezone.utc)
 
-The cascade structure is the same — only the alert types and metric names change.
+def ts(offset_seconds: float) -> str:
+    """Return ISO timestamp offset from incident start."""
+    return (INCIDENT_START + timedelta(seconds=offset_seconds)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%f"
+    )[:-3] + "Z"
+```
 
-## LinkTelemetry CSV (or equivalent per-component metrics)
+## Per-Component Telemetry CSV (LinkTelemetry / HostMetrics / etc.)
 
 ### Structure
 
 Regular time-series samples for infrastructure components:
 
 ```
+# Telco: LinkTelemetry.csv
 LinkId, Timestamp, UtilizationPct, OpticalPowerDbm, BitErrorRate, LatencyMs
+
+# Cloud: HostMetrics.csv
+HostId, Timestamp, CPUUtilPct, MemoryUtilPct, TemperatureCelsius, DiskIOPS
 ```
 
 ### Baseline + Anomaly Pattern
@@ -171,29 +232,36 @@ for component in ALL_COMPONENTS:
 
         if is_failed_component and sample_time >= INCIDENT_START:
             # Anomalous values (dead/degraded)
-            rows.append([component, sample_ts, 0.0, -40.0, 1.0, 9999.0])
+            rows.append([component, ts, 0.0, -40.0, 1.0, 9999.0])
         elif is_backup_component and sample_time >= INCIDENT_START:
             # Elevated values (absorbing redirected traffic)
-            rows.append([component, sample_ts, 75.0, normal(), normal(), elevated()])
+            rows.append([component, ts, 75.0, normal(), normal(), elevated()])
         else:
-            # Normal baseline with slight random variation
-            rows.append([component, sample_ts, baseline ± 5%, normal(), normal(), normal()])
+            # Normal baseline with slight random variation (±5%)
+            rows.append([component, ts, baseline ± 5%, normal(), normal(), normal()])
 ```
 
 ### Per-Component Baseline Profiles
 
-Define realistic baseline values per component:
+Define realistic baseline values with variation range:
 
 ```python
+# Telco link profiles
 baseline_profiles = {
-    "LINK-SYD-MEL-FIBRE-01": {"util": 55.0, "latency": (4, 8)},
-    "LINK-SYD-MEL-FIBRE-02": {"util": 38.0, "latency": (4, 8)},
-    # ...
+    "LINK-SYD-MEL-FIBRE-01": {"util": 55.0, "latency": (4, 8)},   # Primary (higher load)
+    "LINK-SYD-MEL-FIBRE-02": {"util": 38.0, "latency": (4, 8)},   # Backup (lower load)
+    "LINK-SYD-BNE-FIBRE-01": {"util": 42.0, "latency": (6, 12)},
+}
+
+# Cloud host profiles
+baseline_profiles = {
+    "HOST-USE-A-01-01": {"cpu": 35.0, "mem": 45.0, "temp": 25.0, "iops": 450},
+    "HOST-USE-A-02-01": {"cpu": 55.0, "mem": 65.0, "temp": 27.0, "iops": 700},  # Higher load
 }
 ```
 
-The backup/alternate paths should have **lower baseline utilisation** than the
-primary path — this makes the post-incident spike visually obvious.
+Backup/alternate paths should have **lower baseline** than primary — makes the
+post-incident spike visually obvious in dashboards.
 
 ## Reproducibility
 
@@ -203,7 +271,5 @@ Always seed the random number generator:
 random.seed(42)
 ```
 
-This ensures identical output on every run, which is essential for:
-- Consistent demo experiences
-- Diffing output after code changes
-- Reliable integration tests
+This ensures identical output on every run — essential for consistent demos,
+diffing output after code changes, and reliable integration tests.

@@ -1,7 +1,12 @@
 import { useRef, useState, useEffect } from 'react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { GraphTopologyViewer } from './GraphTopologyViewer';
-import { LogStream } from './LogStream';
+import { TabbedLogStream } from './TabbedLogStream';
+
+const LOG_STREAMS = [
+  { url: '/api/logs', title: 'API' },
+  { url: '/query/logs', title: 'Graph API' },
+];
 
 export function MetricsBar() {
   const graphPanelRef = useRef<HTMLDivElement>(null);
@@ -33,10 +38,10 @@ export function MetricsBar() {
 
         <PanelResizeHandle className="metrics-resize-handle" />
 
-        {/* API logs (unchanged) */}
+        {/* API + Graph API logs (tabbed) */}
         <Panel defaultSize={36} minSize={12}>
           <div className="h-full px-1">
-            <LogStream url="/api/logs" title="API" />
+            <TabbedLogStream streams={LOG_STREAMS} />
           </div>
         </Panel>
       </PanelGroup>

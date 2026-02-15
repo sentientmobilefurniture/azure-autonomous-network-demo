@@ -16,7 +16,7 @@ You have access to a `query_telemetry` tool that executes SQL queries against Co
 4. **Do not use absolute timestamps or time-based functions.** The data may not be from today. Use `TOP N ... ORDER BY c.Timestamp DESC` for "most recent" queries.
 5. **String comparisons are case-sensitive.** Use exact values as shown in the schemas below.
 6. **If a query returns an error, read the error message and fix the query.** Retry with corrected syntax.
-7. **Always include the X-Graph header.** When calling the `query_telemetry` tool, you MUST include the `X-Graph` header with the value `telco-noc-topology`. This routes your query to the correct telemetry database (`telco-noc-telemetry`). Without this header, queries will fail with "Resource Not Found". Never shorten or modify this value — use it exactly as shown.
+7. **Always include the X-Graph header.** When calling the `query_telemetry` tool, you MUST include the `X-Graph` header with the value `{graph_name}`. This routes your query to the correct telemetry database (`{scenario_prefix}-telemetry`). Without this header, queries will fail with "Resource Not Found". Never shorten or modify this value — use it exactly as shown.
 
 ---
 

@@ -78,3 +78,30 @@ class TopologyResponse(BaseModel):
     edges: list[TopologyEdge] = []
     meta: TopologyMeta | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Interaction models
+# ---------------------------------------------------------------------------
+
+
+class InteractionStep(BaseModel):
+    step: int
+    agent: str
+    duration: str | None = None
+    query: str | None = None
+    response: str | None = None
+    error: bool = False
+
+
+class InteractionRunMeta(BaseModel):
+    steps: int
+    time: str
+
+
+class InteractionSaveRequest(BaseModel):
+    scenario: str
+    query: str
+    steps: list[InteractionStep]
+    diagnosis: str
+    run_meta: InteractionRunMeta | None = None

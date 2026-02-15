@@ -141,6 +141,91 @@ resource telemetryDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2
   }
 }
 
+// ─── Scenarios Database + Container ──────────────────────────────────────────
+
+resource scenariosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = {
+  name: 'scenarios'
+  parent: cosmosNoSqlAccount
+  properties: {
+    resource: {
+      id: 'scenarios'
+    }
+  }
+}
+
+resource scenariosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  name: 'scenarios'
+  parent: scenariosDatabase
+  properties: {
+    resource: {
+      id: 'scenarios'
+      partitionKey: {
+        paths: ['/id']
+        kind: 'Hash'
+        version: 2
+      }
+    }
+    options: {
+      autoscaleSettings: {
+        maxThroughput: 1000
+      }
+    }
+  }
+}
+
+// ─── Prompts Database (shared — per-scenario containers created at runtime) ─
+
+resource promptsDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = {
+  name: 'prompts'
+  parent: cosmosNoSqlAccount
+  properties: {
+    resource: {
+      id: 'prompts'
+    }
+  }
+}
+
+// ─── Interactions Database + Container ───────────────────────────────────────
+
+resource interactionsDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = {
+  name: 'interactions'
+  parent: cosmosNoSqlAccount
+  properties: {
+    resource: {
+      id: 'interactions'
+    }
+  }
+}
+
+resource interactionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  name: 'interactions'
+  parent: interactionsDatabase
+  properties: {
+    resource: {
+      id: 'interactions'
+      partitionKey: {
+        paths: ['/scenario']
+        kind: 'Hash'
+        version: 2
+      }
+      indexingPolicy: {
+        compositeIndexes: [
+          [
+            { path: '/scenario', order: 'ascending' }
+            { path: '/created_at', order: 'descending' }
+          ]
+        ]
+      }
+      defaultTtl: 7776000 // 90 days in seconds
+    }
+    options: {
+      autoscaleSettings: {
+        maxThroughput: 1000
+      }
+    }
+  }
+}
+
 // ─── Outputs ─────────────────────────────────────────────────────────────────
 
 @description('The Gremlin endpoint hostname (without protocol)')
@@ -172,3 +257,12 @@ output cosmosNoSqlAccountId string = cosmosNoSqlAccount.id
 
 @description('The NoSQL account name')
 output cosmosNoSqlAccountName string = cosmosNoSqlAccount.name
+
+@description('The scenarios database name')
+output scenariosDatabaseName string = scenariosDatabase.name
+
+@description('The prompts database name')
+output promptsDatabaseName string = promptsDatabase.name
+
+@description('The interactions database name')
+output interactionsDatabaseName string = interactionsDatabase.name

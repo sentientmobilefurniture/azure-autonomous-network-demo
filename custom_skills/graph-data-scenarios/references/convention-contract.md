@@ -27,7 +27,7 @@ and investigate it without code changes.
 - **Required** — the generic Cosmos Gremlin loader reads this manifest exclusively
 - Must declare every vertex type with: `label`, `csv_file`, `id_column`, `partition_key`, `properties`
 - Must declare every edge type with: `label`, `csv_file`, `source`/`target` vertex lookup, optional `properties`, optional `filter`
-- `data_dir` must point to the directory containing the CSVs (relative to project root)
+- `data_dir` must point to the directory containing the CSVs (relative to schema file)
 - See `graph-schema-format.md` for the complete YAML specification
 
 ## 2. Telemetry Data (CSVs)
@@ -47,14 +47,21 @@ and investigate it without code changes.
 
 **The no-null rule is critical.** Every telemetry row captures a full snapshot
 of the node at that instant (like an SNMP poll returning all OIDs). The
-downstream anomaly detector rejects rows with null values. If an alert is
-about CPU, still include normal-range values for optical power, packet loss, etc.
+downstream anomaly detector rejects rows with null values.
+
+Domain-specific metric columns:
+
+| Domain | Metric Columns |
+|--------|----------------|
+| Telco | `OpticalPowerDbm`, `BitErrorRate`, `CPUUtilPct`, `PacketLossPct` |
+| Cloud | `TemperatureCelsius`, `CPUUtilPct`, `MemoryUtilPct`, `DiskIOPS` |
+| E-commerce | `ClickRatePct`, `ConversionRatePct`, `ReturnRatePct`, `AvgOrderValueUSD` |
 
 ### Additional telemetry CSVs
 
-- One CSV per logical telemetry container (e.g. `LinkTelemetry.csv`)
+- One CSV per logical telemetry container (e.g. `LinkTelemetry.csv`, `HostMetrics.csv`)
 - Each maps to a Cosmos NoSQL container defined in `scenario.yaml`
-- Must include a partition key column and an ID column
+- Must include a partition key column and an ID column (or composite key)
 - Time-series format: regular interval samples (e.g. 5-min) with baseline + anomaly
 
 ## 3. Knowledge Data
@@ -78,31 +85,21 @@ about CPU, still include normal-range values for optical power, packet loss, etc
 | File | Purpose |
 |------|---------|
 | `foundry_orchestrator_agent.md` | Investigation flow, telemetry baselines, alert types, sub-agent descriptions, **Scenario Context with graph name** |
-| `foundry_telemetry_agent_v2.md` | Cosmos NoSQL container schemas, partition keys, column types, value ranges, **X-Graph header CRITICAL RULE** |
+| `foundry_telemetry_agent_v2.md` | Cosmos NoSQL container schemas, partition keys, column types, value ranges, **X-Graph CRITICAL RULE** |
 | `foundry_runbook_kb_agent.md` | Domain-specific runbook descriptions |
 | `foundry_historical_ticket_agent.md` | Domain-specific ticket descriptions |
 | `graph_explorer/core_schema.md` | Full entity schema — all instances and relationships |
-| `graph_explorer/core_instructions.md` | Gremlin traversal patterns using this scenario's edge labels, **X-Graph header CRITICAL RULE** |
+| `graph_explorer/core_instructions.md` | Gremlin traversal patterns using this scenario's edge labels, **X-Graph CRITICAL RULE** |
 | `graph_explorer/description.md` | Agent description for Foundry registration |
-| `graph_explorer/language_gremlin.md` | Gremlin query examples for this scenario's relationships |
+| `graph_explorer/language_gremlin.md` | Gremlin query examples for this scenario |
 | `graph_explorer/language_mock.md` | Natural language examples for mock mode |
-| `default_alert.md` | A realistic alert CSV that kicks off the demo investigation |
+| `alert_storm.md` | A realistic alert CSV that kicks off the demo investigation |
 
 ### X-Graph Header Rule (CRITICAL)
 
 Three prompt files **must** contain explicit instructions telling the LLM agent
 to include the `X-Graph` HTTP header with the concrete scenario graph name when
-calling graph or telemetry API tools. This is required because:
-
-1. The Azure AI Foundry `OpenApiTool` does NOT reliably enforce `default` or `enum`
-   constraints from OpenAPI specs — the LLM controls parameter values.
-2. Without the correct header, queries fail with "Resource Not Found" or return empty results.
-
-The defense-in-depth approach uses BOTH:
-- **OpenAPI `enum` constraint**: `enum: ["<scenario>-topology"]` in the spec
-- **Prompt CRITICAL RULE**: Natural language instruction in the agent's system prompt
-
-**Files requiring the rule:**
+calling graph or telemetry API tools:
 
 | File | Section | Example text |
 |------|---------|--------------|
@@ -116,11 +113,10 @@ The defense-in-depth approach uses BOTH:
 **Telemetry DB derivation:** At runtime, `rsplit("-", 1)[0]` + `-telemetry`
 (e.g., `cloud-outage-topology` → `cloud-outage-telemetry`).
 
-**Use concrete values, not placeholders.** Scenario-specific prompts are uploaded
-to Cosmos DB and used by the API provisioner, which does NOT perform `{graph_name}`
-substitution. Always bake in the actual graph name.
+**Use concrete values, not placeholders.** Prompts are uploaded to Cosmos DB and
+the API provisioner does NOT perform `{graph_name}` substitution.
 
-### Optional custom instructions (zero-cost if unused)
+### Optional custom instructions (appended if present, silently skipped if absent)
 
 | File | Purpose |
 |------|---------|
@@ -130,44 +126,18 @@ substitution. Always bake in the actual graph name.
 | `runbook_custom.md` | Domain-specific search hints |
 | `ticket_custom.md` | Domain-specific search hints |
 
-If present, appended to the corresponding agent's composed prompt. If absent,
-silently skipped.
-
 ## 5. Scenario Manifest (`scenario.yaml`)
 
-Declares all external resource mappings:
+Declares all external resource mappings. See `scenario-yaml-format.md` for complete spec.
 
-```yaml
-name: cloud-outage
-display_name: "Cloud Datacenter Outage — Cooling Cascade"
-domain: cloud-infrastructure
-
-cosmos:
-  gremlin:
-    database: networkgraph
-    graph: cloud-outage-topology
-  nosql:
-    database: cloud-outage-telemetry
-    containers:
-      - name: AlertStream
-        partition_key: /SourceNodeId
-        id_field: AlertId
-      - name: HostMetrics
-        partition_key: /HostId
-        id_field: MetricId
-
-search:
-  indexes:
-    - name: cloud-outage-runbooks-index
-      source_container: cloud-outage-runbooks
-    - name: cloud-outage-tickets-index
-      source_container: cloud-outage-tickets
-
-graph_styles:
-  Region:      { color: "#ef4444", size: 16 }
-  Host:        { color: "#3b82f6", size: 10 }
-  # ... one entry per vertex type
-```
+Required sections:
+- `name`, `display_name`, `description`, `version`, `domain`
+- `paths` — relative paths to entities, graph_schema, telemetry, runbooks, tickets, prompts
+- `cosmos.gremlin` — database + graph name
+- `cosmos.nosql` — database + containers (name, partition_key, csv_file, id_field, numeric_fields)
+- `search_indexes` — AI Search index definitions
+- `graph_styles` — per-vertex-type color, size, icon
+- `telemetry_baselines` — normal/degraded/down ranges per metric
 
 ## 6. Cross-Reference Integrity
 
@@ -181,3 +151,4 @@ scenario complete, verify:
 - [ ] Every `csv_file` referenced in `graph_schema.yaml` actually exists
 - [ ] Every column listed in `graph_schema.yaml` `properties` exists in the CSV header
 - [ ] Every telemetry container in `scenario.yaml` has a corresponding CSV file
+- [ ] All three X-Graph prompt files reference the correct `<scenario>-topology` name

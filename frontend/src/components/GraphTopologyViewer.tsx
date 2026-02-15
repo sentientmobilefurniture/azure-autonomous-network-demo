@@ -14,6 +14,52 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
   const { data, loading, error, refetch } = useTopology();
   const canvasRef = useRef<GraphCanvasHandle>(null);
 
+  // ── Graph pause/freeze state ──
+
+  const [isPaused, setIsPaused] = useState(false);
+  const [manualPause, setManualPause] = useState(false);
+  const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleMouseEnter = useCallback(() => {
+    if (resumeTimeoutRef.current) {
+      clearTimeout(resumeTimeoutRef.current);
+      resumeTimeoutRef.current = null;
+    }
+    canvasRef.current?.setFrozen(true);
+    setIsPaused(true);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    // Don't auto-resume if manually paused
+    if (manualPause) return;
+    resumeTimeoutRef.current = setTimeout(() => {
+      canvasRef.current?.setFrozen(false);
+      setIsPaused(false);
+      resumeTimeoutRef.current = null;
+    }, 300);
+  }, [manualPause]);
+
+  const handleTogglePause = useCallback(() => {
+    if (manualPause) {
+      // Unpause
+      setManualPause(false);
+      canvasRef.current?.setFrozen(false);
+      setIsPaused(false);
+    } else {
+      // Manual pause
+      setManualPause(true);
+      canvasRef.current?.setFrozen(true);
+      setIsPaused(true);
+    }
+  }, [manualPause]);
+
+  // Cleanup debounce timeout
+  useEffect(() => {
+    return () => {
+      if (resumeTimeoutRef.current) clearTimeout(resumeTimeoutRef.current);
+    };
+  }, []);
+
   // ── Tooltip + context menu state (owned here, not in GraphCanvas) ──
 
   const [tooltip, setTooltip] = useState<{
@@ -107,8 +153,11 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
         }
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        onRefresh={() => refetch()}
+        onRefresh={() => { refetch(); setManualPause(false); }}
         onZoomToFit={() => canvasRef.current?.zoomToFit()}
+        isPaused={isPaused}
+        onTogglePause={handleTogglePause}
+        nodeColorOverride={nodeColorOverride}
       />
 
       {error && (
@@ -134,11 +183,22 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
           onLinkHover={handleLinkHover}
           onNodeRightClick={handleNodeRightClick}
           onBackgroundClick={() => setContextMenu(null)}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
         />
+
+        {/* Paused indicator */}
+        {isPaused && (
+          <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full
+                         bg-white/10 backdrop-blur-sm text-text-muted text-[10px]
+                         transition-opacity duration-100">
+            ⏸ Paused
+          </div>
+        )}
       </div>
 
       {/* Overlays rendered outside GraphCanvas so they appear above the <canvas> */}
-      <GraphTooltip tooltip={tooltip} />
+      <GraphTooltip tooltip={tooltip} nodeColorOverride={nodeColorOverride} />
       <GraphContextMenu
         menu={contextMenu}
         onClose={() => setContextMenu(null)}

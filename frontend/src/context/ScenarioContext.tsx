@@ -13,6 +13,10 @@ interface ScenarioState {
   activePromptSet: string;
   /** Provisioning status */
   provisioningStatus: ProvisioningStatus;
+  /** Scenario-driven node colors from graph_styles */
+  scenarioNodeColors: Record<string, string>;
+  /** Scenario-driven node sizes from graph_styles */
+  scenarioNodeSizes: Record<string, number>;
   /** Set active scenario (auto-derives all bindings when non-null) */
   setActiveScenario: (name: string | null) => void;
   /** Set active graph */
@@ -25,6 +29,8 @@ interface ScenarioState {
   setActivePromptSet: (name: string) => void;
   /** Set provisioning status */
   setProvisioningStatus: (status: ProvisioningStatus) => void;
+  /** Set scenario-driven graph styles (colors + sizes) */
+  setScenarioStyles: (styles: { node_types?: Record<string, { color: string; size: number }> } | null) => void;
   /** Get headers to include in /query/* requests */
   getQueryHeaders: () => Record<string, string>;
 }
@@ -55,6 +61,26 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
   const [activePromptSet, setActivePromptSet] = useState(() => derivePrompts(activeScenario));
   const [provisioningStatus, setProvisioningStatus] = useState<ProvisioningStatus>({ state: 'idle' });
 
+  // Scenario-driven graph styles (from graph_styles.node_types in scenario.yaml)
+  const [scenarioNodeColors, setScenarioNodeColors] = useState<Record<string, string>>({});
+  const [scenarioNodeSizes, setScenarioNodeSizes] = useState<Record<string, number>>({});
+
+  const setScenarioStyles = useCallback((styles: { node_types?: Record<string, { color: string; size: number }> } | null) => {
+    if (styles?.node_types) {
+      const colors: Record<string, string> = {};
+      const sizes: Record<string, number> = {};
+      for (const [type, cfg] of Object.entries(styles.node_types)) {
+        colors[type] = cfg.color;
+        sizes[type] = cfg.size;
+      }
+      setScenarioNodeColors(colors);
+      setScenarioNodeSizes(sizes);
+    } else {
+      setScenarioNodeColors({});
+      setScenarioNodeSizes({});
+    }
+  }, []);
+
   // Persist activeScenario to localStorage
   useEffect(() => {
     if (activeScenario) {
@@ -63,6 +89,26 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem('activeScenario');
     }
   }, [activeScenario]);
+
+  // Validate persisted scenario still exists in the backend on mount.
+  // Clears the ghost if the Cosmos record was deleted (e.g. after azd up).
+  useEffect(() => {
+    if (!activeScenario) return;
+    let cancelled = false;
+    fetch('/query/scenarios/saved')
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const saved: string[] = (data.scenarios ?? []).map((s: { id: string }) => s.id);
+        if (!saved.includes(activeScenario)) {
+          console.warn(`Persisted scenario "${activeScenario}" no longer exists — clearing.`);
+          setActiveScenarioRaw(null);
+          localStorage.removeItem('activeScenario');
+        }
+      })
+      .catch(() => {}); // silent — don't clear on network error
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set active scenario and auto-derive all bindings
   const setActiveScenario = useCallback((name: string | null) => {
@@ -90,12 +136,15 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
       activeTicketsIndex,
       activePromptSet,
       provisioningStatus,
+      scenarioNodeColors,
+      scenarioNodeSizes,
       setActiveScenario,
       setActiveGraph,
       setActiveRunbooksIndex,
       setActiveTicketsIndex,
       setActivePromptSet,
       setProvisioningStatus,
+      setScenarioStyles,
       getQueryHeaders,
     }}>
       {children}

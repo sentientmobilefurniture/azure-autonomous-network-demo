@@ -1,10 +1,10 @@
-# Ticket Format & Graph Schema Format
+# Ticket Format
 
 ## Ticket `.txt` Format
 
 Historical incident tickets are indexed into Azure AI Search for RAG retrieval.
-Each ticket is a plain `.txt` file with structured fields that the search indexer
-parses. The agent uses these during investigation to find precedent incidents.
+Each ticket is a `.txt` file with structured fields that the search indexer
+parses. The AI agent uses these during investigation to find precedent incidents.
 
 ### File Naming
 
@@ -14,7 +14,7 @@ parses. The agent uses these during investigation to find precedent incidents.
 
 Example: `INC-2025-08-14-0042.txt`
 
-Ticket IDs follow the pattern: `INC-{YYYY}-{MM}-{DD}-{NNNN}`
+Ticket IDs: `INC-{YYYY}-{MM}-{DD}-{NNNN}`
 
 ### Required Fields
 
@@ -59,13 +59,22 @@ pre-provisioned automatic failover for enterprise VPN customers.
 ### Generation Pattern
 
 ```python
+"""
+Generate historical incident tickets as .txt files for AI Search.
+Outputs: data/knowledge/tickets/{ticket_id}.txt (8-12 files)
+"""
+import os
+
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "knowledge", "tickets")
+
+
 def generate_tickets() -> list[dict]:
     return [
         {
             "ticket_id": "INC-2025-08-14-0042",
             "title": "Fibre cut SYD-MEL corridor - contractor damage",
             "severity": "P1",
-            "root_cause": "LINK-SYD-MEL-FIBRE-01",    # ← Must match entity ID
+            "root_cause": "LINK-SYD-MEL-FIBRE-01",     # ← Must match entity ID
             "root_cause_type": "FIBRE_CUT",
             "description": "...",
             "detection_method": "Automated alert storm detection",
@@ -84,6 +93,62 @@ def generate_tickets() -> list[dict]:
         },
         # ... 8-12 total tickets
     ]
+
+
+def _format_ticket(t: dict) -> str:
+    """Format a ticket dict as human-readable .txt matching indexer expectations."""
+    lines = [
+        f"Incident: {t['ticket_id']}",
+        f"Title: {t['title']}",
+        f"Severity: {t['severity']}",
+        f"Root Cause: {t['root_cause']}",
+        f"Root Cause Type: {t['root_cause_type']}",
+        f"Created: {t['created_at']}",
+        f"Resolved: {t['resolved_at']}",
+        f"SLA Breached: {'Yes' if t['sla_breached'] else 'No'}",
+        "",
+        "Description:",
+        t["description"],
+        "",
+        "Detection Method:",
+        t["detection_method"],
+        "",
+        "Resolution:",
+        t["resolution"],
+        "",
+    ]
+    lines.append("Customer Impact:")
+    if t["customer_impact"]:
+        for c in t["customer_impact"]:
+            lines.append(f"- {c}")
+    else:
+        lines.append("(None)")
+    lines.append("")
+    lines.append(f"Services Affected: {t['services_affected']}")
+    lines.append(f"Alerts Generated: {t['alerts_generated']}")
+    lines.append(f"Alerts Suppressed: {t['alerts_suppressed']}")
+    lines.append(f"Time to Detect: {t['time_to_detect_seconds']} seconds")
+    lines.append(f"Time to Reroute: {t['time_to_reroute_seconds']} seconds")
+    lines.append(f"Time to Resolve: {t['time_to_resolve_minutes']} minutes")
+    lines.append("")
+    lines.append("Lessons Learned:")
+    lines.append(t["lessons_learned"])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    tickets = generate_tickets()
+    for t in tickets:
+        path = os.path.join(OUTPUT_DIR, f"{t['ticket_id']}.txt")
+        with open(path, "w") as f:
+            f.write(_format_ticket(t))
+        print(f"  ✓ {t['ticket_id']}.txt")
+    print(f"\n{len(tickets)} ticket files written to {os.path.abspath(OUTPUT_DIR)}")
+
+if __name__ == "__main__":
+    main()
 ```
 
 ### Entity ID Cross-References
@@ -94,22 +159,22 @@ Every ticket must reference real entity IDs:
 |-------|-----------|
 | `root_cause` | A vertex ID from any `Dim*.csv` |
 | `customer_impact` | Service IDs from `DimService.csv` (or equivalent) |
-| `root_cause_type` | Should align with `AlertType` values used in `AlertStream.csv` |
+| `root_cause_type` | Should align with `AlertType` values in AlertStream.csv |
 
 ### Ticket Diversity Guidelines
 
-Cover a variety of root cause types across your 8–12 tickets:
+Cover a variety of root cause types across 8–12 tickets:
 
-| Category | Examples (telco) | Examples (cloud) |
-|----------|-----------------|------------------|
-| Physical failure | `FIBRE_CUT`, `AMPLIFIER_FAILURE` | `DISK_FAILURE`, `NIC_FAILURE` |
-| Hardware degradation | `HARDWARE_DEGRADATION` | `MEMORY_ECC_ERROR` |
-| Software bug | `SOFTWARE_BUG` | `KERNEL_PANIC`, `OOM_KILL` |
-| Misconfiguration | `MISCONFIGURATION` | `SECURITY_GROUP_MISCONFIGURATION` |
-| Capacity | `CAPACITY_EXHAUSTION` | `CPU_THROTTLE`, `DISK_FULL` |
-| External | `POWER_FAILURE` | `COOLING_FAILURE`, `POWER_FAILURE` |
-| Planned | `PLANNED_MAINTENANCE` | `ROLLING_UPDATE` |
-| Customer-side | `SERVICE_MISCONFIGURATION` | `DNS_MISCONFIGURATION` |
+| Category | Telco examples | Cloud examples | E-commerce examples |
+|----------|---------------|----------------|---------------------|
+| Physical failure | `FIBRE_CUT`, `AMPLIFIER_FAILURE` | `DISK_FAILURE`, `NIC_FAILURE` | — |
+| Hardware degradation | `HARDWARE_DEGRADATION` | `MEMORY_ECC_ERROR` | — |
+| Software bug | `SOFTWARE_BUG` | `KERNEL_PANIC`, `OOM_KILL` | `MODEL_BUG`, `CACHE_CORRUPTION` |
+| Misconfiguration | `MISCONFIGURATION` | `SECURITY_GROUP_MISCONFIGURATION` | `SEGMENT_MISCONFIGURATION` |
+| Capacity | `CAPACITY_EXHAUSTION` | `CPU_THROTTLE`, `DISK_FULL` | `INVENTORY_OVERSELL` |
+| External | `POWER_FAILURE` | `COOLING_FAILURE`, `POWER_FAILURE` | `SUPPLIER_DELIVERY_FAILURE` |
+| Planned | `PLANNED_MAINTENANCE` | `ROLLING_UPDATE` | `MODEL_RETRAIN` |
+| Customer-side | `SERVICE_MISCONFIGURATION` | `DNS_MISCONFIGURATION` | `CAMPAIGN_MISMATCH` |
 
 ### Lessons Learned
 
@@ -120,127 +185,3 @@ Each ticket's `lessons_learned` field should:
 
 These lessons are surfaced by the ticket agent during investigation, providing
 the AI with historical context for similar incidents.
-
----
-
-## `graph_schema.yaml` Format
-
-The graph schema manifest is the **single source of truth** for the Cosmos
-Gremlin graph. The generic loader (`scripts/cosmos/provision_cosmos_gremlin.py`)
-reads this file and creates all vertices and edges — no code changes needed
-for new scenarios.
-
-### Top-Level Structure
-
-```yaml
-# Directory containing CSV files (relative to project root)
-data_dir: data/network
-
-vertices:
-  - label: <VertexLabel>
-    ...
-
-edges:
-  - label: <EdgeLabel>
-    ...
-```
-
-### Vertex Definition
-
-```yaml
-vertices:
-  - label: CoreRouter                  # Gremlin vertex label
-    csv_file: DimCoreRouter.csv        # CSV filename inside data_dir
-    id_column: RouterId                # Column whose value → vertex 'id' property
-    partition_key: router              # Static value for 'partitionKey' property
-    properties:                        # Columns to add as vertex properties
-      - RouterId                       # id_column is always included
-      - City
-      - Region
-      - Vendor
-      - Model
-```
-
-Rules:
-- `label` must be unique across all vertex types
-- `csv_file` must exist in `data_dir`
-- `id_column` must be one of the `properties`
-- `partition_key` is a static string (not a column name) — used for Cosmos partitioning
-- `properties` lists CSV column names to store as vertex properties
-
-### Edge Definition
-
-```yaml
-edges:
-  - label: connects_to                 # Gremlin edge label
-    csv_file: DimTransportLink.csv     # CSV to iterate
-    source:                            # How to find the source vertex
-      label: TransportLink             # Vertex label to match
-      property: LinkId                 # Vertex property for has() lookup
-      column: LinkId                   # CSV column with the lookup value
-    target:                            # How to find the target vertex
-      label: CoreRouter
-      property: RouterId
-      column: SourceRouterId           # CSV column with FK lookup value
-    properties:                        # Optional edge properties
-      - name: direction                # Gremlin property name
-        value: source                  # Static literal value
-    filter:                            # Optional — only process matching rows
-      column: NodeType
-      value: TransportLink
-```
-
-Rules:
-- `source.label` and `target.label` must match a vertex definition's `label`
-- `source.column` and `target.column` must be CSV column names
-- `properties` can use `column` (CSV value) or `value` (static literal), not both
-- `filter` restricts which CSV rows create edges (e.g. create `routes_via` edges
-  only for rows where `NodeType == "TransportLink"`)
-
-### Bidirectional Edges
-
-For components that connect at both endpoints (e.g. a transport link connects
-to both a source router and a target router), define **two edge entries**:
-
-```yaml
-  - label: connects_to
-    csv_file: DimTransportLink.csv
-    source: { label: TransportLink, property: LinkId, column: LinkId }
-    target: { label: CoreRouter, property: RouterId, column: SourceRouterId }
-    properties: [{ name: direction, value: source }]
-
-  - label: connects_to
-    csv_file: DimTransportLink.csv
-    source: { label: TransportLink, property: LinkId, column: LinkId }
-    target: { label: CoreRouter, property: RouterId, column: TargetRouterId }
-    properties: [{ name: direction, value: target }]
-```
-
-### Filtered Edges (Junction Tables)
-
-When a junction table encodes edges to multiple target types, use `filter` to
-create separate edge definitions per target type:
-
-```yaml
-  # Service depends_on MPLSPath
-  - label: depends_on
-    csv_file: FactServiceDependency.csv
-    filter: { column: DependsOnType, value: MPLSPath }
-    source: { label: Service, property: ServiceId, column: ServiceId }
-    target: { label: MPLSPath, property: PathId, column: DependsOnId }
-
-  # Service depends_on AggSwitch
-  - label: depends_on
-    csv_file: FactServiceDependency.csv
-    filter: { column: DependsOnType, value: AggSwitch }
-    source: { label: Service, property: ServiceId, column: ServiceId }
-    target: { label: AggSwitch, property: SwitchId, column: DependsOnId }
-```
-
-### Complete Example (Telco-NOC)
-
-The reference schema defines:
-- **8 vertex types**: CoreRouter, AggSwitch, BaseStation, TransportLink, MPLSPath, Service, SLAPolicy, BGPSession
-- **11 edge definitions**: connects_to (×2), aggregates_to, backhauls_via, routes_via, depends_on (×3), governed_by, peers_over (×2)
-
-See `data/graph_schema.yaml` (266 lines) for the full implementation.

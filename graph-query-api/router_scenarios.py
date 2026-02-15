@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
-from config import COSMOS_NOSQL_ENDPOINT, get_credential
+from config import COSMOS_NOSQL_ENDPOINT
+from cosmos_helpers import get_or_create_container
 
 logger = logging.getLogger("graph-query-api.scenarios")
 
@@ -55,82 +55,21 @@ def _validate_scenario_name(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Cosmos helpers (lazy init)
+# Cosmos helpers (delegated to cosmos_helpers)
 # ---------------------------------------------------------------------------
-
-_scenarios_container = None
 
 
 def _get_scenarios_container(*, ensure_created: bool = True):
     """Get the Cosmos container for scenario metadata.
 
-    Database: scenarios
+    Database: scenarios (pre-created by Bicep)
     Container: scenarios
     Partition key: /id
-
-    Uses the same ARM two-phase pattern as router_prompts._get_prompts_container.
     """
-    global _scenarios_container
-    if _scenarios_container is not None:
-        return _scenarios_container
-
-    if not COSMOS_NOSQL_ENDPOINT:
-        raise HTTPException(503, "COSMOS_NOSQL_ENDPOINT not configured")
-
-    if ensure_created:
-        account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
-        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-        rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-
-        if sub_id and rg:
-            try:
-                from azure.mgmt.cosmosdb import CosmosDBManagementClient
-                from azure.identity import DefaultAzureCredential as _DC
-
-                mgmt = CosmosDBManagementClient(_DC(), sub_id)
-
-                # Create database
-                try:
-                    mgmt.sql_resources.begin_create_update_sql_database(
-                        rg,
-                        account_name,
-                        SCENARIOS_DATABASE,
-                        {"resource": {"id": SCENARIOS_DATABASE}},
-                    ).result()
-                except Exception:
-                    pass  # already exists
-
-                # Create container
-                try:
-                    mgmt.sql_resources.begin_create_update_sql_container(
-                        rg,
-                        account_name,
-                        SCENARIOS_DATABASE,
-                        SCENARIOS_CONTAINER,
-                        {
-                            "resource": {
-                                "id": SCENARIOS_CONTAINER,
-                                "partitionKey": {
-                                    "paths": ["/id"],
-                                    "kind": "Hash",
-                                },
-                            }
-                        },
-                    ).result()
-                except Exception:
-                    pass  # already exists
-            except Exception as e:
-                logger.warning("ARM scenarios container creation failed: %s", e)
-
-    # Data-plane client
-    from azure.cosmos import CosmosClient
-
-    client = CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
-    db = client.get_database_client(SCENARIOS_DATABASE)
-    container = db.get_container_client(SCENARIOS_CONTAINER)
-    _scenarios_container = container
-    logger.info("Scenarios container ready: %s/%s", SCENARIOS_DATABASE, SCENARIOS_CONTAINER)
-    return container
+    return get_or_create_container(
+        SCENARIOS_DATABASE, SCENARIOS_CONTAINER, "/id",
+        ensure_created=ensure_created,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +81,10 @@ class ScenarioSaveRequest(BaseModel):
     name: str
     display_name: str = ""
     description: str = ""
+    use_cases: list[str] | None = None
+    example_questions: list[str] | None = None
+    graph_styles: dict | None = None
+    domain: str | None = None
     upload_results: dict = {}
 
     @field_validator("name")
@@ -211,12 +154,18 @@ async def save_scenario(req: ScenarioSaveRequest):
         "created_by": "ui",
         "resources": {
             "graph": f"{name}-topology",
-            "telemetry_database": f"{name}-telemetry",
+            "telemetry_database": "telemetry",
+            "telemetry_container_prefix": name,
             "runbooks_index": f"{name}-runbooks-index",
             "tickets_index": f"{name}-tickets-index",
-            "prompts_database": f"{name}-prompts",
+            "prompts_database": "prompts",
+            "prompts_container": name,
         },
         "upload_status": req.upload_results,
+        "use_cases": req.use_cases or [],
+        "example_questions": req.example_questions or [],
+        "graph_styles": req.graph_styles or {},
+        "domain": req.domain or "",
     }
 
     # Check if existing document has a created_at we should preserve

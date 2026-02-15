@@ -1,4 +1,4 @@
-import { NODE_COLORS } from './graphConstants';
+import { useNodeColor } from '../../hooks/useNodeColor';
 import type { TopologyMeta } from '../../hooks/useTopology';
 
 interface GraphToolbarProps {
@@ -11,12 +11,17 @@ interface GraphToolbarProps {
   onSearchChange: (q: string) => void;
   onRefresh: () => void;
   onZoomToFit: () => void;
+  isPaused?: boolean;
+  onTogglePause?: () => void;
+  nodeColorOverride: Record<string, string>;
 }
 
 export function GraphToolbar({
   meta, loading, availableLabels, activeLabels,
   onToggleLabel, searchQuery, onSearchChange, onRefresh, onZoomToFit,
+  isPaused, onTogglePause, nodeColorOverride,
 }: GraphToolbarProps) {
+  const getColor = useNodeColor(nodeColorOverride);
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 shrink-0">
       {/* Title */}
@@ -38,7 +43,7 @@ export function GraphToolbar({
             >
               <span
                 className="h-2 w-2 rounded-full shrink-0"
-                style={{ backgroundColor: NODE_COLORS[label] ?? '#6B7280' }}
+                style={{ backgroundColor: getColor(label) }}
               />
               {label}
             </button>
@@ -65,6 +70,17 @@ export function GraphToolbar({
         <span className="text-[10px] text-text-muted whitespace-nowrap">
           {meta.node_count}N · {meta.edge_count}E
         </span>
+      )}
+
+      {/* Pause/Play toggle */}
+      {onTogglePause && (
+        <button
+          onClick={onTogglePause}
+          className={`text-xs px-1 transition-colors ${
+            isPaused ? 'text-brand hover:text-brand/80' : 'text-text-muted hover:text-text-primary'
+          }`}
+          title={isPaused ? 'Resume simulation' : 'Pause simulation'}
+        >{isPaused ? '▶' : '⏸'}</button>
       )}
 
       {/* Zoom-to-fit */}

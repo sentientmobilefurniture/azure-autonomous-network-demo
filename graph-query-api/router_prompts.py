@@ -19,29 +19,54 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from azure.cosmos import CosmosClient, PartitionKey
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from config import COSMOS_NOSQL_ENDPOINT, get_credential
+from config import COSMOS_NOSQL_ENDPOINT
+from cosmos_helpers import get_or_create_container, get_mgmt_client
 
 logger = logging.getLogger("graph-query-api.prompts")
 
 router = APIRouter(prefix="/query", tags=["prompts"])
 
-PROMPTS_CONTAINER = "prompts"
+PROMPTS_DATABASE = "prompts"  # shared DB — pre-created by Bicep
 
 # ---------------------------------------------------------------------------
-# Cosmos helpers (lazy init, per-scenario cache)
+# Cosmos helpers (delegated to cosmos_helpers)
 # ---------------------------------------------------------------------------
 
-_containers: dict[str, object] = {}
+
+def _get_prompts_container(scenario: str, *, ensure_created: bool = False):
+    """Get the Cosmos container for a scenario's prompts.
+
+    Database: prompts (shared, pre-created by Bicep)
+    Container: {scenario} (per-scenario, created on demand)
+    Partition key: /agent
+    """
+    return get_or_create_container(
+        PROMPTS_DATABASE, scenario, "/agent", ensure_created=ensure_created,
+    )
 
 
-def _db_name_for_scenario(scenario: str) -> str:
-    """Return the Cosmos database name for a scenario's prompts."""
-    return f"{scenario}-prompts"
+def _list_prompt_scenarios() -> list[str]:
+    """List all per-scenario containers in the shared 'prompts' database.
+
+    Returns list of scenario names (each container name IS the scenario name).
+    """
+    if not COSMOS_NOSQL_ENDPOINT:
+        return []
+    account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
+    rg = os.getenv("AZURE_RESOURCE_GROUP", "")
+    if not rg:
+        return []
+    try:
+        mgmt = get_mgmt_client()
+        containers = mgmt.sql_resources.list_sql_containers(rg, account_name, PROMPTS_DATABASE)
+        return sorted(c.name for c in containers if c.name)
+    except Exception as e:
+        logger.warning("Failed to list prompt containers: %s", e)
+        return []
 
 
 def _parse_scenario_from_id(prompt_id: str) -> str:
@@ -50,94 +75,6 @@ def _parse_scenario_from_id(prompt_id: str) -> str:
     if len(parts) >= 2:
         return parts[0]
     raise HTTPException(400, f"Invalid prompt ID format: {prompt_id}")
-
-
-def _get_prompts_container(scenario: str, *, ensure_created: bool = False):
-    """Get the Cosmos container for a scenario's prompts.
-
-    Database: {scenario}-prompts
-    Container: prompts
-    Partition key: /agent
-
-    Args:
-        scenario: Scenario name (e.g. "telco-noc")
-        ensure_created: If True, create database/container via ARM first.
-            Only needed for write operations (upload, create).
-            Read operations should pass False (default) to avoid
-            30-second ARM blocking calls.
-    """
-    if scenario in _containers:
-        return _containers[scenario]
-
-    if not COSMOS_NOSQL_ENDPOINT:
-        raise HTTPException(503, "COSMOS_NOSQL_ENDPOINT not configured")
-
-    db_name = _db_name_for_scenario(scenario)
-
-    if ensure_created:
-        # Create database + container via ARM (management plane) first
-        # Data-plane RBAC doesn't cover database creation
-        account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
-        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-        rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-
-        if sub_id and rg:
-            try:
-                from azure.mgmt.cosmosdb import CosmosDBManagementClient
-                from azure.identity import DefaultAzureCredential as _DC
-                mgmt = CosmosDBManagementClient(_DC(), sub_id)
-                try:
-                    mgmt.sql_resources.begin_create_update_sql_database(
-                        rg, account_name, db_name,
-                        {"resource": {"id": db_name}},
-                    ).result()
-                except Exception:
-                    pass  # already exists
-                try:
-                    mgmt.sql_resources.begin_create_update_sql_container(
-                        rg, account_name, db_name, PROMPTS_CONTAINER,
-                        {"resource": {"id": PROMPTS_CONTAINER, "partitionKey": {"paths": ["/agent"], "kind": "Hash"}}},
-                    ).result()
-                except Exception:
-                    pass  # already exists
-            except Exception as e:
-                logger.warning("ARM prompts container creation failed: %s", e)
-
-    # Data-plane client for reads/writes
-    client = CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
-    db = client.get_database_client(db_name)
-    container = db.get_container_client(PROMPTS_CONTAINER)
-    _containers[scenario] = container
-    logger.info("Prompts container ready: %s/%s", db_name, PROMPTS_CONTAINER)
-    return container
-
-
-def _list_prompt_databases() -> list[str]:
-    """List all Cosmos databases matching {scenario}-prompts pattern.
-
-    Returns list of scenario names.
-    """
-    if not COSMOS_NOSQL_ENDPOINT:
-        return []
-    account_name = COSMOS_NOSQL_ENDPOINT.replace("https://", "").split(".")[0]
-    sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-    rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-    if not sub_id or not rg:
-        return []
-    try:
-        from azure.mgmt.cosmosdb import CosmosDBManagementClient
-        from azure.identity import DefaultAzureCredential as _DC
-        mgmt = CosmosDBManagementClient(_DC(), sub_id)
-        dbs = mgmt.sql_resources.list_sql_databases(rg, account_name)
-        scenarios = []
-        for db in dbs:
-            name = db.name or ""
-            if name.endswith("-prompts"):
-                scenarios.append(name[: -len("-prompts")])
-        return sorted(scenarios)
-    except Exception as e:
-        logger.warning("Failed to list prompt databases: %s", e)
-        return []
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +139,7 @@ async def list_prompts(
     else:
         def _scan_all():
             all_items = []
-            for sc in _list_prompt_databases():
+            for sc in _list_prompt_scenarios():
                 all_items.extend(_query_scenario(sc))
             return all_items
         items = await asyncio.to_thread(_scan_all)
@@ -215,7 +152,7 @@ async def list_prompt_scenarios():
     """List distinct scenario names that have prompts stored in Cosmos."""
     try:
         def _list():
-            scenarios = _list_prompt_databases()
+            scenarios = _list_prompt_scenarios()
             result = []
             for sc in scenarios:
                 try:
