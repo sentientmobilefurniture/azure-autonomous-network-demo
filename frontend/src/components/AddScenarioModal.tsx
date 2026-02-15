@@ -75,7 +75,6 @@ interface Props {
 
 export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveScenarioMeta }: Props) {
   const [name, setName] = useState('');
-  const [nameAutoDetected, setNameAutoDetected] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const scenarioMetadataRef = useRef<Record<string, unknown> | null>(null);
@@ -129,7 +128,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   useEffect(() => {
     if (open) {
       setName('');
-      setNameAutoDetected(false);
       setDisplayName('');
       setDescription('');
       setShowAdvanced(false);
@@ -187,14 +185,13 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       }
     }
 
-    // Auto-derive scenario name if name field is empty
-    if (!name && detectedNames.length > 0) {
+    // Auto-derive scenario name from detected filenames (always takes priority)
+    if (detectedNames.length > 0) {
       // Use most common name
       const counts: Record<string, number> = {};
       for (const n of detectedNames) counts[n] = (counts[n] || 0) + 1;
       const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
       setName(sorted[0][0]);
-      setNameAutoDetected(true);
     }
   }, [assignFile, name]);
 
@@ -205,10 +202,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     .filter(s => s.file)
     .map(s => detectSlot(s.file!.name)?.scenarioName)
     .filter(Boolean) as string[];
-  const mismatchHint = name && detectedNamesFromSlots.length > 0 &&
-    detectedNamesFromSlots.some(n => n !== name)
-    ? `File names suggest "${detectedNamesFromSlots[0]}" but resources will be created as "${name}".`
-    : null;
 
   const allFilled = SLOT_DEFS.every(d => slots[d.key].file);
   const canSave = !!name && !nameError && allFilled && modalState === 'idle';
@@ -404,24 +397,27 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           {/* Scenario Name */}
           <div>
             <label className="text-xs text-text-muted block mb-1">Scenario Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''));
-                setNameAutoDetected(false);
-              }}
-              disabled={modalState !== 'idle'}
-              placeholder="cloud-outage"
-              className="w-full bg-neutral-bg1 border border-white/10 rounded px-3 py-2 text-sm text-text-primary
-                placeholder:text-text-muted/50 focus:outline-none focus:border-brand/50 disabled:opacity-50"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={name}
+                readOnly
+                disabled={modalState !== 'idle'}
+                placeholder="Detected from uploaded files"
+                className="w-full bg-neutral-bg1 border border-white/10 rounded px-3 py-2 text-sm text-text-primary
+                  placeholder:text-text-muted/50 focus:outline-none cursor-not-allowed opacity-75 disabled:opacity-50"
+              />
+              {name && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted text-sm" title="Name read from scenario.yaml">
+                  🔒
+                </span>
+              )}
+            </div>
             {nameError && <p className="text-xs text-status-error mt-1">{nameError}</p>}
-            {nameAutoDetected && !nameError && (
-              <p className="text-xs text-text-muted mt-1 italic">Auto-detected from filename — edit freely</p>
-            )}
-            {mismatchHint && !nameError && (
-              <p className="text-xs text-yellow-400/80 mt-1">ⓘ {mismatchHint}</p>
+            {name && (
+              <p className="text-xs text-text-muted mt-1 italic">
+                Name detected from uploaded files — cannot be overridden
+              </p>
             )}
           </div>
 

@@ -36,15 +36,15 @@ export const RESOURCE_NODE_SIZES: Record<ResourceNodeType, number> = {
 
 /** Edge colour per relationship type */
 export const RESOURCE_EDGE_COLORS: Record<ResourceEdgeType, string> = {
-  delegates_to: 'rgba(96,165,250,0.5)',   // blue
-  uses_tool:    'rgba(245,158,11,0.4)',    // amber
-  queries:      'rgba(34,197,94,0.4)',     // green
+  delegates_to: 'rgba(96,165,250,0.7)',   // blue — up from 0.5
+  uses_tool:    'rgba(245,158,11,0.6)',    // amber — up from 0.4
+  queries:      'rgba(34,197,94,0.6)',     // green — up from 0.4
   // Data-flow & infrastructure edges
-  stores_in:    'rgba(6,182,212,0.4)',     // cyan
-  hosted_on:    'rgba(249,115,22,0.3)',    // orange
-  indexes_from: 'rgba(139,92,246,0.4)',    // violet
-  runs_on:      'rgba(249,115,22,0.3)',    // orange
-  contains:     'rgba(255,255,255,0.15)',  // subtle
+  stores_in:    'rgba(6,182,212,0.6)',     // cyan — up from 0.4
+  hosted_on:    'rgba(249,115,22,0.5)',    // orange — up from 0.3
+  indexes_from: 'rgba(139,92,246,0.6)',    // violet — up from 0.4
+  runs_on:      'rgba(249,115,22,0.5)',    // orange — up from 0.3
+  contains:     'rgba(255,255,255,0.3)',   // up from 0.15
 };
 
 /** Edge dash pattern (empty = solid) */

@@ -362,9 +362,12 @@ def _extract_tar(content: bytes, tmppath: Path) -> Path:
 def _resolve_scenario_name(
     tmppath: Path, override: str | None, fallback: str = "default",
 ) -> str:
-    """Resolve scenario name: override > scenario.yaml > fallback."""
-    if override:
-        return override
+    """Resolve scenario name from scenario.yaml, ignoring override.
+
+    The override parameter is accepted for API compatibility but is ignored.
+    Name always comes from scenario.yaml embedded in the tarball.
+    """
+    # Ignore override — always use scenario.yaml name
     for root, _dirs, files in os.walk(tmppath):
         if "scenario.yaml" in files:
             m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
@@ -467,14 +470,14 @@ async def upload_graph(
             manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
             manifest = _normalize_manifest(manifest)
             schema = yaml.safe_load((scenario_dir / "graph_schema.yaml").read_text())
-            sc_name = scenario_name or manifest["name"]
+            sc_name = manifest["name"]
 
-            # If user overrode the scenario name, rewrite resource names
-            # in the manifest so graph, telemetry, and search all use the
-            # same prefix — prevents graph="telco-noc-topology" vs
-            # telemetry containers "telco-noc2-AlertStream" mismatches.
+            # scenario_name parameter is accepted for API compat but ignored
             if scenario_name and scenario_name != manifest.get("name"):
-                manifest = _rewrite_manifest_prefix(manifest, scenario_name)
+                logger.info(
+                    "Ignoring scenario_name override '%s' — using manifest name '%s'",
+                    scenario_name, sc_name,
+                )
 
             # Persist full config if agents section present (Phase 8)
             if "agents" in manifest:
@@ -574,11 +577,14 @@ async def upload_telemetry(
 
             manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
             manifest = _normalize_manifest(manifest)
-            sc_name = scenario_name or manifest["name"]
+            sc_name = manifest["name"]
 
-            # If user overrode the scenario name, rewrite resource names
+            # scenario_name parameter is accepted for API compat but ignored
             if scenario_name and scenario_name != manifest.get("name"):
-                manifest = _rewrite_manifest_prefix(manifest, scenario_name)
+                logger.info(
+                    "Ignoring scenario_name override '%s' — using manifest name '%s'",
+                    scenario_name, sc_name,
+                )
 
             # Persist full config if agents section present (Phase 8)
             if "agents" in manifest:

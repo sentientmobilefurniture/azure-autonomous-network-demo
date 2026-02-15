@@ -12,6 +12,8 @@ import type { ResourceNode, ResourceEdge, ResourceNodeType } from '../types';
  * Mirrors the layout/interaction patterns of GraphTopologyViewer but with
  * resource-specific node types, shapes, and a layered force layout.
  */
+const INFRA_TYPES = new Set<ResourceNodeType>(['foundry', 'storage', 'cosmos-account', 'search-service', 'container-app']);
+
 export function ResourceVisualizer() {
   const { nodes, edges, loading, error } = useResourceGraph();
   const canvasRef = useRef<ResourceCanvasHandle>(null);
@@ -127,13 +129,30 @@ export function ResourceVisualizer() {
 
   const filteredNodeIds = useMemo(() => new Set(filteredNodes.map((n) => n.id)), [filteredNodes]);
 
+  // Build a map from node id → type so we can keep infra-connected edges visible
+  const nodeTypeMap = useMemo(() => {
+    const m = new Map<string, ResourceNodeType>();
+    for (const n of nodes) m.set(n.id, n.type);
+    return m;
+  }, [nodes]);
+
   const filteredEdges = useMemo(() => {
     return edges.filter((e) => {
       const srcId = typeof e.source === 'string' ? e.source : (e.source as ResourceNode).id;
       const tgtId = typeof e.target === 'string' ? e.target : (e.target as ResourceNode).id;
-      return filteredNodeIds.has(srcId) && filteredNodeIds.has(tgtId);
+      // Always include if both endpoints are visible
+      if (filteredNodeIds.has(srcId) && filteredNodeIds.has(tgtId)) return true;
+      // When type filters are active, also include edges to infrastructure nodes
+      // so structural relationships stay visible even with filters
+      if (activeTypes.length > 0) {
+        const srcVisible = filteredNodeIds.has(srcId);
+        const tgtVisible = filteredNodeIds.has(tgtId);
+        if (srcVisible && INFRA_TYPES.has(nodeTypeMap.get(tgtId)!)) return true;
+        if (tgtVisible && INFRA_TYPES.has(nodeTypeMap.get(srcId)!)) return true;
+      }
+      return false;
     });
-  }, [edges, filteredNodeIds]);
+  }, [edges, filteredNodeIds, activeTypes, nodeTypeMap]);
 
   // ── Toolbar height reservation ────────────────────────────────────────
 
@@ -186,11 +205,18 @@ export function ResourceVisualizer() {
               </div>
             </div>
           )}
-          {!loading && error && (
+          {!loading && error && nodes.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center space-y-2 text-text-muted">
                 <p className="text-sm">Could not load resource graph</p>
                 <p className="text-xs text-red-400 max-w-sm">{error}</p>
+              </div>
+            </div>
+          )}
+          {!loading && error && nodes.length > 0 && (
+            <div className="absolute top-2 left-2 right-2 z-10">
+              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 text-xs text-yellow-400">
+                ⚠ {error}
               </div>
             </div>
           )}

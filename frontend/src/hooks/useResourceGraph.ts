@@ -27,11 +27,15 @@ export function useResourceGraph(): ResourceGraphData {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/config/resources');
+      const res = await fetch('/api/config/resources', {
+        headers: { 'X-Scenario': activeScenario || '' },
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setNodes(data.nodes ?? []);
       setEdges(data.edges ?? []);
+      // Surface backend error (partial results may still be returned)
+      if (data.error) setError(data.error);
     } catch (e) {
       setError(String(e));
       setNodes([]);
@@ -39,7 +43,7 @@ export function useResourceGraph(): ResourceGraphData {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeScenario]);
 
   // Re-fetch when scenario changes or provisioning completes
   useEffect(() => {

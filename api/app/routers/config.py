@@ -16,7 +16,7 @@ import sys
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -427,20 +427,46 @@ def _build_resource_graph(config: dict, scenario_name: str) -> dict:
         elif ds_type == "blob_storage":
             edges.append({"source": f"ds-{ds_key}", "target": "infra-storage", "type": "contains", "label": ""})
 
+    # Validate edges — drop any whose source or target doesn't match a node ID
+    node_ids = {n["id"] for n in nodes}
+    edges = [e for e in edges if e["source"] in node_ids and e["target"] in node_ids]
+
     return {"nodes": nodes, "edges": edges, "scenario": scenario_name}
 
 
+def _infra_nodes_only() -> list[dict]:
+    """Return only infrastructure nodes (for partial-failure responses)."""
+    return [
+        {"id": "infra-foundry", "label": "AI Foundry", "type": "foundry",
+         "meta": {"resource": os.getenv("AI_FOUNDRY_NAME", ""), "project": os.getenv("AI_FOUNDRY_PROJECT_NAME", "")}},
+        {"id": "infra-cosmos-g", "label": "Cosmos DB (Gremlin)", "type": "cosmos-account",
+         "meta": {"resource": os.getenv("COSMOS_GREMLIN_ENDPOINT", ""), "api": "Gremlin"}},
+        {"id": "infra-cosmos-n", "label": "Cosmos DB (NoSQL)", "type": "cosmos-account",
+         "meta": {"resource": os.getenv("COSMOS_NOSQL_ENDPOINT", ""), "api": "NoSQL"}},
+        {"id": "infra-storage", "label": "Storage Account", "type": "storage",
+         "meta": {"resource": os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")}},
+        {"id": "infra-search", "label": "AI Search", "type": "search-service",
+         "meta": {"resource": os.getenv("AZURE_SEARCH_ENDPOINT", "")}},
+    ]
+
+
 @router.get("/resources", summary="Get resource graph for visualization")
-async def get_resource_graph():
+async def get_resource_graph(request: Request):
     """Build and return the nodes+edges resource graph from the active scenario config."""
     import urllib.request
     import urllib.parse
 
-    # Determine active scenario
+    # Determine active scenario — prefer X-Scenario header, fall back to graph-name derivation
     cfg = _load_current_config()
-    # Try to get scenario name from current graph binding
     graph = cfg.get("graph", "topology")
-    scenario_name = graph.rsplit("-", 1)[0] if "-" in graph else graph
+    scenario_name = (
+        request.headers.get("X-Scenario")
+        or (graph.rsplit("-", 1)[0] if "-" in graph else graph)
+    )
+
+    if not scenario_name or scenario_name == "topology":
+        return {"nodes": _infra_nodes_only(), "edges": [], "scenario": scenario_name,
+                "error": "No active scenario detected"}
 
     try:
         cfg_url = (
@@ -454,7 +480,10 @@ async def get_resource_graph():
         if config.get("agents") or config.get("data_sources"):
             return _build_resource_graph(config, scenario_name)
     except Exception as e:
-        logger.debug("Could not fetch scenario config for resources: %s", e)
+        logger.warning("Failed to fetch scenario config for '%s': %s", scenario_name, e)
+        return {"nodes": _infra_nodes_only(), "edges": [], "scenario": scenario_name,
+                "error": f"Could not load config for '{scenario_name}': {e}"}
 
-    # No config available — return empty graph so frontend shows empty state
-    return {"nodes": [], "edges": [], "scenario": scenario_name}
+    # Config exists but has no agents/data_sources
+    return {"nodes": _infra_nodes_only(), "edges": [], "scenario": scenario_name,
+            "error": f"Scenario '{scenario_name}' has no agents or data sources configured"}

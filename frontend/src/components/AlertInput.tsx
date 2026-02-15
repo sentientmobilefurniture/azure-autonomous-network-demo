@@ -1,4 +1,5 @@
-import { motion } from 'framer-motion';
+import { useState, useRef, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 
 interface AlertInputProps {
@@ -10,7 +11,22 @@ interface AlertInputProps {
 }
 
 export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQuestions }: AlertInputProps) {
-  const showChips = !alert.trim() && exampleQuestions && exampleQuestions.length > 0;
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!examplesOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setExamplesOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [examplesOpen]);
+
+  const hasExamples = exampleQuestions && exampleQuestions.length > 0;
 
   return (
     <div className="glass-card p-4 mb-4">
@@ -25,44 +41,70 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
         placeholder="Paste a NOC alert..."
       />
 
-      {/* Example question suggestion chips — visible only when textarea is empty */}
-      {showChips && (
-        <div className="mt-2">
-          <span className="text-[10px] uppercase tracking-wider text-text-muted block mb-1.5">
-            Try an example
-          </span>
-          <div className="flex flex-wrap gap-1.5">
-            {exampleQuestions.map((q, i) => (
-              <button
-                key={i}
-                onClick={() => onAlertChange(q)}
-                className="text-left text-xs px-2.5 py-1.5 rounded-md
-                  bg-white/5 border border-white/10 hover:border-brand/40
-                  text-text-secondary hover:text-text-primary transition-all
-                  cursor-pointer max-w-full"
-              >
-                <span className="line-clamp-1">"{q}"</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="mt-3 flex gap-2">
+        {/* Examples dropdown button — opens upward */}
+        {hasExamples && (
+          <div ref={dropdownRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setExamplesOpen((v) => !v)}
+              className={clsx(
+                'py-2.5 px-3 text-sm font-medium rounded-lg transition-colors',
+                'bg-white/5 border border-white/10 hover:border-brand/40',
+                'text-text-secondary hover:text-text-primary',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand',
+                examplesOpen && 'border-brand/40 text-text-primary',
+              )}
+            >
+              💡 Examples
+            </button>
 
-      <motion.button
-        whileHover={{ scale: running ? 1 : 1.02 }}
-        whileTap={{ scale: running ? 1 : 0.98 }}
-        transition={{ type: 'spring', stiffness: 400, damping: 17 }}
-        className={clsx(
-          'mt-3 w-full py-2.5 text-sm font-medium rounded-lg transition-colors',
-          'bg-brand hover:bg-brand-hover text-white',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-bg1',
-          'disabled:opacity-50 disabled:cursor-not-allowed',
+            <AnimatePresence>
+              {examplesOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute bottom-full left-0 mb-2 w-72 max-h-56 overflow-y-auto
+                    bg-neutral-bg2 border border-white/10 rounded-lg shadow-xl z-50 p-1.5"
+                >
+                  {exampleQuestions!.map((q, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        onAlertChange(q);
+                        setExamplesOpen(false);
+                      }}
+                      className="w-full text-left text-xs px-2.5 py-2 rounded-md
+                        hover:bg-white/5 text-text-secondary hover:text-text-primary
+                        transition-colors cursor-pointer"
+                    >
+                      "{q}"
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         )}
-        onClick={onSubmit}
-        disabled={running || !alert.trim()}
-      >
-        {running ? 'Investigating...' : 'Investigate'}
-      </motion.button>
+
+        <motion.button
+          whileHover={{ scale: running ? 1 : 1.02 }}
+          whileTap={{ scale: running ? 1 : 0.98 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 17 }}
+          className={clsx(
+            'flex-1 py-2.5 text-sm font-medium rounded-lg transition-colors',
+            'bg-brand hover:bg-brand-hover text-white',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-bg1',
+            'disabled:opacity-50 disabled:cursor-not-allowed',
+          )}
+          onClick={onSubmit}
+          disabled={running || !alert.trim()}
+        >
+          {running ? 'Investigating...' : 'Investigate'}
+        </motion.button>
+      </div>
     </div>
   );
 }
