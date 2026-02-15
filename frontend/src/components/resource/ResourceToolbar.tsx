@@ -1,8 +1,12 @@
 import type { ResourceNodeType } from '../../types';
 import { RESOURCE_NODE_COLORS, RESOURCE_TYPE_LABELS } from './resourceConstants';
 
-/** All node types in display order */
-const ALL_TYPES: ResourceNodeType[] = ['orchestrator', 'agent', 'tool', 'datasource', 'search-index'];
+/** All node types in display order — grouped: agents → tools → data → infrastructure */
+const ALL_TYPES: ResourceNodeType[] = [
+  'orchestrator', 'agent', 'tool',
+  'datasource', 'search-index',
+  'foundry', 'cosmos-account', 'storage', 'search-service', 'container-app',
+];
 
 interface ResourceToolbarProps {
   nodeCount: number;

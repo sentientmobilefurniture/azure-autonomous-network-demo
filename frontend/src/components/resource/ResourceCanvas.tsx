@@ -92,6 +92,23 @@ function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, r: n
   ctx.stroke();
 }
 
+function drawHexagon(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    const px = x + r * Math.cos(angle);
+    const py = y + r * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+}
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasProps>(
@@ -124,11 +141,19 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
       const fg = fgRef.current;
       if (!fg) return;
       const layerY: Record<string, number> = {
-        orchestrator: -120,
-        agent: -40,
-        tool: 40,
-        datasource: 120,
-        'search-index': 120,
+        orchestrator: -180,
+        agent: -90,
+        tool: 0,
+        datasource: 90,
+        'search-index': 90,
+        // Infrastructure layer
+        'blob-container': 150,
+        'cosmos-database': 150,
+        foundry: 210,
+        storage: 210,
+        'cosmos-account': 210,
+        'search-service': 210,
+        'container-app': 210,
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (fg as any).d3Force('y')?.strength(0.15);
@@ -164,6 +189,18 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
             break;
           case 'datasource':
           case 'search-index':
+            drawRoundRect(ctx, node.x!, node.y!, size, color);
+            break;
+          // Infrastructure — hexagons for services, round-rects for sub-resources
+          case 'foundry':
+          case 'storage':
+          case 'cosmos-account':
+          case 'search-service':
+          case 'container-app':
+            drawHexagon(ctx, node.x!, node.y!, size, color);
+            break;
+          case 'blob-container':
+          case 'cosmos-database':
             drawRoundRect(ctx, node.x!, node.y!, size, color);
             break;
           default:

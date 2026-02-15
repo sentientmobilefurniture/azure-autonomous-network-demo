@@ -80,7 +80,20 @@ export interface Interaction {
 // Resource visualizer types
 // ---------------------------------------------------------------------------
 
-export type ResourceNodeType = 'agent' | 'orchestrator' | 'datasource' | 'tool' | 'search-index';
+export type ResourceNodeType =
+  | 'agent'
+  | 'orchestrator'
+  | 'datasource'
+  | 'tool'
+  | 'search-index'
+  // Infrastructure layer
+  | 'foundry'
+  | 'storage'
+  | 'cosmos-account'
+  | 'search-service'
+  | 'container-app'
+  | 'blob-container'
+  | 'cosmos-database';
 
 export interface ResourceNode {
   id: string;
@@ -90,7 +103,16 @@ export interface ResourceNode {
   meta?: Record<string, string>;
 }
 
-export type ResourceEdgeType = 'delegates_to' | 'uses_tool' | 'queries';
+export type ResourceEdgeType =
+  | 'delegates_to'
+  | 'uses_tool'
+  | 'queries'
+  // Data-flow & infrastructure edges
+  | 'stores_in'
+  | 'hosted_on'
+  | 'indexes_from'
+  | 'runs_on'
+  | 'contains';
 
 export interface ResourceEdge {
   source: string;

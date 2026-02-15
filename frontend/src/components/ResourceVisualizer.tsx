@@ -140,7 +140,7 @@ export function ResourceVisualizer() {
   const TOOLBAR_HEIGHT = 36;
 
   return (
-    <div className="h-full flex flex-col bg-neutral-bg1">
+    <div className="h-full w-full flex flex-col bg-neutral-bg1">
       <div className="glass-card h-full flex flex-col overflow-hidden m-2 rounded-lg">
         <ResourceToolbar
           nodeCount={filteredNodes.length}

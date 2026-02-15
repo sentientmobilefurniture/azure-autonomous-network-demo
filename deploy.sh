@@ -497,6 +497,15 @@ else
     ok "Using DEV_IP_ADDRESS=$DEV_IP_ADDRESS for Cosmos DB firewall"
   fi
 
+  # Ensure uv.lock files exist for Docker builds (--frozen requires them)
+  for svc_dir in api graph-query-api; do
+    if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
+      info "Generating missing uv.lock for $svc_dir..."
+      (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
+      ok "$svc_dir/uv.lock created"
+    fi
+  done
+
   info "Running azd up (this may take 10-15 minutes)..."
   echo ""
 

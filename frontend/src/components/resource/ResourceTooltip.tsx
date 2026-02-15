@@ -58,11 +58,13 @@ function NodeContent({ node }: { node: ResourceNode }) {
 }
 
 function EdgeContent({ edge }: { edge: ResourceEdge }) {
+  const srcLabel = typeof edge.source === 'object' ? (edge.source as ResourceNode).label : String(edge.source);
+  const tgtLabel = typeof edge.target === 'object' ? (edge.target as ResourceNode).label : String(edge.target);
   return (
     <>
       <div className="text-xs font-semibold text-text-primary mb-1">{edge.label}</div>
       <div className="text-[11px] text-text-muted">
-        {edge.source as string} → {edge.target as string}
+        {srcLabel} → {tgtLabel}
       </div>
       <div className="text-[10px] text-text-muted mt-0.5 uppercase tracking-wider">
         {edge.type.replace('_', ' ')}
