@@ -10,10 +10,11 @@ import { DiagnosisPanel } from './components/DiagnosisPanel';
 import { InteractionSidebar } from './components/InteractionSidebar';
 import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
+import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { useScenarioContext } from './context/ScenarioContext';
 import type { Interaction } from './types';
 
-type AppTab = 'investigate' | 'info';
+type AppTab = 'investigate' | 'info' | 'resources';
 
 export default function App() {
   const {
@@ -110,7 +111,9 @@ export default function App() {
 
       {/* Zone 2 + 3: Main content + sidebar */}
       <div className="flex-1 min-h-0 flex">
-        {activeTab === 'investigate' ? (
+        {activeTab === 'resources' ? (
+          <ResourceVisualizer />
+        ) : activeTab === 'investigate' ? (
           <>
             {/* Main content area */}
             <div className="flex-1 min-w-0">

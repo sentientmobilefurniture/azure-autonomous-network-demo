@@ -75,3 +75,26 @@ export interface Interaction {
   run_meta: RunMeta | null;
   created_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Resource visualizer types
+// ---------------------------------------------------------------------------
+
+export type ResourceNodeType = 'agent' | 'orchestrator' | 'datasource' | 'tool' | 'search-index';
+
+export interface ResourceNode {
+  id: string;
+  label: string;
+  type: ResourceNodeType;
+  /** Extra metadata displayed in tooltip */
+  meta?: Record<string, string>;
+}
+
+export type ResourceEdgeType = 'delegates_to' | 'uses_tool' | 'queries';
+
+export interface ResourceEdge {
+  source: string;
+  target: string;
+  type: ResourceEdgeType;
+  label: string;
+}

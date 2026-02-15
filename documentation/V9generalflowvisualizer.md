@@ -286,3 +286,51 @@ code: ~20 lines of mock data.
 | Is it fucking whack? | **No.** ~690 lines of new frontend, ~60 lines of new backend. No new dependencies. |
 | What's the hardest part? | Backend data assembly (where does the resource graph come from?). Solved cleanly by genericization. |
 | When to build? | Frontend with mock data now (Option C), real backend after genericization. |
+
+---
+
+## 9. Implementation Status
+
+**Option C implemented** — frontend with mock data is live. TypeScript compiles
+clean, zero errors.
+
+### Files created
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/types/index.ts` | +18 | `ResourceNode`, `ResourceEdge`, `ResourceNodeType`, `ResourceEdgeType` types |
+| `src/hooks/useResourceGraph.ts` | 62 | Mock hook returning hardcoded 13-node, 12-edge resource graph |
+| `src/components/resource/resourceConstants.ts` | 44 | Node colours/sizes per type, edge colours/dash patterns, type labels |
+| `src/components/resource/ResourceTooltip.tsx` | 72 | Hover tooltip with node metadata or edge info |
+| `src/components/resource/ResourceToolbar.tsx` | 96 | Filter chips by node type, search, pause/play, zoom-to-fit |
+| `src/components/resource/ResourceCanvas.tsx` | 220 | `ForceGraph2D` wrapper with shape-per-type rendering (circle/diamond/roundrect), layered y-force, directional arrows, dash patterns |
+| `src/components/ResourceVisualizer.tsx` | 164 | Main orchestrator: ResizeObserver sizing, pause/freeze, tooltip, filtering, mock-data badge |
+
+### Files modified
+
+| File | Change |
+|------|--------|
+| `src/App.tsx` | Added `'resources'` to `AppTab`, imported `ResourceVisualizer`, added ternary branch |
+| `src/components/TabBar.tsx` | Extended type, added `◇ Resources` button |
+
+### Visual language
+
+- **Orchestrator**: large circle with double border (blue `#3b82f6`)
+- **Sub-agents**: circles (lighter blue `#60a5fa`)
+- **Tools**: diamonds (amber `#f59e0b`)
+- **Data sources**: rounded rectangles (green `#22c55e`)
+- **Search indexes**: rounded rectangles (purple `#a855f7`)
+- **Edges**: solid (delegates), dashed (uses tool), dotted (queries) — colour-coded
+
+### What the mock shows
+
+13 nodes (1 orchestrator + 4 agents + 4 tools + 2 data sources + 2 search indexes)
+and 12 edges showing the full delegation → tool-use → data-query chain. Nodes
+auto-stratify into layers via `d3.forceY` targets. Hovering any node shows its
+metadata (model, role, spec, backend, etc.).
+
+### Remaining to connect to real data
+
+Swap `useResourceGraph.ts` mock constants for a `fetch('/api/config/resources')`
+call once the genericised config YAML endpoint exists (~20 lines of throwaway mock
+replaced by ~30 lines of fetch + transform).

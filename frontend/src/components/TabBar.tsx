@@ -1,6 +1,6 @@
 interface TabBarProps {
-  activeTab: 'investigate' | 'info';
-  onTabChange: (tab: 'investigate' | 'info') => void;
+  activeTab: 'investigate' | 'info' | 'resources';
+  onTabChange: (tab: 'investigate' | 'info' | 'resources') => void;
 }
 
 export function TabBar({ activeTab, onTabChange }: TabBarProps) {
@@ -25,6 +25,16 @@ export function TabBar({ activeTab, onTabChange }: TabBarProps) {
         onClick={() => onTabChange('info')}
       >
         ℹ Scenario Info
+      </button>
+      <button
+        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+          activeTab === 'resources'
+            ? 'border-brand text-brand'
+            : 'border-transparent text-text-secondary hover:text-text-primary'
+        }`}
+        onClick={() => onTabChange('resources')}
+      >
+        ◇ Resources
       </button>
     </div>
   );
