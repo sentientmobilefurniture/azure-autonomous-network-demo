@@ -25,6 +25,18 @@ paths:
 
         Send Gremlin queries as plain text strings (no bytecode, no lambdas).
         Cosmos DB configuration (endpoint, database, graph) is set server-side.
+
+        IMPORTANT: You MUST include the X-Graph header with the graph name
+        to route to the correct scenario graph.
+      parameters:
+        - name: X-Graph
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: ["{graph_name}"]
+          description: |
+            Graph routing header. Must be "{graph_name}".
       requestBody:
         required: true
         content:
@@ -79,6 +91,18 @@ paths:
         Returns columns and rows of alert or telemetry data.
         Containers available: AlertStream (~5000 docs), LinkTelemetry (~8640 docs).
         Use standard SQL syntax: SELECT, FROM c, WHERE, ORDER BY, TOP, GROUP BY.
+
+        IMPORTANT: You MUST include the X-Graph header to route to the correct
+        scenario's telemetry database.
+      parameters:
+        - name: X-Graph
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: ["{graph_name}"]
+          description: |
+            Telemetry routing header. Must be "{graph_name}".
       requestBody:
         required: true
         content:

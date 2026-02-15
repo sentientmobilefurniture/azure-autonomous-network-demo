@@ -21,6 +21,17 @@ paths:
         Sends a query to the mock graph backend, which returns static
         network topology data for offline demonstrations and testing.
         Send any query string — natural language or formal syntax.
+
+        IMPORTANT: You MUST include the X-Graph header with the graph name.
+      parameters:
+        - name: X-Graph
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: ["{graph_name}"]
+          description: |
+            Graph routing header. Must be "{graph_name}".
       requestBody:
         required: true
         content:
@@ -73,6 +84,17 @@ paths:
         Returns columns and rows of alert or telemetry data.
         Containers available: AlertStream (~5000 docs), LinkTelemetry (~8640 docs).
         Use standard SQL syntax: SELECT, FROM c, WHERE, ORDER BY, TOP, GROUP BY.
+
+        IMPORTANT: You MUST include the X-Graph header for scenario routing.
+      parameters:
+        - name: X-Graph
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: ["{graph_name}"]
+          description: |
+            Telemetry routing header. Must be "{graph_name}".
       requestBody:
         required: true
         content:

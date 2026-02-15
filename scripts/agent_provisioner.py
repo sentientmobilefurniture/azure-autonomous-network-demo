@@ -75,10 +75,12 @@ def _load_openapi_spec(
     graph_query_api_uri: str,
     graph_backend: str = "cosmosdb",
     keep_path: str | None = None,
+    graph_name: str = "topology",
 ) -> dict:
     spec_file = OPENAPI_SPEC_MAP.get(graph_backend, OPENAPI_DIR / "cosmosdb.yaml")
     raw = spec_file.read_text(encoding="utf-8")
     raw = raw.replace("{base_url}", graph_query_api_uri.rstrip("/"))
+    raw = raw.replace("{graph_name}", graph_name)
     spec = yaml.safe_load(raw)
     if keep_path and "paths" in spec:
         spec["paths"] = {k: v for k, v in spec["paths"].items() if k == keep_path}
@@ -123,6 +125,7 @@ class AgentProvisioner:
         prompts: dict[str, str],
         graph_query_api_uri: str,
         graph_backend: str,
+        graph_name: str,
         runbooks_index: str,
         tickets_index: str,
         search_connection_id: str,
@@ -137,6 +140,7 @@ class AgentProvisioner:
               Keys: "orchestrator", "graph_explorer", "telemetry", "runbook", "ticket"
             graph_query_api_uri: Base URL for OpenAPI tools
             graph_backend: "cosmosdb" or "mock"
+            graph_name: Graph name for X-Graph header (e.g. "telco-noc-topology")
             runbooks_index: AI Search index name for RunbookKB
             tickets_index: AI Search index name for HistoricalTicket
             search_connection_id: Foundry connection ID for AI Search
@@ -165,7 +169,7 @@ class AgentProvisioner:
         emit("graph_explorer", "Creating GraphExplorerAgent...")
         ge_tools = []
         if graph_query_api_uri:
-            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/graph")
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/graph", graph_name=graph_name)
             tool = OpenApiTool(
                 name="query_graph",
                 spec=spec,
@@ -187,7 +191,7 @@ class AgentProvisioner:
         emit("telemetry", "Creating TelemetryAgent...")
         tel_tools = []
         if graph_query_api_uri:
-            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/telemetry")
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/telemetry", graph_name=graph_name)
             tool = OpenApiTool(
                 name="query_telemetry",
                 spec=spec,

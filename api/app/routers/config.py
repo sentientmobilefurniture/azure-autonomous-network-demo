@@ -137,24 +137,24 @@ async def apply_config(req: ConfigApplyRequest):
                     on_progress("prompts", f"Fetching prompts for '{scenario_prefix}' from Cosmos...")
                     try:
                         import urllib.request
+                        import urllib.parse
                         import json as _json
-                        # Call the graph-query-api prompts endpoint (same container, localhost)
-                        prompts_url = "http://127.0.0.1:8100/query/prompts"
+                        # Single request with content — avoids N+1 round-trips
+                        prompts_url = (
+                            f"http://127.0.0.1:8100/query/prompts"
+                            f"?scenario={urllib.parse.quote(scenario_prefix)}"
+                            f"&include_content=true"
+                        )
                         prompts_req = urllib.request.Request(prompts_url)
-                        with urllib.request.urlopen(prompts_req, timeout=10) as resp:
+                        with urllib.request.urlopen(prompts_req, timeout=30) as resp:
                             prompts_data = _json.loads(resp.read())
 
                         for p in prompts_data.get("prompts", []):
-                            if p.get("scenario") == scenario_prefix and p.get("is_active"):
+                            if p.get("is_active") and p.get("content"):
                                 agent_name = p.get("agent", "")
                                 if agent_name and agent_name not in prompts:
-                                    # Fetch full content
-                                    detail_url = f"http://127.0.0.1:8100/query/prompts/{p['id']}?agent={agent_name}"
-                                    with urllib.request.urlopen(detail_url, timeout=10) as dresp:
-                                        detail = _json.loads(dresp.read())
-                                        if detail.get("content"):
-                                            prompts[agent_name] = detail["content"]
-                                            on_progress("prompts", f"Loaded {agent_name} prompt ({len(detail['content'])} chars)")
+                                    prompts[agent_name] = p["content"]
+                                    on_progress("prompts", f"Loaded {agent_name} prompt ({len(p['content'])} chars)")
 
                     except Exception as e:
                         on_progress("prompts", f"Could not fetch from Cosmos: {e}")
@@ -177,6 +177,10 @@ async def apply_config(req: ConfigApplyRequest):
                 rg = os.getenv("AZURE_RESOURCE_GROUP", "")
                 foundry = os.getenv("AI_FOUNDRY_NAME", "")
                 graph_query_uri = os.getenv("GRAPH_QUERY_API_URI", "")
+                if not graph_query_uri:
+                    _hostname = os.getenv("CONTAINER_APP_HOSTNAME", "")
+                    if _hostname:
+                        graph_query_uri = f"https://{_hostname}"
                 graph_backend = os.getenv("GRAPH_BACKEND", "cosmosdb")
 
                 search_conn_id = (
@@ -193,6 +197,7 @@ async def apply_config(req: ConfigApplyRequest):
                     prompts=prompts,
                     graph_query_api_uri=graph_query_uri,
                     graph_backend=graph_backend,
+                    graph_name=req.graph,
                     runbooks_index=req.runbooks_index,
                     tickets_index=req.tickets_index,
                     search_connection_id=search_conn_id,

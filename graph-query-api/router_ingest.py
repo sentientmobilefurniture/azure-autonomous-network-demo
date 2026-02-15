@@ -1230,7 +1230,7 @@ async def upload_prompts(file: UploadFile = File(...)):
 
                     def _store():
                         from router_prompts import _get_prompts_container
-                        container = _get_prompts_container()
+                        container = _get_prompts_container(sc_name, ensure_created=True)
                         stored = []
 
                         # Find prompts dir (parent of graph_explorer/ or where prompt .md files live)
@@ -1256,7 +1256,7 @@ async def upload_prompts(file: UploadFile = File(...)):
                                 enable_cross_partition_query=False,
                             ))
                             nv = (existing[0]["version"] + 1) if existing else 1
-                            did = f"{sc_name}/{md_file.stem}/v{nv}"
+                            did = f"{sc_name}__{md_file.stem}__v{nv}"
                             container.upsert_item({
                                 "id": did, "agent": agent, "scenario": sc_name,
                                 "name": md_file.stem, "version": nv, "content": txt,
@@ -1289,7 +1289,7 @@ async def upload_prompts(file: UploadFile = File(...)):
                                     enable_cross_partition_query=False,
                                 ))
                                 nv = (existing[0]["version"] + 1) if existing else 1
-                                did = f"{sc_name}/graph_explorer/v{nv}"
+                                did = f"{sc_name}__graph_explorer__v{nv}"
                                 container.upsert_item({
                                     "id": did, "agent": "graph_explorer", "scenario": sc_name,
                                     "name": "graph_explorer", "version": nv, "content": composed,

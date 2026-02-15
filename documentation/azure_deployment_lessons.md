@@ -437,3 +437,315 @@ role controls management plane; the SQL role controls data plane operations.
 7. **Test with `azd deploy` before `azd up`.** Code-only redeployment is 10× faster
    than full infrastructure provisioning. Structure your workflow to iterate on code
    separately from infra.
+
+---
+
+## 11. Cosmos DB NoSQL — Document ID Restrictions
+
+**Problem:** Cosmos DB NoSQL rejects document IDs containing `/`, `\`, `?`, or `#`.
+If your code generates IDs with these characters, `upsert_item()` or `create_item()`
+will fail with `"Id contains illegal chars"`.
+
+**How this manifests:** In the browser UI, an upload endpoint that creates Cosmos
+documents using a human-readable ID format like `telco-noc/orchestrator/v1` will
+fail silently or with a cryptic error. The error text from Cosmos is:
+```
+Id contains illegal chars. Retry
+```
+
+**Fix:** Use `__` (double underscore) as the segment separator instead of `/`:
+```python
+# BAD — Cosmos rejects this
+doc_id = f"{scenario}/{prompt_name}/v{version}"
+# e.g. "telco-noc/orchestrator/v1"
+
+# GOOD — Cosmos accepts this
+doc_id = f"{scenario}__{prompt_name}__v{version}"
+# e.g. "telco-noc__orchestrator__v1"
+```
+
+**Also broken:** FastAPI path parameters. A route like `GET /prompts/{prompt_id}`
+with an ID containing `/` will be interpreted as multiple URL segments and never
+match the route. The `__` separator avoids this too.
+
+**Rule:** Never use `/`, `\`, `?`, or `#` in Cosmos DB document IDs. Use `__` or
+`-` as delimiters. If you need to parse the ID back into components, split on `__`.
+
+**Files affected in this project:**
+- `graph-query-api/router_prompts.py` — `create_prompt()` generates the ID
+- `graph-query-api/router_ingest.py` — `upload_prompts()` generates the ID
+- Any code that reads prompt IDs back must use `_parse_scenario_from_id()` which
+  splits on `__`
+
+---
+
+## 12. Per-Scenario Cosmos Databases vs Shared Database
+
+**Problem:** Storing all scenario prompts in a single shared database (e.g.,
+`platform-config`) makes it impossible to list which scenarios have prompts without
+scanning all documents. It also violates the project's established per-scenario
+naming convention used by telemetry (`{scenario}-telemetry`) and graphs
+(`{scenario}-topology`).
+
+**Fix:** Use per-scenario databases: `{scenario}-prompts` (e.g., `telco-noc-prompts`,
+`cloud-outage-prompts`). This matches the existing patterns:
+
+| Data Type | Database Name | Container | Partition Key |
+|-----------|--------------|-----------|---------------|
+| Graph | `networkgraph` (shared) | `{scenario}-topology` | N/A (graph) |
+| Telemetry | `{scenario}-telemetry` | `AlertStream`, `LinkTelemetry` | `/EntityId` |
+| Prompts | `{scenario}-prompts` | `prompts` | `/agent` |
+
+**Listing scenarios:** To discover which scenarios have prompts, list all databases
+via ARM (`CosmosDBManagementClient.sql_resources.list_sql_databases`) and filter for
+names ending in `-prompts`. Strip the suffix to get the scenario name.
+
+**Code pattern:**
+```python
+_containers: dict[str, object] = {}  # cached per-scenario containers
+
+def _get_prompts_container(scenario: str, *, ensure_created: bool = False):
+    if scenario in _containers:
+        return _containers[scenario]
+    db_name = f"{scenario}-prompts"
+    if ensure_created:
+        # ARM calls to create db + container (slow, ~10-30s)
+        ...
+    # Data-plane client (fast)
+    client = CosmosClient(url=endpoint, credential=cred)
+    container = client.get_database_client(db_name).get_container_client("prompts")
+    _containers[scenario] = container
+    return container
+```
+
+---
+
+## 13. ARM Creation Calls Block the Event Loop — Split Read vs Write
+
+**Problem:** The Cosmos DB ARM management plane calls
+(`begin_create_update_sql_database().result()`) block for 10-30 seconds. If these
+calls run on every container access (including reads), they block FastAPI's event
+loop and cause downstream HTTP requests to timeout.
+
+**How this manifests:** Agent provisioning calls `GET /query/prompts` to fetch
+prompts from Cosmos. If the prompts router's `_get_prompts_container()` triggers
+ARM creation on every access, the response takes 30+ seconds. The caller
+(`config.py`) has a 10-second timeout via `urllib.request.urlopen(..., timeout=10)`.
+The request times out, no prompts are returned, and agents are provisioned with
+placeholder defaults like `"You are a graph explorer agent."`.
+
+**Fix:** Split the container accessor into read-only (default) and write modes:
+```python
+def _get_prompts_container(scenario: str, *, ensure_created: bool = False):
+    """
+    ensure_created=False (default): Data-plane client only. Fast. For reads.
+    ensure_created=True: ARM create db/container first. Slow. For writes/uploads.
+    """
+```
+
+- **Read paths** (list prompts, get prompt, prompt scenarios) → `ensure_created=False`
+- **Write paths** (upload prompts, create prompt) → `ensure_created=True`
+
+This ensures read endpoints respond in <1 second while write endpoints still
+guarantee the database exists before upserting.
+
+---
+
+## 14. Avoid N+1 HTTP Requests Between Co-Located Services
+
+**Problem:** When service A (API on :8000) fetches data from service B
+(graph-query-api on :8100) inside the same container, each HTTP request has
+overhead. An N+1 pattern — 1 list request + N detail requests to fetch content —
+multiplies timeout risk and is unnecessary when both services share the container.
+
+**How this manifests:** Agent provisioning lists prompts, then fetches each prompt
+individually to get content. With 5 agents, that's 6 HTTP requests through
+localhost. If any one times out, that agent gets no prompt.
+
+**Fix:** Add an `include_content` query parameter to the list endpoint:
+```python
+@router.get("/prompts")
+async def list_prompts(
+    scenario: str | None = None,
+    include_content: bool = Query(default=False),
+):
+    fields = "c.id, c.agent, c.scenario, c.name, c.version, ..."
+    if include_content:
+        fields += ", c.content"
+    # Single Cosmos query returns everything needed
+```
+
+Then the caller makes one request:
+```python
+url = f"http://127.0.0.1:8100/query/prompts?scenario={sc}&include_content=true"
+```
+
+**Also increase the timeout:** Even with a single request, Cosmos cold-start can
+take a few seconds. Use `timeout=30` instead of `timeout=10` for internal service
+calls that hit Cosmos.
+
+---
+
+## 15. OpenAPI Tools MUST Include X-Graph Header for Per-Scenario Routing
+
+**Problem:** When agents call `/query/graph` or `/query/telemetry` via OpenApiTool,
+the request goes through Foundry's server-side HTTP client. If the OpenAPI spec
+doesn't define an `X-Graph` header parameter, the agent has no way to send it.
+The graph-query-api falls back to the default graph from `COSMOS_GREMLIN_GRAPH`
+env var (typically just `topology`), not the scenario-specific graph (e.g.,
+`telco-noc-topology`). Queries return empty results even though data exists.
+
+**How this manifests:** The agent runs `g.V()` and gets `columns: [], data: []`.
+But the same query in Cosmos Data Explorer (which targets the correct graph)
+returns hundreds of vertices. The confusion is that the query itself is correct —
+only the routing is wrong.
+
+**Fix:** Add the `X-Graph` header to the OpenAPI spec with a `default` value that
+gets substituted at provisioning time:
+
+```yaml
+# In openapi/cosmosdb.yaml
+/query/graph:
+  post:
+    parameters:
+      - name: X-Graph
+        in: header
+        required: true
+        schema:
+          type: string
+          default: "{graph_name}"  # Replaced at provisioning time
+        description: |
+          The graph name to query. Always use "{graph_name}".
+```
+
+The provisioner replaces `{graph_name}` with the actual graph name (e.g.,
+`telco-noc-topology`) when loading the spec:
+
+```python
+def _load_openapi_spec(uri, backend, keep_path, graph_name="topology"):
+    raw = spec_file.read_text()
+    raw = raw.replace("{base_url}", uri)
+    raw = raw.replace("{graph_name}", graph_name)
+    return yaml.safe_load(raw)
+```
+
+**Critical flow — provisioner must receive the graph name:**
+1. Frontend sends `POST /api/config/apply` with `{ graph: "telco-noc-topology" }`
+2. `config.py` passes `graph_name=req.graph` to `provisioner.provision_all()`
+3. `provision_all()` passes it to `_load_openapi_spec()` for each tool
+4. The spec is baked into the Foundry agent with the correct default header value
+5. When the agent calls `/query/graph`, Foundry sends `X-Graph: telco-noc-topology`
+6. `get_scenario_context()` reads the header and routes to the correct graph
+
+**Implication:** Agents are provisioned for a **specific** scenario's graph. If the
+user switches scenarios in the UI, they must re-provision agents (click "Provision
+Agents" again) to rebind the OpenAPI tool to the new graph name. This is by design —
+the agents need correct schema/prompt context per scenario anyway.
+
+---
+
+## 16. Container App Environment Variables vs azure_config.env
+
+**Problem:** Confusion about whether `azure_config.env` needs to be uploaded to the
+container or included in the Docker image.
+
+**Clarification:** The container **never reads** `azure_config.env`. There are two
+parallel config paths that both originate from Bicep outputs:
+
+```
+┌─────────────────────────────┐     ┌──────────────────────────────┐
+│  azure_config.env (local)   │     │  Container App env vars      │
+│                             │     │                              │
+│  Written by:                │     │  Set by:                     │
+│    postprovision.sh         │     │    infra/main.bicep env:[]   │
+│                             │     │                              │
+│  Used by:                   │     │  Used by:                    │
+│    - Local scripts          │     │    - API (os.environ)        │
+│    - preprovision.sh hook   │     │    - graph-query-api         │
+│    - Local dev servers      │     │    - agent_provisioner.py    │
+│                             │     │                              │
+│  NOT in Docker image        │     │  Injected by Azure at       │
+│  NOT read at runtime        │     │  container start time        │
+└─────────────────────────────┘     └──────────────────────────────┘
+```
+
+**Rule:** To add a new config variable:
+1. Add it to `infra/main.bicep` in the `env:` array of the container app module
+2. Add it to `hooks/postprovision.sh` to populate `azure_config.env` for local use
+3. Read it in Python via `os.getenv("VAR_NAME")`
+
+Do NOT: `COPY azure_config.env` in the Dockerfile. Do NOT: `source azure_config.env`
+in supervisord. The container's env vars are the source of truth at runtime.
+
+**Exception — GRAPH_QUERY_API_URI:** This env var isn't set in `main.bicep` because
+it's a circular reference (the container's URL isn't known until after deployment).
+The fix is to fall back to `CONTAINER_APP_HOSTNAME`, which Azure automatically sets
+on every Container App:
+
+```python
+graph_query_uri = os.getenv("GRAPH_QUERY_API_URI", "")
+if not graph_query_uri:
+    hostname = os.getenv("CONTAINER_APP_HOSTNAME", "")
+    if hostname:
+        graph_query_uri = f"https://{hostname}"
+```
+
+---
+
+## 17. Code-Only Redeployment — When azd deploy Is Enough
+
+Not every change requires `azd up` (full infra + deploy). Use this decision tree:
+
+| Change Type | Command | Time |
+|-------------|---------|------|
+| Python code, OpenAPI specs, static files | `azd deploy app` | ~60-90s |
+| Bicep infrastructure (new resources, env vars, RBAC) | `azd up` | ~5-10min |
+| New env var in container | `azd up` (env vars are in Bicep) | ~5-10min |
+| Frontend-only changes | `azd deploy app` | ~60-90s |
+| Dockerfile changes | `azd deploy app` | ~60-90s |
+
+**After code-only deploy:** If you changed agent provisioning logic or OpenAPI specs,
+you must also re-provision agents through the UI (⚙ → Provision Agents) because the
+old agents in Foundry still have the old tool specs baked in. The deploy only updates
+the container image — it doesn't automatically re-provision agents.
+
+---
+
+## 18. Cosmos NoSQL RBAC — Two-Phase Create Pattern
+
+**Problem:** The `Cosmos DB Built-in Data Contributor` role
+(`00000000-0000-0000-0000-000000000002`) allows read/write on the data plane but
+does NOT allow creating databases or containers. Attempting to create a database
+with `CosmosClient(...).create_database_if_not_exists()` using only this role will
+fail with 403.
+
+**Fix:** Use two-phase creation:
+
+1. **Phase 1 — ARM management plane** (uses `DocumentDB Account Contributor` role):
+   ```python
+   from azure.mgmt.cosmosdb import CosmosDBManagementClient
+   from azure.identity import DefaultAzureCredential
+   mgmt = CosmosDBManagementClient(DefaultAzureCredential(), subscription_id)
+   mgmt.sql_resources.begin_create_update_sql_database(
+       rg, account_name, db_name,
+       {"resource": {"id": db_name}},
+   ).result()
+   ```
+
+2. **Phase 2 — Data plane** (uses `Cosmos DB Built-in Data Contributor` role):
+   ```python
+   from azure.cosmos import CosmosClient
+   client = CosmosClient(url=endpoint, credential=DefaultAzureCredential())
+   container = client.get_database_client(db_name).get_container_client("prompts")
+   container.upsert_item(doc)
+   ```
+
+**Critical:** Create a **fresh** `DefaultAzureCredential()` inside the thread
+function for ARM calls. Do NOT reuse a credential instance that was created in the
+async event loop context — it may have been initialized with an incompatible
+transport.
+
+**Both roles must be assigned** to the Container App's managed identity in
+`infra/modules/roles.bicep`:
+- `DocumentDB Account Contributor` on both Cosmos accounts (management plane)
+- `Cosmos DB Built-in Data Contributor` SQL role on the NoSQL account (data plane)
