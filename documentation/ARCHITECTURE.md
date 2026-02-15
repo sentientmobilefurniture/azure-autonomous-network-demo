@@ -1,20 +1,23 @@
 # Architecture — AI Incident Investigator
 
-> **Last updated:** 2026-02-15 — reflects V8 data management plane +
+> **Last updated:** 2026-02-16 — reflects V8 data management plane +
 > scenario management (SCENARIOHANDLING.md) + V8 codebase simplification
-> refactor (V8REFACTOR.md) + V9.5 frontend fixes (v95fixes.md). Includes
-> first-class scenario CRUD, per-type uploads, per-request graph routing,
-> Cosmos-backed prompts, unified container deployment, UI scenario switching
-> with auto-provisioning, SSE helper extraction, Cosmos helper centralisation,
-> dead code removal, credential caching standardisation, frontend component
-> extraction, toolbar color wheel popover, example question suggestion chips,
-> and ScenarioInfoPanel data loading fix.
+> refactor (V8REFACTOR.md) + V9.5 frontend fixes (v95fixes.md) + V10
+> interaction history sidebar. Includes first-class scenario CRUD, per-type
+> uploads, per-request graph routing, Cosmos-backed prompts, unified container
+> deployment, UI scenario switching with auto-provisioning, SSE helper
+> extraction, Cosmos helper centralisation, dead code removal, credential
+> caching standardisation, frontend component extraction, toolbar color wheel
+> popover, example question suggestion chips, ScenarioInfoPanel data loading
+> fix, and interaction history save/replay sidebar.
 >
-> **Audit note:** All code paths verified against actual source files 2026-02-15.
+> **Audit note:** All code paths verified against actual source files 2026-02-16.
 > Post-V8-refactor verification confirms: dead code removed, helpers extracted,
 > CORS unified, bare excepts fixed, agent_ids caching implemented.
 > V9.5 fixes verified: ScenarioInfoPanel fetches data, AlertInput shows
 > example question chips, GraphToolbar color dot opens ColorWheelPopover.
+> V10 verified: InteractionSidebar + useInteractions + router_interactions
+> implemented and wired into App.tsx.
 
 ---
 
@@ -22,7 +25,7 @@
 
 - [System Overview](#system-overview)
 - [Unified Container Architecture](#unified-container-architecture)
-- [Project Structure](#project-structure-as-of-2026-02-15)
+- [Project Structure](#project-structure-as-of-2026-02-16)
 - [Complete API Surface](#complete-api-surface)
 - [Data Flow](#data-flow)
 - [SSE Event Protocols](#sse-event-protocols)
@@ -65,8 +68,11 @@ agents), and persist selections across sessions via `localStorage`. See
 | Scenario | Domain | Entity Types | Incident |
 |----------|--------|-------------|----------|
 | `telco-noc` | Telecom | CoreRouter, AggSwitch, BaseStation, TransportLink, MPLSPath, Service, SLAPolicy, BGPSession | Fibre cut → cascading alert storm |
-| `cloud-outage` | Cloud | Region, AZ, Rack, Host, VM, LoadBalancer, Service, SLAPolicy | Cooling failure → thermal shutdown cascade |
-| `customer-recommendation` | E-Commerce | CustomerSegment, Customer, ProductCategory, Product, Campaign, Supplier, Warehouse, SLAPolicy | Recommendation model bias → return rate spike |
+
+> **Note:** Only `telco-noc` has local data packs (scenario directory + tarballs).
+> Additional scenarios (e.g., cloud-outage, customer-recommendation) are **conceptual**
+> and would need to be generated with `./data/generate_all.sh` using a matching
+> `scenarios/{name}/` directory before they can be uploaded.
 
 ---
 
@@ -125,7 +131,7 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 
 ---
 
-## Project Structure (as of 2026-02-15)
+## Project Structure (as of 2026-02-16)
 
 ```
 .
@@ -138,24 +144,25 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 ├── azure_config.env.template   # Config template
 │
 ├── api/                        # FastAPI backend (:8000)
-│   ├── pyproject.toml          # Deps: fastapi, sse-starlette, azure-ai-agents, pyyaml
+│   ├── pyproject.toml          # Deps: fastapi, uvicorn, python-dotenv, sse-starlette,
+│   │                           #       azure-identity, azure-ai-projects, azure-ai-agents, pyyaml
 │   └── app/
-│       ├── main.py             # Mounts 4 routers + /health + CORS
-│       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE)
+│       ├── main.py             # Mounts 4 routers + /health + CORS (54 lines)
+│       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE, 500 lines)
 │       └── routers/
-│           ├── alert.py        # POST /api/alert → SSE investigation stream
-│           ├── agents.py       # GET /api/agents → agent list from agent_ids.json
+│           ├── alert.py        # POST /api/alert → SSE investigation stream (91 lines)
+│           ├── agents.py       # GET /api/agents → agent list from agent_ids.json (29 lines)
 │           ├── config.py       # POST /api/config/apply → SSE provisioning stream
-│           │                   # GET /api/config/current → current config state
-│           └── logs.py         # GET /api/logs → SSE log broadcast
+│           │                   # GET /api/config/current → current config state (264 lines)
+│           └── logs.py         # GET /api/logs → SSE log broadcast (128 lines)
 │
 ├── graph-query-api/            # Data management + query microservice (:8100)
 │   ├── pyproject.toml          # Deps: fastapi, gremlinpython, azure-cosmos,
 │   │                           #       azure-mgmt-cosmosdb, azure-storage-blob,
 │   │                           #       azure-search-documents, sse-starlette, pyyaml
 │   ├── config.py               # ScenarioContext, X-Graph header, env vars, credential
-│   ├── cosmos_helpers.py       # Centralised Cosmos client/container init + caching (~133 lines)
-│   ├── main.py                 # Mounts 6 routers + /health + /query/logs (SSE) + request logging middleware
+│   ├── cosmos_helpers.py       # Centralised Cosmos client/container init + caching (~132 lines)
+│   ├── main.py                 # Mounts 7 routers + /health + /query/logs (SSE) + request logging middleware
 │   ├── models.py               # Pydantic request/response models
 │   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin)
 │   ├── router_telemetry.py     # POST /query/telemetry (per-scenario NoSQL)
@@ -164,14 +171,14 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │   ├── router_prompts.py       # Prompts CRUD in Cosmos (~288 lines)
 │   ├── router_scenarios.py     # Scenario metadata CRUD in Cosmos (~220 lines)
 │   ├── router_interactions.py  # Interaction history CRUD (~146 lines)
-│   ├── sse_helpers.py          # SSE upload lifecycle helper (~87 lines)
+│   ├── sse_helpers.py          # SSE upload lifecycle helper (~86 lines)
 │   ├── search_indexer.py       # AI Search indexer pipeline creation
 │   ├── openapi/
 │   │   ├── cosmosdb.yaml       # OpenAPI spec for live mode (has {base_url} placeholder)
 │   │   └── mock.yaml           # OpenAPI spec for mock mode
 │   └── backends/
 │       ├── __init__.py         # GraphBackend Protocol + per-graph cache + factory
-│       ├── cosmosdb.py         # CosmosDBGremlinBackend (304 lines, retry logic)
+│       ├── cosmosdb.py         # CosmosDBGremlinBackend (303 lines, retry logic)
 │       └── mock.py             # Static topology (offline demos)
 │
 ├── frontend/                   # React/Vite dashboard
@@ -181,45 +188,49 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │   ├── vite.config.ts          # Dev proxy: /api→:8000, /query→:8100, /health→:8000
 │   └── src/
 │       ├── main.tsx            # Wraps App in ScenarioProvider
-│       ├── App.tsx             # Tab bar + 3-zone layout (useInvestigation hook, ~187 lines)
+│       ├── App.tsx             # Tab bar + 3-zone layout + interaction sidebar (~209 lines)
 │       ├── types/index.ts      # Shared TypeScript interfaces (StepEvent, SavedScenario, etc., ~77 lines)
 │       ├── styles/globals.css  # CSS variables, dark theme, Tailwind imports (159 lines)
 │       ├── context/
 │       │   └── ScenarioContext.tsx  # Full scenario state: activeScenario, bindings,
 │       │                           # provisioningStatus, localStorage persistence,
-│       │                           # auto-derivation, scenarioNodeColors/Sizes (~159 lines)
+│       │                           # auto-derivation, scenarioNodeColors/Sizes (~174 lines)
 │       ├── hooks/
-│       │   ├── useInvestigation.ts  # SSE alert investigation (POST, sends X-Graph)
-│       │   ├── useTopology.ts       # Topology fetch (POST, sends X-Graph, auto-refetch)
+│       │   ├── useInvestigation.ts  # SSE alert investigation (POST, sends X-Graph, ~133 lines)
+│       │   ├── useTopology.ts       # Topology fetch (POST, sends X-Graph, auto-refetch, ~80 lines)
 │       │   ├── useScenarios.ts      # Graph/index discovery + saved scenario CRUD +
 │       │   │                        # selectScenario with auto-provisioning (~192 lines)
+│       │   ├── useInteractions.ts   # Interaction history CRUD (fetch/save/delete, ~63 lines)
 │       │   └── useNodeColor.ts      # Centralised node color resolution hook (~42 lines)
 │       ├── utils/
-│       │   └── sseStream.ts         # Shared consumeSSE() + uploadWithSSE() utilities (143 lines)
+│       │   └── sseStream.ts         # Shared consumeSSE() + uploadWithSSE() utilities (~142 lines)
 │       └── components/
-│           ├── Header.tsx           # Title bar + ScenarioChip + ProvisioningBanner + HealthDot + ⚙
-│           ├── ScenarioChip.tsx     # Header scenario selector chip + flyout dropdown (154 lines)
-│           ├── ProvisioningBanner.tsx # Non-blocking 28px banner during agent provisioning (102 lines)
+│           ├── Header.tsx           # Title bar + ScenarioChip + ProvisioningBanner + HealthDot + ⚙ (~72 lines)
+│           ├── ScenarioChip.tsx     # Header scenario selector chip + flyout dropdown (~153 lines)
+│           ├── ProvisioningBanner.tsx # Non-blocking 28px banner during agent provisioning (~101 lines)
 │           ├── TabBar.tsx            # Investigate / Scenario Info tab bar (~31 lines)
-│           ├── ScenarioInfoPanel.tsx # Scenario detail view: use cases + example questions (~89 lines)
+│           ├── ScenarioInfoPanel.tsx # Scenario detail view: use cases + example questions (~95 lines)
 │           ├── AddScenarioModal.tsx  # Scenario creation: name + 5 slot file upload + auto-detect (~682 lines)
-│           ├── HealthDot.tsx        # Polls /health every 15s
+│           ├── HealthDot.tsx        # Polls /health every 15s (~40 lines)
 │           ├── SettingsModal.tsx     # 3 tabs: Scenarios + Data Sources + Upload (~673 lines)
-│           ├── ActionButton.tsx      # Extracted reusable action button with status state machine (~53 lines)
+│           ├── ActionButton.tsx      # Extracted reusable action button with status state machine (~52 lines)
 │           ├── TabbedLogStream.tsx   # Tabbed log stream viewer (~48 lines)
-│           ├── MetricsBar.tsx       # Resizable panel: topology viewer + log stream
+│           ├── MetricsBar.tsx       # Resizable panel: topology viewer + log stream (~50 lines)
 │           ├── GraphTopologyViewer.tsx  # Owns all overlay state, delegates to graph/* (~214 lines)
-│           ├── InvestigationPanel.tsx   # Alert input + agent timeline + scenario example questions (~65 lines)
-│           ├── DiagnosisPanel.tsx    # Final markdown report (ReactMarkdown)
-│           ├── AlertInput.tsx       # Textarea + submit button + example question chips (~65 lines)
-│           ├── AgentTimeline.tsx     # Step cards + thinking dots
-│           ├── StepCard.tsx         # Individual agent step display
-│           ├── ThinkingDots.tsx     # Animated thinking indicator
-│           ├── ErrorBanner.tsx      # Error display
-│           ├── LogStream.tsx        # SSE log viewer (EventSource → /api/logs)
+│           ├── InvestigationPanel.tsx   # Alert input + agent timeline + scenario example questions (~69 lines)
+│           ├── InteractionSidebar.tsx   # Collapsible right sidebar: saved interaction history (~154 lines)
+│           ├── DiagnosisPanel.tsx    # Final markdown report (ReactMarkdown, ~112 lines)
+│           ├── AlertInput.tsx       # Textarea + submit button + example question chips (~68 lines)
+│           ├── AlertChart.tsx       # Alert visualization (UNUSED — dead code, ~21 lines)
+│           ├── MetricCard.tsx       # Metric display card (UNUSED — dead code, ~30 lines)
+│           ├── AgentTimeline.tsx     # Step cards + thinking dots (~61 lines)
+│           ├── StepCard.tsx         # Individual agent step display (~85 lines)
+│           ├── ThinkingDots.tsx     # Animated thinking indicator (~31 lines)
+│           ├── ErrorBanner.tsx      # Error display (~51 lines)
+│           ├── LogStream.tsx        # SSE log viewer (EventSource → /api/logs, ~127 lines)
 │           └── graph/
 │               ├── GraphCanvas.tsx      # ForceGraph2D wrapper (forwardRef, canvas rendering, ~184 lines)
-│               ├── GraphToolbar.tsx     # Label filters, search, zoom controls, color dot → popover (~130 lines)
+│               ├── GraphToolbar.tsx     # Label filters, search, zoom controls, color dot → popover (~137 lines)
 │               ├── GraphTooltip.tsx     # Hover tooltip (framer-motion, ~80 lines)
 │               ├── GraphContextMenu.tsx # Right-click: display field + color picker
 │               ├── ColorWheelPopover.tsx # HSL color wheel + hex input + preset swatches (~260 lines)
@@ -227,11 +238,9 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │
 ├── data/
 │   ├── generate_all.sh         # Generate + package all scenarios as 5 per-type tarballs
-│   ├── prompts                 # Symlink → scenarios/telco-noc/data/prompts
 │   └── scenarios/
-│       ├── telco-noc/          # scenario.yaml, graph_schema.yaml, scripts/, data/
-│       ├── cloud-outage/       # Same structure
-│       └── customer-recommendation/  # Same structure
+│       └── telco-noc/          # scenario.yaml, graph_schema.yaml, scripts/, data/
+│                               # (only scenario with local data packs; others need generation)
 │
 ├── scripts/
 │   ├── agent_provisioner.py    # AgentProvisioner class (importable, 281 lines)
@@ -295,7 +304,10 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 | GET | `/query/scenarios/saved` | JSON | List all saved scenario records from Cosmos |
 | POST | `/query/scenarios/save` | JSON | Upsert scenario metadata document after uploads |
 | DELETE | `/query/scenarios/saved/{name}` | JSON | Delete scenario metadata (preserves underlying data) |
-| GET | `/health` | JSON | Health check |
+| GET | `/query/interactions` | JSON | List past interactions (filter: `?scenario=X&limit=N`) |
+| POST | `/query/interactions` | JSON | Save a completed interaction |
+| GET | `/query/interactions/{interaction_id}` | JSON | Get a specific interaction |
+| DELETE | `/query/interactions/{interaction_id}` | JSON | Delete a specific interaction |
 
 ### Request/Response Models (`graph-query-api/models.py`)
 
@@ -976,6 +988,28 @@ Future enhancement may add `?delete_data=true` parameter for full cleanup.
 failure (non-fatal — app works without saved scenarios). Save and delete raise `HTTPException`
 on validation or conflict errors.
 
+### `graph-query-api/router_interactions.py` — Interaction History CRUD
+
+Stores past investigation interactions in a dedicated Cosmos NoSQL database: `interactions` / `interactions`.
+Partition key: `/scenario`. Each document captures the alert query, agent steps, final diagnosis,
+timing, and scenario context so users can browse and replay past investigations.
+
+**Endpoints:**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/query/interactions` | List past interactions (optional `?scenario=X&limit=N` filter) |
+| POST | `/query/interactions` | Save a completed interaction |
+| GET | `/query/interactions/{interaction_id}` | Get a specific interaction |
+| DELETE | `/query/interactions/{interaction_id}` | Delete a specific interaction |
+
+**Container creation**: Uses `cosmos_helpers.get_or_create_container()` with
+database `interactions`, container `interactions`, partition key `/scenario`.
+
+**Frontend integration**: `useInteractions` hook auto-saves when an investigation completes
+(detects `running` transitioning from `true` → `false` with a non-empty `finalMessage`).
+`InteractionSidebar` renders a collapsible right sidebar showing saved interactions as
+cards with relative timestamps, scenario badges, and query previews.
+
 ### `api/app/orchestrator.py` — Agent Bridge
 
 - `is_configured()`: checks `agent_ids.json` exists + `PROJECT_ENDPOINT` + `AI_FOUNDRY_PROJECT_NAME` set + orchestrator ID present in parsed JSON
@@ -1066,7 +1100,7 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
 ```
 <React.StrictMode>
   <ScenarioProvider>                    ← Global context (scenario + provisioning state + graph styles)
-    <App>                               ← useInvestigation() hook
+    <App>                               ← useInvestigation() + useInteractions() hooks
       ├── <Header>                      ← Fixed 48px top bar
       │   ├── <ScenarioChip>            ← Flyout dropdown: scenario switching + "+ New Scenario"
       │   ├── <HealthDot label="API">   ← Polls /health every 15s
@@ -1092,6 +1126,9 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
       │   │   │   └── <ThinkingDots>
       │   │   └── <ErrorBanner>
       │   ├── <DiagnosisPanel>              ← ReactMarkdown rendering
+      │   ├── <InteractionSidebar>          ← Collapsible right sidebar: saved investigation history
+      │   │                                    useInteractions() for CRUD; auto-saves on completion;
+      │   │                                    click to replay past investigation
       │   └── <AddScenarioModal>            ← Opened from ScenarioChip or SettingsModal
       │
       └── [activeTab === 'info']
@@ -1099,7 +1136,7 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
               └── onClick(question) → setAlert(q), switch to 'investigate' tab
 ```
 
-Layout uses `react-resizable-panels` with vertical orientation: MetricsBar (30%) | InvestigationPanel + DiagnosisPanel (70% side-by-side).
+Layout uses `react-resizable-panels` with vertical orientation: MetricsBar (30%) | InvestigationPanel + DiagnosisPanel + InteractionSidebar (70% side-by-side).
 
 ### ScenarioContext (React Context)
 
@@ -1271,6 +1308,7 @@ interface SearchIndex {
 | `useInvestigation()` | `{alert, setAlert, steps, thinking, finalMessage, errorMessage, running, runStarted, runMeta, submitAlert}` | Aborts prior SSE stream; 5min auto-abort timeout; uses refs for step counter (closure capture issue); injects `X-Graph` header |
 | `useTopology()` | `{data, loading, error, refetch}` | Auto-refetches when `getQueryHeaders` changes (activeGraph change triggers `useEffect`); aborts prior in-flight request |
 | `useScenarios()` | `{scenarios, indexes, savedScenarios, loading, error, fetchScenarios, fetchIndexes, fetchSavedScenarios, saveScenario, deleteSavedScenario, selectScenario}` | `fetchScenarios()` → GET `/query/scenarios`; `fetchIndexes()` → GET `/query/indexes` (failure non-fatal); `fetchSavedScenarios()` → GET `/query/scenarios/saved`; `selectScenario(name)` → auto-provisions agents via `consumeSSE` + updates `provisioningStatus` + pushes `graph_styles` into context |
+| `useInteractions()` | `{interactions, loading, fetchInteractions, saveInteraction, deleteInteraction}` | `fetchInteractions()` → GET `/query/interactions?scenario=X&limit=50`; auto-fetches on mount and `activeScenario` change; `saveInteraction()` called automatically when investigation completes (running→false with finalMessage); `deleteInteraction()` → DELETE `/query/interactions/{id}` |
 | `useNodeColor(nodeColorOverride)` | `(label: string) => string` | Centralised color resolution hook — 4-tier fallback: `nodeColorOverride → scenarioNodeColors → NODE_COLORS → autoColor`. Uses a 12-color auto-palette with stable string hash for unknown labels |
 
 **`selectScenario(name)` flow** (in `useScenarios`):
@@ -1304,6 +1342,9 @@ interface SearchIndex {
 | `/query/upload/tickets` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
 | `/query/upload/prompts` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
 | `/api/config/apply` | POST | `Content-Type: application/json` | "Provision Agents" button or `selectScenario()` auto-provision | `SettingsModal` / `useScenarios` |
+| `/query/interactions` | GET | — | On mount, `activeScenario` change | `useInteractions` |
+| `/query/interactions` | POST | `Content-Type: application/json` | Auto-save when investigation completes | `useInteractions` |
+| `/query/interactions/{id}` | DELETE | — | Delete from InteractionSidebar | `useInteractions` |
 | `/health` | GET | — | Every 15s polling | `HealthDot` |
 | `/api/logs` | GET (EventSource) | — | On mount | `LogStream` |
 
@@ -2019,6 +2060,7 @@ All scenario data follows a per-scenario naming pattern. Do NOT use a shared dat
 | Telemetry | `{scenario}-telemetry` | `AlertStream`, `LinkTelemetry` | `/EntityId` |
 | Prompts | `{scenario}-prompts` | `prompts` | `/agent` |
 | Scenario Registry | `scenarios` (shared) | `scenarios` | `/id` |
+| Interaction History | `interactions` (shared) | `interactions` | `/scenario` |
 
 To discover which scenarios have prompts, list all databases via ARM and filter names ending in `-prompts`. Strip the suffix to get the scenario name.
 
@@ -2491,36 +2533,45 @@ concept. Now users can create, save, switch, and delete complete scenarios from 
 | File | Type | Purpose |
 |------|------|---------|
 | `graph-query-api/router_scenarios.py` | **New** (~220 lines) | Scenario CRUD endpoints + `_get_scenarios_container()` + metadata fields (use_cases, example_questions, graph_styles, domain) |
-| `frontend/src/utils/sseStream.ts` | **New** (143 lines) | Shared `consumeSSE()` + `uploadWithSSE()` utilities |
+| `frontend/src/utils/sseStream.ts` | **New** (~142 lines) | Shared `consumeSSE()` + `uploadWithSSE()` utilities |
 | `frontend/src/components/AddScenarioModal.tsx` | **New** (~682 lines) | Multi-slot file upload with auto-detect; captures `scenario_metadata` from graph upload onComplete |
-| `frontend/src/components/ScenarioChip.tsx` | **New** (154 lines) | Header scenario selector chip + flyout |
-| `frontend/src/components/ProvisioningBanner.tsx` | **New** (102 lines) | Non-blocking provisioning feedback banner |
+| `frontend/src/components/ScenarioChip.tsx` | **New** (~153 lines) | Header scenario selector chip + flyout |
+| `frontend/src/components/ProvisioningBanner.tsx` | **New** (~101 lines) | Non-blocking provisioning feedback banner |
 | `frontend/src/components/TabBar.tsx` | **New** (~31 lines) | Investigate / Scenario Info tab bar |
-| `frontend/src/components/ScenarioInfoPanel.tsx` | **New** (~93 lines) | Scenario detail: description, use cases, clickable example questions. Fetches `savedScenarios` on mount (V9.5 fix) |
+| `frontend/src/components/ScenarioInfoPanel.tsx` | **New** (~95 lines) | Scenario detail: description, use cases, clickable example questions. Fetches `savedScenarios` on mount (V9.5 fix) |
 | `frontend/src/hooks/useNodeColor.ts` | **New** (~42 lines) | Centralised node color resolution hook with 4-tier fallback + auto-palette |
-| `frontend/src/context/ScenarioContext.tsx` | **Modified** (~159 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage, `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles` |
+| `frontend/src/context/ScenarioContext.tsx` | **Modified** (~174 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage, `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles` |
 | `frontend/src/types/index.ts` | **Modified** (~77 lines) | Added `SavedScenario`, `SlotKey`, `SlotStatus`, `ScenarioUploadSlot` + graph_styles/use_cases/example_questions/domain fields |
 | `frontend/src/hooks/useScenarios.ts` | **Modified** (~192 lines) | Added scenario CRUD + selection + `graph_styles` push to context on scenario select |
 | `frontend/src/components/SettingsModal.tsx` | **Modified** (~673 lines) | 3-tab layout, scenario cards, read-only Data Sources when active |
 | `frontend/src/components/Header.tsx` | **Modified** (~72 lines) | Added ScenarioChip + ProvisioningBanner + dynamic agent status |
-| `frontend/src/App.tsx` | **Modified** (~187 lines) | Added TabBar + tab state + conditional rendering (investigate vs info tab) |
+| `frontend/src/App.tsx` | **Modified** (~209 lines) | Added TabBar + tab state + conditional rendering (investigate vs info tab) + InteractionSidebar |
 | `frontend/src/components/graph/GraphCanvas.tsx` | **Modified** (~184 lines) | Uses `useNodeColor()` hook + scenario-driven sizes |
-| `frontend/src/components/graph/GraphToolbar.tsx` | **Modified** (~130 lines) | Split label chips into dot (color picker) + text (filter toggle); `onSetColor` prop; renders `ColorWheelPopover` |
+| `frontend/src/components/graph/GraphToolbar.tsx` | **Modified** (~137 lines) | Split label chips into dot (color picker) + text (filter toggle); `onSetColor` prop; renders `ColorWheelPopover` |
 | `frontend/src/components/graph/GraphTooltip.tsx` | **Modified** (~80 lines) | Accepts `nodeColorOverride` prop; uses `useNodeColor()` |
-| `frontend/src/components/GraphTopologyViewer.tsx` | **Modified** (~218 lines) | Passes `nodeColorOverride` + `onSetColor` to GraphToolbar and GraphTooltip |
-| `frontend/src/components/graph/ColorWheelPopover.tsx` | **New** (~260 lines) | HSL color wheel + hex input + preset swatches; pure canvas, no deps |
-| `frontend/src/components/AlertInput.tsx` | **Modified** (~65 lines) | Added `exampleQuestions` prop + suggestion chips (visible when textarea empty) |
-| `frontend/src/components/InvestigationPanel.tsx` | **Modified** (~65 lines) | Self-sources example questions from `useScenarios()` + context; passes to AlertInput |
-| `graph-query-api/main.py` | **Modified** | Mounted `router_scenarios` (6th router) |
+| `frontend/src/components/GraphTopologyViewer.tsx` | **Modified** (~214 lines) | Passes `nodeColorOverride` + `onSetColor` to GraphToolbar and GraphTooltip |
+| `frontend/src/components/graph/ColorWheelPopover.tsx` | **New** (~300 lines) | HSL color wheel + hex input + preset swatches; pure canvas, no deps |
+| `frontend/src/components/AlertInput.tsx` | **Modified** (~68 lines) | Added `exampleQuestions` prop + suggestion chips (visible when textarea empty) |
+| `frontend/src/components/InvestigationPanel.tsx` | **Modified** (~69 lines) | Self-sources example questions from `useScenarios()` + context; passes to AlertInput |
+| `graph-query-api/main.py` | **Modified** | Mounted `router_scenarios` (6th router) + `router_interactions` (7th router) |
 | `graph-query-api/router_ingest.py` | **Modified** (~871 lines) | Added `scenario_name` param to all 5 upload endpoints; extracts `scenario_metadata` from manifest |
+
+**V10 interaction history files:**
+
+| File | Type | Purpose |
+|------|------|---------|
+| `graph-query-api/router_interactions.py` | **New** (~146 lines) | Interaction history CRUD: 4 endpoints (list, save, get, delete). Cosmos database `interactions` / container `interactions` (PK `/scenario`) |
+| `frontend/src/hooks/useInteractions.ts` | **New** (~63 lines) | Interaction CRUD hook: fetch/save/delete. Auto-fetches on mount and `activeScenario` change |
+| `frontend/src/components/InteractionSidebar.tsx` | **New** (~154 lines) | Collapsible right sidebar showing saved investigations. Relative timestamps, scenario badges, query previews. Click to replay; hover-reveal delete |
+| `frontend/src/App.tsx` | **Modified** (~209 lines) | Added `useInteractions()`, `InteractionSidebar` rendering, auto-save on investigation completion, `viewingInteraction` + `sidebarCollapsed` state |
 
 **V8 refactor files (from V8REFACTOR.md):**
 
 | File | Type | Purpose |
 |------|------|---------|
-| `graph-query-api/sse_helpers.py` | **New** (~87 lines) | SSE upload lifecycle helper (`SSEProgress`, `sse_upload_response()`) |
-| `graph-query-api/cosmos_helpers.py` | **New** (~133 lines) | Centralised Cosmos client/container init + ARM caching |
-| `frontend/src/components/ActionButton.tsx` | **New** (~53 lines) | Extracted reusable action button with status state machine |
+| `graph-query-api/sse_helpers.py` | **New** (~86 lines) | SSE upload lifecycle helper (`SSEProgress`, `sse_upload_response()`) |
+| `graph-query-api/cosmos_helpers.py` | **New** (~132 lines) | Centralised Cosmos client/container init + ARM caching |
+| `frontend/src/components/ActionButton.tsx` | **New** (~52 lines) | Extracted reusable action button with status state machine |
 | `frontend/src/components/TabbedLogStream.tsx` | **New** (~48 lines) | Tabbed log stream viewer |
 | `scripts/scenario_loader.py` | **Deleted** | Dead code — no imports anywhere; removed |
 | `graph-query-api/router_ingest.py` | **Modified** (~852 lines, was ~1384) | Dead code removed, SSE scaffolds → `sse_upload_response()`, shared `_upload_knowledge_files()` |
@@ -2587,7 +2638,7 @@ Names must match: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`
 | 2 | **Upload progress timer** — show elapsed time during scenario uploads | ⬜ Not done | Frontend-only change in `AddScenarioModal.tsx` |
 | 3 | **Graph-query-api log stream in UI** — tabbed log pane in MetricsBar showing both API and Graph API logs | ✅ Done (V8) | Implemented via `TabbedLogStream` component. graph-query-api endpoint moved to `/query/logs`, frontend renders both streams in tabs with SSE continuity (both `LogStream` instances stay mounted) |
 | 4 | **Graph pause/unpause on mouse hover** — stop force simulation when mouse is over the graph | ⬜ Not done | `GraphCanvas.tsx` change; reference implementation may exist in `custom_skills/react-force-graph-2d/` |
-| 5 | **Right sidebar interaction history** — save/retrieve past investigations in Cosmos NoSQL (`interactions` database), show in sidebar with timestamps and scenario names, clickable to replay | ⬜ Not done | Requires new Cosmos database, new API endpoints, new frontend component + sidebar layout. Significant feature |
+| 5 | **Right sidebar interaction history** — save/retrieve past investigations in Cosmos NoSQL (`interactions` database), show in sidebar with timestamps and scenario names, clickable to replay | ✅ Done (V10) | `router_interactions.py` (4 CRUD endpoints), `useInteractions` hook, `InteractionSidebar` component. Cosmos database `interactions` / container `interactions` (PK `/scenario`). Auto-saves on investigation completion; collapsible right sidebar in investigate tab |
 | 6 | **Per-scenario topology databases** — move graph data from shared `networkgraph` database to scenario-specific databases (like telemetry/prompts pattern) for faster loading | ⬜ Not done | Would change the graph naming from `networkgraph/{scenario}-topology` to `{scenario}-graph/{scenario}-topology`. Affects `config.py`, `router_ingest.py`, `cosmosdb.py`, `agent_provisioner.py`. Breaking change for existing data |
 | 7 | **Scenario-driven graph node colors** — `graph_styles.node_types` in `scenario.yaml` defines per-label colors and sizes; flow: scenario.yaml → graph upload → Cosmos → frontend context → graph rendering | ✅ Done (minorQOL) | New `useNodeColor` hook centralises 4-tier color fallback; `ScenarioContext` extended with `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles`; `GraphCanvas`, `GraphToolbar`, `GraphTooltip` updated |
 | 8 | **Scenario Info tab** — tab bar in App.tsx switches between "Investigate" and "Scenario Info" views; info panel shows description, use cases, clickable example questions | ✅ Done (minorQOL) | New `TabBar` + `ScenarioInfoPanel` components; `App.tsx` gains `activeTab` state + conditional rendering; clicking example question injects into alert input + switches to investigate tab |
