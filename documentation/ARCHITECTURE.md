@@ -1,8 +1,9 @@
 # Architecture — AI Incident Investigator
 
-> **Last updated:** 2026-02-15 — reflects V8 data management plane with
-> per-type uploads, per-request graph routing, Cosmos-backed prompts, and
-> unified container deployment.
+> **Last updated:** 2026-02-15 — reflects V8 data management plane +
+> scenario management (SCENARIOHANDLING.md) with first-class scenario
+> CRUD, per-type uploads, per-request graph routing, Cosmos-backed prompts,
+> unified container deployment, and UI scenario switching with auto-provisioning.
 
 ---
 
@@ -26,6 +27,7 @@
 - [Known Issues & Gotchas](#known-issues--gotchas)
 - [Configuration Reference](#configuration-reference)
 - [Quick Reference: Where to Fix Things](#quick-reference-where-to-fix-things)
+- [Scenario Management](#scenario-management)
 - [SDK Versions](#sdk-versions)
 
 ---
@@ -39,6 +41,11 @@ telecommunications, cloud infrastructure, e-commerce, etc.
 The platform is **scenario-agnostic**: users upload scenario data packs via
 the browser UI. The Container App ingests graph data, telemetry, knowledge
 bases, and prompts into Azure services. No CLI-based data loading required.
+
+**Scenario management** is a first-class feature: users create named scenarios
+that bundle all 5 data types, switch between them with one click (auto-provisioning
+agents), and persist selections across sessions via `localStorage`. See
+[Scenario Management](#scenario-management) and `documentation/SCENARIOHANDLING.md`.
 
 ### Available Scenarios
 
@@ -130,13 +137,14 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │   │                           #       azure-mgmt-cosmosdb, azure-storage-blob,
 │   │                           #       azure-search-documents, sse-starlette, pyyaml
 │   ├── config.py               # ScenarioContext, X-Graph header, env vars, credential
-│   ├── main.py                 # Mounts 5 routers + /health + /api/logs (SSE) + request logging middleware
+│   ├── main.py                 # Mounts 6 routers + /health + /api/logs (SSE) + request logging middleware
 │   ├── models.py               # Pydantic request/response models
 │   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin)
 │   ├── router_telemetry.py     # POST /query/telemetry (per-scenario NoSQL)
 │   ├── router_topology.py      # POST /query/topology (graph visualization)
 │   ├── router_ingest.py        # Upload endpoints + scenario/index listing (1329 lines)
 │   ├── router_prompts.py       # Prompts CRUD in Cosmos (334 lines)
+│   ├── router_scenarios.py     # Scenario metadata CRUD in Cosmos (272 lines)
 │   ├── search_indexer.py       # AI Search indexer pipeline creation
 │   ├── openapi/
 │   │   ├── cosmosdb.yaml       # OpenAPI spec for live mode (has {base_url} placeholder)
@@ -154,17 +162,25 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 │   └── src/
 │       ├── main.tsx            # Wraps App in ScenarioProvider
 │       ├── App.tsx             # 3-zone layout (useInvestigation hook)
-│       ├── types/index.ts      # Shared TypeScript interfaces
+│       ├── types/index.ts      # Shared TypeScript interfaces (StepEvent, SavedScenario, etc.)
 │       ├── context/
-│       │   └── ScenarioContext.tsx  # activeGraph, activeIndexes, X-Graph headers
+│       │   └── ScenarioContext.tsx  # Full scenario state: activeScenario, bindings,
+│       │                           # provisioningStatus, localStorage persistence,
+│       │                           # auto-derivation (105 lines)
 │       ├── hooks/
 │       │   ├── useInvestigation.ts  # SSE alert investigation (POST, sends X-Graph)
 │       │   ├── useTopology.ts       # Topology fetch (POST, sends X-Graph, auto-refetch)
-│       │   └── useScenarios.ts      # Scenario listing, index listing, upload (SSE)
+│       │   └── useScenarios.ts      # Graph/index discovery + saved scenario CRUD +
+│       │                            # selectScenario with auto-provisioning (180 lines)
+│       ├── utils/
+│       │   └── sseStream.ts         # Shared consumeSSE() + uploadWithSSE() utilities (143 lines)
 │       └── components/
-│           ├── Header.tsx           # Title bar + ⚙ Settings + HealthDot
+│           ├── Header.tsx           # Title bar + ScenarioChip + ProvisioningBanner + HealthDot + ⚙
+│           ├── ScenarioChip.tsx     # Header scenario selector chip + flyout dropdown (154 lines)
+│           ├── ProvisioningBanner.tsx # Non-blocking 28px banner during agent provisioning (102 lines)
+│           ├── AddScenarioModal.tsx  # Scenario creation: name + 5 slot file upload + auto-detect (621 lines)
 │           ├── HealthDot.tsx        # Polls /health every 15s
-│           ├── SettingsModal.tsx     # 2 tabs: Data Sources + Upload (contains UploadBox)
+│           ├── SettingsModal.tsx     # 3 tabs: Scenarios + Data Sources + Upload (contains UploadBox)
 │           ├── MetricsBar.tsx       # Resizable panel: topology viewer + log stream
 │           ├── GraphTopologyViewer.tsx  # Owns all overlay state, delegates to graph/*
 │           ├── InvestigationPanel.tsx   # Alert input + agent timeline
@@ -247,6 +263,9 @@ All programs log to `stdout`/`stderr` (`logfile_maxbytes=0`). Pid file: `/var/ru
 | POST | `/query/prompts` | JSON | Create new prompt (auto-versions) |
 | PUT | `/query/prompts/{prompt_id}` | JSON | Update metadata only (content is immutable per version) |
 | DELETE | `/query/prompts/{prompt_id}` | JSON | Soft-delete (`deleted=True`, `is_active=False`) |
+| GET | `/query/scenarios/saved` | JSON | List all saved scenario records from Cosmos |
+| POST | `/query/scenarios/save` | JSON | Upsert scenario metadata document after uploads |
+| DELETE | `/query/scenarios/saved/{name}` | JSON | Delete scenario metadata (preserves underlying data) |
 | GET | `/health` | JSON | Health check |
 
 ### Request/Response Models (`graph-query-api/models.py`)
@@ -311,11 +330,12 @@ SSE progress events and run sync Azure SDK calls in background threads.
 
 ### Upload Endpoint Internal Pattern
 
-All upload endpoints follow this exact pattern:
+All upload endpoints follow this exact pattern and accept an optional
+`scenario_name` query parameter that **overrides** the name from `scenario.yaml`:
 
 ```python
 @router.post("/upload/{type}")
-async def upload_type(file: UploadFile):
+async def upload_type(file: UploadFile, scenario_name: str | None = Query(default=None)):
     content = await file.read()
     async def stream():
         progress = asyncio.Queue()
@@ -325,6 +345,8 @@ async def upload_type(file: UploadFile):
             def _load():               # ← ALL Azure SDK calls happen here (sync)
                 # Extract tarball → temp dir
                 # Read scenario.yaml for scenario name
+                # If scenario_name param provided, OVERRIDE manifest name
+                name = scenario_name or manifest["name"]
                 # ARM phase (create resources) → Data plane (upsert data)
                 emit("phase", "message", 50)
             await asyncio.to_thread(_load)  # ← Critical: must use to_thread
@@ -341,6 +363,24 @@ async def upload_type(file: UploadFile):
                 yield {"event": "progress", "data": json.dumps(ev)}
     return EventSourceResponse(stream())
 ```
+
+**Upload endpoint `scenario_name` parameter status:**
+
+| Endpoint | `scenario_name` param | Override behavior |
+|----------|----------------------|-------------------|
+| `POST /query/upload/graph` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name; forces `-topology` suffix |
+| `POST /query/upload/telemetry` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name; forces `-telemetry` suffix |
+| `POST /query/upload/runbooks` | `scenario_name: str \| None = Query(default=None)` + legacy `scenario: str = "default"` | `scenario_name` takes priority over `scenario.yaml` over legacy `scenario` param |
+| `POST /query/upload/tickets` | `scenario_name: str \| None = Query(default=None)` + legacy `scenario: str = "default"` | Same as runbooks |
+| `POST /query/upload/prompts` | `scenario_name: str \| None = Query(default=None)` | Overrides `scenario.yaml` name |
+
+**Critical naming coupling when `scenario_name` is used:** When the override is
+provided, upload endpoints **ignore** the custom `cosmos.nosql.database` and
+`cosmos.gremlin.graph` values from `scenario.yaml` and force hardcoded suffixes
+(`-topology`, `-telemetry`). This guarantees naming consistency with the query-time
+derivation in `config.py` (`graph_name.rsplit("-", 1)[0] + "-telemetry"`). Without
+this enforcement, custom suffixes in `scenario.yaml` would create databases that
+the query layer can't find.
 
 ### Tarball Extraction
 
@@ -767,6 +807,72 @@ fetching: `sort(key=lambda x: (agent, scenario, -version))`.
 
 `_list_prompt_databases()`: Lists all SQL databases via ARM, filters names ending with `-prompts`, strips suffix.
 
+### `graph-query-api/router_scenarios.py` — Scenario Metadata CRUD
+
+Stores scenario metadata in a dedicated Cosmos NoSQL database: `scenarios` / `scenarios`.
+Each document tracks a complete scenario's name, display name, description, and resource
+bindings. This is a **registry/catalog** — it does NOT store the actual data, only
+references to graphs, indexes, and databases.
+
+**Endpoints:**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/query/scenarios/saved` | List all saved scenarios (ORDER BY `updated_at` DESC) |
+| POST | `/query/scenarios/save` | Upsert scenario metadata after uploads complete |
+| DELETE | `/query/scenarios/saved/{name}` | Delete metadata record only (underlying data preserved) |
+
+**Container creation**: `_get_scenarios_container(ensure_created=True)`:
+1. Same ARM two-phase pattern as `router_prompts._get_prompts_container()`
+2. Database: `scenarios`, container: `scenarios`, PK: `/id`
+3. Lazily cached in module-level `_scenarios_container` variable
+4. Uses fresh `DefaultAzureCredential()` inside thread for ARM calls
+
+**Name validation** (shared between endpoint and Pydantic validator):
+- Regex: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`
+- No consecutive hyphens (`--`) — Azure Blob container names forbid them
+- Must not end with reserved suffixes: `-topology`, `-telemetry`, `-prompts`, `-runbooks`, `-tickets`
+- Min 2 chars, max 50 chars
+- Enforced both frontend (input validation) and backend (API + Pydantic `field_validator`)
+
+**Document schema** (matches `SavedScenario` TypeScript interface):
+```json
+{
+  "id": "cloud-outage",
+  "display_name": "Cloud Outage",
+  "description": "Cooling failure → thermal shutdown cascade",
+  "created_at": "2026-02-15T10:30:00Z",
+  "updated_at": "2026-02-15T14:20:00Z",
+  "created_by": "ui",
+  "resources": {
+    "graph": "cloud-outage-topology",
+    "telemetry_database": "cloud-outage-telemetry",
+    "runbooks_index": "cloud-outage-runbooks-index",
+    "tickets_index": "cloud-outage-tickets-index",
+    "prompts_database": "cloud-outage-prompts"
+  },
+  "upload_status": {
+    "graph": { "status": "complete", "timestamp": "...", "vertices": 42, "edges": 68 },
+    "telemetry": { "status": "complete", "timestamp": "...", "containers": 2 },
+    "runbooks": { "status": "complete", "timestamp": "...", "index": "cloud-outage-runbooks-index" },
+    "tickets": { "status": "complete", "timestamp": "...", "index": "cloud-outage-tickets-index" },
+    "prompts": { "status": "complete", "timestamp": "...", "prompt_count": 6 }
+  }
+}
+```
+
+**Save behavior**: On `POST /query/scenarios/save`, preserves `created_at` from existing
+document if one exists (reads before writing). Auto-derives `display_name` from name
+if not provided (`name.replace("-", " ").title()`). Resource bindings are deterministically
+derived from the scenario name. Upsert is last-writer-wins (safe for low concurrency).
+
+**Delete behavior**: Deletes only the metadata document. Underlying Azure resources
+(graph data, search indexes, telemetry databases, blob containers) are left intact.
+Future enhancement may add `?delete_data=true` parameter for full cleanup.
+
+**Error handling**: `list_saved_scenarios` returns `{"scenarios": [], "error": "..."}` on
+failure (non-fatal — app works without saved scenarios). Save and delete raise `HTTPException`
+on validation or conflict errors.
+
 ### `api/app/orchestrator.py` — Agent Bridge
 
 - `is_configured()`: checks `agent_ids.json` exists + `PROJECT_ENDPOINT` + `AI_FOUNDRY_PROJECT_NAME` set + orchestrator ID present in parsed JSON
@@ -851,11 +957,14 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
 
 ```
 <React.StrictMode>
-  <ScenarioProvider>                    ← Global context
+  <ScenarioProvider>                    ← Global context (scenario + provisioning state)
     <App>                               ← useInvestigation() hook
       ├── <Header>                      ← Fixed 48px top bar
+      │   ├── <ScenarioChip>            ← Flyout dropdown: scenario switching + "+ New Scenario"
       │   ├── <HealthDot label="API">   ← Polls /health every 15s
+      │   ├── Dynamic agent status      ← "5 Agents ✓" / "Provisioning..." / "Not configured"
       │   └── <SettingsModal>           ← useScenarios(), useScenarioContext()
+      ├── <ProvisioningBanner>          ← Non-blocking 28px banner during agent provisioning
       ├── <MetricsBar>                  ← Vertically resizable panel (default 30%)
       │   ├── <GraphTopologyViewer>     ← useTopology(), owns overlay state
       │   │   ├── <GraphToolbar>
@@ -869,7 +978,8 @@ ResourceId=/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/
       │   │   ├── <StepCard> (×n)
       │   │   └── <ThinkingDots>
       │   └── <ErrorBanner>
-      └── <DiagnosisPanel>              ← ReactMarkdown rendering
+      ├── <DiagnosisPanel>              ← ReactMarkdown rendering
+      └── <AddScenarioModal>            ← Opened from ScenarioChip or SettingsModal
 ```
 
 Layout uses `react-resizable-panels` with vertical orientation: MetricsBar (30%) | InvestigationPanel + DiagnosisPanel (70% side-by-side).
@@ -877,24 +987,55 @@ Layout uses `react-resizable-panels` with vertical orientation: MetricsBar (30%)
 ### ScenarioContext (React Context)
 
 ```typescript
+// Discriminated union for provisioning status tracking
+type ProvisioningStatus =
+  | { state: 'idle' }
+  | { state: 'provisioning'; step: string; scenarioName: string }
+  | { state: 'done'; scenarioName: string }
+  | { state: 'error'; error: string; scenarioName: string };
+
 interface ScenarioState {
+  activeScenario: string | null;    // Saved scenario name, or null for custom/manual mode
   activeGraph: string;              // e.g. "telco-noc-topology" (default: "topology")
   activeRunbooksIndex: string;      // default: "runbooks-index"
   activeTicketsIndex: string;       // default: "tickets-index"
+  activePromptSet: string;          // Prompt scenario name (default: "")
+  provisioningStatus: ProvisioningStatus; // Agent provisioning state
+  setActiveScenario(name: string | null): void; // Auto-derives all bindings when non-null
   setActiveGraph(g: string): void;
   setActiveRunbooksIndex(i: string): void;
   setActiveTicketsIndex(i: string): void;
+  setActivePromptSet(name: string): void;
+  setProvisioningStatus(status: ProvisioningStatus): void;
   getQueryHeaders(): Record<string, string>;  // { "X-Graph": activeGraph }
 }
 ```
+
+**Auto-derivation logic** — when `setActiveScenario(name)` is called with non-null:
+- `activeGraph = "{name}-topology"`
+- `activeRunbooksIndex = "{name}-runbooks-index"`
+- `activeTicketsIndex = "{name}-tickets-index"`
+- `activePromptSet = "{name}"`
+- When called with `null` (custom mode): existing individual bindings are left as-is
+
+**localStorage persistence**: `activeScenario` is persisted to and restored from
+`localStorage` on mount. On page refresh, all bindings are re-derived from the
+persisted scenario name. This does NOT re-trigger agent provisioning — agents are
+long-lived in AI Foundry. It only restores frontend state so `X-Graph` headers
+and UI indicators are correct.
 
 `getQueryHeaders()` is memoized on `activeGraph`. It's consumed by `useInvestigation` and `useTopology`.
 
 **Critical**: Only `activeGraph` generates an HTTP header (`X-Graph`). `activeRunbooksIndex` and `activeTicketsIndex` are NOT sent as headers — they're only passed in the `POST /api/config/apply` body.
 
+**ProvisioningStatus** is defined and exported from `ScenarioContext.tsx` (co-located
+with `ScenarioState` to avoid circular dependencies). It is a discriminated union type
+for better TypeScript narrowing than a flat interface.
+
 ### TypeScript Types (`types/index.ts`)
 
 ```typescript
+// --- Investigation types ---
 interface StepEvent {
   step: number;
   agent: string;
@@ -913,7 +1054,48 @@ interface RunMeta {
   steps: number;
   time: string;         // "42s"
 }
+
+// --- Scenario management types ---
+interface SavedScenario {
+  id: string;               // scenario name (e.g. "cloud-outage")
+  display_name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  resources: {
+    graph: string;                // "cloud-outage-topology"
+    telemetry_database: string;   // "cloud-outage-telemetry"
+    runbooks_index: string;       // "cloud-outage-runbooks-index"
+    tickets_index: string;        // "cloud-outage-tickets-index"
+    prompts_database: string;     // "cloud-outage-prompts"
+  };
+  upload_status: Record<string, {
+    status: string;
+    timestamp: string;
+    [key: string]: unknown;       // vertices, edges, containers, etc.
+  }>;
+}
+
+type SlotKey = 'graph' | 'telemetry' | 'runbooks' | 'tickets' | 'prompts';
+
+type SlotStatus = 'empty' | 'staged' | 'uploading' | 'done' | 'error';
+
+interface ScenarioUploadSlot {
+  key: SlotKey;
+  label: string;
+  icon: string;
+  file: File | null;
+  status: SlotStatus;
+  progress: string;
+  pct: number;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
 ```
+
+**ProvisioningStatus** type is defined in `ScenarioContext.tsx` (not in `types/index.ts`)
+to avoid circular dependency. See [ScenarioContext](#scenariocontext-react-context) above.
 
 Additional types in hooks (not in shared types file):
 
@@ -960,7 +1142,19 @@ interface SearchIndex {
 |------|---------|---------------|
 | `useInvestigation()` | `{alert, setAlert, steps, thinking, finalMessage, errorMessage, running, runStarted, runMeta, submitAlert}` | Aborts prior SSE stream; 5min auto-abort timeout; uses refs for step counter (closure capture issue); injects `X-Graph` header |
 | `useTopology()` | `{data, loading, error, refetch}` | Auto-refetches when `getQueryHeaders` changes (activeGraph change triggers `useEffect`); aborts prior in-flight request |
-| `useScenarios()` | `{scenarios, indexes, loading, uploading, progress, uploadResult, error, fetchScenarios, fetchIndexes, uploadScenario, cancelUpload}` | `fetchScenarios()` → GET `/query/scenarios`; `fetchIndexes()` → GET `/query/indexes` (failure non-fatal); upload uses ReadableStream SSE |
+| `useScenarios()` | `{scenarios, indexes, savedScenarios, loading, error, fetchScenarios, fetchIndexes, fetchSavedScenarios, saveScenario, deleteSavedScenario, selectScenario}` | `fetchScenarios()` → GET `/query/scenarios`; `fetchIndexes()` → GET `/query/indexes` (failure non-fatal); `fetchSavedScenarios()` → GET `/query/scenarios/saved`; `selectScenario(name)` → auto-provisions agents via `consumeSSE` + updates `provisioningStatus` |
+
+**`selectScenario(name)` flow** (in `useScenarios`):
+1. Calls `setActiveScenario(name)` → auto-derives all bindings
+2. Sets `provisioningStatus` to `{ state: 'provisioning', step: 'Starting...', scenarioName: name }`
+3. POSTs to `/api/config/apply` with `{graph, runbooks_index, tickets_index, prompt_scenario}`
+4. Consumes SSE stream via shared `consumeSSE()` utility from `utils/sseStream.ts`
+5. Updates `provisioningStatus.step` on each progress event
+6. On complete: sets `provisioningStatus` to `{ state: 'done', scenarioName: name }`
+7. On error: sets `provisioningStatus` to `{ state: 'error', error: msg, scenarioName: name }`
+8. After 3 seconds of 'done', auto-resets to `{ state: 'idle' }`
+
+**Note:** Uses native `fetch()` + `ReadableStream` via `consumeSSE()` — NOT `@microsoft/fetch-event-source`. This is deviation D-1 from the SCENARIOHANDLING plan. Native fetch works correctly with POST + SSE and aligns with the shared utility pattern.
 
 ### All Frontend API Calls
 
@@ -969,32 +1163,54 @@ interface SearchIndex {
 | `/api/alert` | POST | `Content-Type: application/json` + `X-Graph` | User clicks "Investigate" | `useInvestigation` |
 | `/query/topology` | POST | `Content-Type: application/json` + `X-Graph` | On mount, graph change, manual refresh, "Load Topology" | `useTopology` / `SettingsModal` |
 | `/query/scenarios` | GET | — | Settings modal opens | `useScenarios` |
+| `/query/scenarios/saved` | GET | — | Settings modal opens, ScenarioChip mount, after save/delete | `useScenarios` |
+| `/query/scenarios/save` | POST | `Content-Type: application/json` | After all 5 uploads complete in AddScenarioModal | `useScenarios` |
+| `/query/scenarios/saved/{name}` | DELETE | — | Delete scenario from Scenarios tab ⋮ menu | `useScenarios` |
 | `/query/indexes` | GET | — | Settings modal opens | `useScenarios` |
 | `/query/prompts/scenarios` | GET | — | Settings modal opens | `SettingsModal` |
-| `/query/upload/graph` | POST | multipart/form-data | Upload box | `UploadBox` |
-| `/query/upload/telemetry` | POST | multipart/form-data | Upload box | `UploadBox` |
-| `/query/upload/runbooks` | POST | multipart/form-data | Upload box | `UploadBox` |
-| `/query/upload/tickets` | POST | multipart/form-data | Upload box | `UploadBox` |
-| `/query/upload/prompts` | POST | multipart/form-data | Upload box | `UploadBox` |
-| `/api/config/apply` | POST | `Content-Type: application/json` | "Provision Agents" button | `SettingsModal` |
+| `/query/upload/graph` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
+| `/query/upload/telemetry` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
+| `/query/upload/runbooks` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
+| `/query/upload/tickets` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
+| `/query/upload/prompts` | POST | multipart/form-data | Upload box or AddScenarioModal | `UploadBox` / `AddScenarioModal` |
+| `/api/config/apply` | POST | `Content-Type: application/json` | "Provision Agents" button or `selectScenario()` auto-provision | `SettingsModal` / `useScenarios` |
 | `/health` | GET | — | Every 15s polling | `HealthDot` |
 | `/api/logs` | GET (EventSource) | — | On mount | `LogStream` |
 
-### SettingsModal — 2 Tabs
+**Note on AddScenarioModal uploads:** When triggered from AddScenarioModal, each upload
+appends `?scenario_name=X` to the URL to override the tarball's `scenario.yaml` name.
+Uses the shared `uploadWithSSE()` utility from `utils/sseStream.ts`.
+
+### SettingsModal — 3 Tabs
+
+**Scenarios tab (new — first tab):**
+- Lists saved scenarios as cards from `GET /query/scenarios/saved`
+- Each card shows: scenario name, display name, vertex/prompt/index counts, timestamps
+- Click a card → activates that scenario (same as `selectScenario()`) + auto-provisions
+- Active scenario shows green "Active" badge; inactive scenarios show `○` radio dot
+- ⋮ menu per card: "Delete scenario" with inline confirmation
+- "+New Scenario" button → opens `AddScenarioModal`
+- Empty state: "No scenarios yet — Click '+New Scenario' to create your first scenario"
 
 **Data Sources tab:**
+- When a saved scenario is active: shows read-only bindings (auto-derived from name)
+  with "Re-provision Agents" button and timestamp of last provisioning
+- When in Custom mode (no scenario): shows individual dropdowns for graph, runbooks,
+  tickets, prompt set + "Load Topology" and "Provision Agents" buttons (same as before)
 - GraphExplorer Agent → dropdown of `ScenarioInfo[]` where `has_data === true` → sets `activeGraph`
 - Telemetry Agent → auto-derived display: `activeGraph.substring(0, activeGraph.lastIndexOf('-')) + '-telemetry'`
 - RunbookKB Agent → dropdown of `SearchIndex[]` where `type === 'runbooks'` → sets `activeRunbooksIndex`
 - HistoricalTicket Agent → dropdown of `SearchIndex[]` where `type === 'tickets'` → sets `activeTicketsIndex`
-- Prompt Set → dropdown from `GET /query/prompts/scenarios` → local state `activePromptSet`
-- 🔗 **Load Topology** → `POST /query/topology` with `X-Graph` header
-- 🤖 **Provision Agents** → `POST /api/config/apply` with `{graph, runbooks_index, tickets_index, prompt_scenario}`
+- Prompt Set → dropdown from `GET /query/prompts/scenarios` → sets `activePromptSet`
 
 **Upload tab:**
 - Loaded Data section: lists graphs where `has_data === true`
 - 5 UploadBox components: Graph Data, Telemetry, Runbooks, Tickets, Prompts
 - Each is self-contained: drag-drop → upload → SSE progress bar → done/error state machine
+- For ad-hoc individual uploads outside the scenario workflow
+
+**Modal behavior:** Closes on Escape keypress and backdrop click (except during active
+upload/provisioning). Uses `aria-modal="true"` and `role="dialog"` attributes.
 
 ### Graph Viewer Architecture
 
@@ -1014,7 +1230,10 @@ interface SearchIndex {
 
 2. **Ref-based counters**: `useInvestigation` uses `stepCountRef` and `startTimeRef` as refs (not state) because the SSE `onmessage` closure captures stale state values. The `finally` block reads from refs.
 
-3. **Two SSE pattern libraries**: Investigation uses `@microsoft/fetch-event-source` (POST + named events). LogStream uses native `EventSource` (GET-only). Upload/provisioning use raw `ReadableStream` with manual `data:` line parsing.
+3. **Three SSE consumption patterns**:
+   - Investigation uses `@microsoft/fetch-event-source` (POST + named events)
+   - LogStream uses native `EventSource` (GET-only)
+   - Upload, provisioning, and scenario selection use the shared `consumeSSE()` utility from `utils/sseStream.ts` (native `fetch` + `ReadableStream` with manual `data:` line parsing)
 
 4. **`openWhenHidden: true`**: On `fetchEventSource` — SSE stream continues in background tabs. Important for long investigations.
 
@@ -1022,19 +1241,28 @@ interface SearchIndex {
 
 6. **Unused components**: `AlertChart` and `MetricCard` exist in `src/components/` but are not imported by any parent component.
 
-7. **SettingsModal `activePromptSet`** is local state only — not persisted to context. Survives across open/close because the modal component is always mounted (hidden via `if (!open) return null`).
+7. **`activePromptSet`** is now in `ScenarioContext` (previously was local state in `SettingsModal` — see SCENARIOHANDLING.md deviation D-4).
 
-8. **ScenarioContext has NO persistence** — all selections (`activeGraph`, `activeRunbooksIndex`, `activeTicketsIndex`) reset on browser refresh. No `localStorage` usage.
+8. **ScenarioContext has localStorage persistence** for `activeScenario`: scenario selection survives browser refresh. All bindings are re-derived from the persisted scenario name on mount. Other individual bindings (`activeGraph`, etc.) are NOT independently persisted — they're derived.
 
 9. **UploadBox `onComplete` gap** — After uploading prompts, the Prompt Set dropdown is NOT auto-refreshed. User must close/reopen the modal. Graph upload triggers `fetchScenarios()`, Runbooks/Tickets trigger `fetchIndexes()`, but Prompts and Telemetry trigger nothing.
 
 10. **UploadBox completion detection is heuristic**: `if ('scenario' in d || 'index' in d || 'database' in d || 'graph' in d)`. Fragile if backend response structure changes.
 
-11. **`useScenarios.uploadScenario()` is dead code** — calls the removed `/query/scenario/upload` endpoint. Exported from the hook but never called by `SettingsModal`.
+11. **Vite dev proxy has 5 entries**, not 3: `/api/alert` → :8000 (SSE configured), `/api/logs` → :8000 (SSE configured), `/api` → :8000 (plain), `/health` → :8000, `/query` → :8100 (SSE configured). The SSE-configured entries add `cache-control: no-cache` and `x-accel-buffering: no` headers — without these, SSE streams are buffered during local dev.
 
-12. **Vite dev proxy has 5 entries**, not 3: `/api/alert` → :8000 (SSE configured), `/api/logs` → :8000 (SSE configured), `/api` → :8000 (plain), `/health` → :8000, `/query` → :8100 (SSE configured). The SSE-configured entries add `cache-control: no-cache` and `x-accel-buffering: no` headers — without these, SSE streams are buffered during local dev.
+12. **`useInvestigation` stale closure bug** — `getQueryHeaders` is NOT in the `submitAlert` `useCallback` dependency array. If user switches `activeGraph` without changing alert text, the OLD `X-Graph` header is sent.
 
-13. **`useInvestigation` stale closure bug** — `getQueryHeaders` is NOT in the `submitAlert` `useCallback` dependency array. If user switches `activeGraph` without changing alert text, the OLD `X-Graph` header is sent.
+13. **Shared SSE utility pattern** (`utils/sseStream.ts`): Two exports:
+    - `consumeSSE(response, handlers, signal?)` — Low-level: takes a `Response`, reads `ReadableStream`, parses `data:` lines, dispatches to `onProgress`/`onComplete`/`onError` handlers
+    - `uploadWithSSE(url, formData, handlers, signal?)` — High-level: wraps `fetch` + `consumeSSE` for form upload endpoints
+    - Completion detection uses heuristic field-checking (`scenario`, `index`, `graph`, `prompts_stored` keys in parsed JSON) because backend SSE streams use `data:` lines only, not `event:` type markers (deviation D-5)
+
+14. **AddScenarioModal auto-slot detection**: `detectSlot(filename)` parses the last hyphen-separated segment before `.tar.gz` to match file to upload slot. E.g., `cloud-outage-graph.tar.gz` → slot `graph`, scenarioName `cloud-outage`. Auto-fills scenario name input if empty. Multi-file drop assigns all matching files in one gesture.
+
+15. **ProvisioningBanner lifecycle**: Appears during provisioning, shows current step from SSE stream, auto-dismisses 3s after completion with green flash. On error, banner turns red and stays until manually dismissed. Workspace remains interactive during provisioning — only "Submit Alert" is disabled.
+
+16. **ScenarioChip flyout dropdown**: Shows saved scenarios + "(Custom)" option. Selecting triggers `selectScenario()` which auto-provisions. Small spinner inside chip during provisioning. "+ New Scenario" link at bottom opens AddScenarioModal.
 
 ---
 
@@ -1410,6 +1638,13 @@ azure_config.env ← postprovision ← Bicep outputs
 
 ### Post-Deployment Workflow
 
+**Option A — Scenario-based (recommended):**
+1. `./data/generate_all.sh [scenario]` → creates 5 per-type tarballs
+2. Open app → click "+New Scenario" in Header chip or ⚙ Settings → Scenarios tab
+3. Name the scenario → drag-drop all 5 tarballs (auto-detected by filename) → Save
+4. Scenario auto-provisions agents and loads topology — ready to investigate
+
+**Option B — Manual/Custom (ad-hoc uploads):**
 1. `./data/generate_all.sh [scenario]` → creates 5 per-type tarballs
 2. Open app → ⚙ Settings → Upload tab → upload each tarball (graph first recommended)
 3. Data Sources tab → select graph, indexes, prompt set
@@ -1588,8 +1823,11 @@ All scenario data follows a per-scenario naming pattern. Do NOT use a shared dat
 | Graph | `networkgraph` (shared) | `{scenario}-topology` | N/A (graph) |
 | Telemetry | `{scenario}-telemetry` | `AlertStream`, `LinkTelemetry` | `/EntityId` |
 | Prompts | `{scenario}-prompts` | `prompts` | `/agent` |
+| Scenario Registry | `scenarios` (shared) | `scenarios` | `/id` |
 
 To discover which scenarios have prompts, list all databases via ARM and filter names ending in `-prompts`. Strip the suffix to get the scenario name.
+
+To discover saved scenarios, query `scenarios/scenarios` with cross-partition query.
 
 ### 13. ARM Creation Calls Block the Event Loop — Split Read vs Write
 
@@ -1807,7 +2045,6 @@ Automated local mode starts API (:8000) and frontend (:5173) but NOT graph-query
 (:8100). All `/query/*` requests fail. Manual instructions are correct.
 
 ### Dead Code in Frontend
-- `useScenarios.uploadScenario()` calls the removed `/query/scenario/upload` endpoint
 - `AlertChart` and `MetricCard` exist but are not imported by any component
 
 ### `useInvestigation` Stale Closure
@@ -1840,6 +2077,31 @@ Cannot add VNet integration to an existing CAE. Must delete + recreate: `azd dow
 
 ### Cosmos DB Public Access Policy Override
 Azure Policy may silently flip `publicNetworkAccess` to `Disabled` post-deployment. Private endpoints provide a parallel path that works regardless.
+
+### Scenario Selection Auto-Provisioning Timing
+When user selects a scenario from the ScenarioChip dropdown, topology loads instantly
+(via `X-Graph` header change → `useTopology` auto-refetch) but agent provisioning
+takes ~30s. During this window, submitting an alert uses old agent bindings (agents
+still pointing to the previous scenario's OpenAPI specs and search indexes).
+The "Submit Alert" button should be disabled during provisioning.
+
+### Scenario Registry ARM Creation on First Access
+`_get_scenarios_container(ensure_created=True)` triggers ARM database + container
+creation on the first `GET /query/scenarios/saved` call. This blocks for ~20-30s.
+Subsequent calls use the cached container client. Consider separating the creation
+to the `POST /query/scenarios/save` path and adding `ensure_created=False` for reads
+(same pattern as prompts — see Critical Pattern #13).
+
+### Telemetry Database Derivation Coupling
+The telemetry database name is derived in **two different places** with **two different
+algorithms** that must produce the same result:
+1. **Upload time** (`router_ingest.py`): `f"{scenario_name}-{manifest_suffix}"`
+2. **Query time** (`config.py`): `graph_name.rsplit("-", 1)[0] + "-telemetry"`
+
+These agree **only when** the suffix values in `scenario.yaml` are the defaults
+(`topology`, `telemetry`). When `scenario_name` override is provided, upload
+endpoints now force hardcoded suffixes to maintain consistency. See SCENARIOHANDLING.md
+"Telemetry Database Derivation Coupling" section for full analysis.
 
 ---
 
@@ -1920,13 +2182,132 @@ cd frontend && npm run dev
 | Prompt CRUD slow / blocks other requests | Sync Cosmos calls in async handlers. Wrap in `asyncio.to_thread()` |
 | Local dev `/query/*` fails after `deploy.sh` step 7 | Step 7 doesn't start graph-query-api. Start manually on :8100 |
 | Prompt dropdown not refreshed after upload | UploadBox for prompts has no `onComplete` callback. Close/reopen modal |
-| Scenario context lost on page refresh | `ScenarioContext` has no `localStorage` persistence |
+| Scenario context lost on page refresh | Fixed: `activeScenario` persisted to `localStorage`, bindings auto-derived on mount |
 | New scenario data pack | Follow `scenarios/telco-noc/` structure; create `scenario.yaml` + `graph_schema.yaml` |
+| Saved scenario not appearing | Check `GET /query/scenarios/saved`; may be first-call ARM delay for `scenarios` db |
+| Scenario selection not provisioning | Check `selectScenario()` in `useScenarios.ts`; verify `/api/config/apply` is reachable |
+| ScenarioChip shows wrong scenario | Check `activeScenario` in `localStorage`; clear with `localStorage.removeItem('activeScenario')` |
+| AddScenarioModal files not auto-detected | Filename must match `{name}-{slot}.tar.gz` pattern; `detectSlot()` in `AddScenarioModal.tsx` |
+| Scenario name rejected by backend | Name validation: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`; no reserved suffixes |
+| Telemetry queries return empty after rename | Upload override forces `-telemetry` suffix; check `config.py` derivation matches |
+| Provisioning banner stuck | Check `provisioningStatus` state in `ScenarioContext`; 3s auto-dismiss timer may not fire if error |
 | Cosmos 403 after successful deploy | Azure Policy override. Run `az cosmosdb show --query publicNetworkAccess`. See Lesson #20 diagnostic checklist |
 | Need to debug VNet DNS issues | Run `nslookup <account>.documents.azure.com` from within VNet. Should resolve to `10.x.x.x`. See Lesson #20 |
 | LLM agent sends wrong header value | OpenAPI spec uses `default` — change to single-value `enum`. See Lessons #15 and #19 |
 | CAE needs VNet but already deployed | VNet is immutable on CAE. Must `azd down && azd up`. See Lesson #9 |
 | Sub-agent tool not executing | `FunctionTool` doesn't work with `ConnectedAgentTool`. Must use `OpenApiTool`. See Lesson #5 |
+
+---
+
+## Scenario Management
+
+> **Full specification:** `documentation/SCENARIOHANDLING.md` (1403 lines)  
+> **Status:** Phases 1-3 Complete, Phase 4 Partial
+
+### Overview
+
+Scenarios are first-class objects in the system. A **scenario** bundles together:
+- A Gremlin graph (`{name}-topology`)
+- Telemetry databases (`{name}-telemetry`)
+- Runbook search indexes (`{name}-runbooks-index`)
+- Ticket search indexes (`{name}-tickets-index`)
+- Prompts (`{name}-prompts`)
+- A metadata record in Cosmos NoSQL (`scenarios/scenarios`)
+
+Previously, users had to manually upload 5 tarballs, select each data source from
+individual dropdowns, and provision agents — 6+ manual steps with no "scenario"
+concept. Now users can create, save, switch, and delete complete scenarios from the UI.
+
+### User Flow
+
+1. **Create:** Click "+New Scenario" → name + 5 file slots → Save → sequential upload → metadata saved
+2. **Switch:** Click scenario in Header chip dropdown → auto-binds all data sources → auto-provisions agents
+3. **Delete:** ⋮ menu on scenario card → confirmation → deletes metadata only (data preserved)
+
+### Architecture
+
+```
+┌─────────────┐    ┌──────────────────────────────────┐    ┌─────────────────────┐
+│ ScenarioChip│───▶│ useScenarios.selectScenario()     │───▶│POST /api/config/apply│
+│  (Header)   │    │ setActiveScenario() → auto-derive │    │ (SSE provisioning)  │
+└─────────────┘    └──────────────────────────────────┘    └─────────────────────┘
+       │                      │                                     │
+       │            ┌─────────▼───────────┐               ┌────────▼──────────┐
+       │            │ ScenarioContext      │               │ ProvisioningBanner│
+       │            │ activeScenario       │               │ (28px feedback)   │
+       │            │ activeGraph → X-Graph│               └───────────────────┘
+       │            │ provisioningStatus   │
+       │            │ localStorage persist │
+       │            └─────────────────────┘
+       │
+┌──────▼──────────┐    ┌───────────────────────────────┐
+│ AddScenarioModal│───▶│ POST /query/upload/* ×5        │
+│ (5 file slots)  │    │ (with ?scenario_name= override)│
+│ detectSlot()    │    │ ↓                              │
+│ auto-detect     │    │ POST /query/scenarios/save     │
+└─────────────────┘    └───────────────────────────────┘
+```
+
+### Key Files Added/Modified
+
+| File | Type | Purpose |
+|------|------|---------|
+| `graph-query-api/router_scenarios.py` | **New** (272 lines) | Scenario CRUD endpoints + `_get_scenarios_container()` |
+| `frontend/src/utils/sseStream.ts` | **New** (143 lines) | Shared `consumeSSE()` + `uploadWithSSE()` utilities |
+| `frontend/src/components/AddScenarioModal.tsx` | **New** (621 lines) | Multi-slot file upload with auto-detect |
+| `frontend/src/components/ScenarioChip.tsx` | **New** (154 lines) | Header scenario selector chip + flyout |
+| `frontend/src/components/ProvisioningBanner.tsx` | **New** (102 lines) | Non-blocking provisioning feedback banner |
+| `frontend/src/context/ScenarioContext.tsx` | **Modified** (~105 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage |
+| `frontend/src/types/index.ts` | **Modified** (~55 lines) | Added `SavedScenario`, `SlotKey`, `SlotStatus`, `ScenarioUploadSlot` |
+| `frontend/src/hooks/useScenarios.ts` | **Modified** (~180 lines) | Added scenario CRUD + selection; removed dead `uploadScenario()` code |
+| `frontend/src/components/SettingsModal.tsx` | **Modified** (~745 lines) | 3-tab layout, scenario cards, read-only Data Sources when active |
+| `frontend/src/components/Header.tsx` | **Modified** | Added ScenarioChip + ProvisioningBanner + dynamic agent status |
+| `graph-query-api/main.py` | **Modified** | Mounted `router_scenarios` (6th router) |
+| `graph-query-api/router_ingest.py` | **Modified** | Added `scenario_name` param to all 5 upload endpoints |
+
+### Cosmos DB "scenarios" Registry
+
+| Property | Value |
+|----------|-------|
+| Account | Same NoSQL account (`{name}-nosql`) |
+| Database | `scenarios` |
+| Container | `scenarios` |
+| Partition Key | `/id` (scenario name) |
+| Throughput | Default (minimal — low volume) |
+
+The database + container are created on first use (same ARM two-phase pattern).
+No new env vars required — uses existing `COSMOS_NOSQL_ENDPOINT`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`.
+
+### Scenario Name Validation
+
+Names must match: `^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$`
+- Lowercase alphanumeric + hyphens only
+- No consecutive hyphens (Azure Blob container name restriction)
+- 2-50 chars
+- Must not end with reserved suffixes: `-topology`, `-telemetry`, `-prompts`, `-runbooks`, `-tickets`
+- Enforced in both frontend (input validation) and backend (Pydantic `field_validator` + endpoint validation)
+
+### Implementation Deviations (from SCENARIOHANDLING.md plan)
+
+| # | Plan Said | Implementation | Rationale |
+|---|-----------|---------------|----------|
+| D-1 | `@microsoft/fetch-event-source` for SSE | Native `fetch()` + `consumeSSE()` | Plan's UX-11 specifies extracting existing native pattern; works correctly with POST + SSE |
+| D-2 | `selectScenario` calls all 5 individual setters | Calls only `setActiveScenario(name)` | Auto-derives all 4 bindings; individual calls redundant |
+| D-3 | Rename `scenario` param to `scenario_name` | Kept both; `scenario_name` takes priority | Backwards compatibility with existing scripts |
+| D-4 | `ProvisioningStatus` in `types/index.ts` | Defined in `ScenarioContext.tsx` | Co-locating avoids circular dependency |
+| D-5 | SSE `event:` type markers | Heuristic field-checking | Backend SSE uses `data:` lines only, not `event:` markers |
+
+### Phase 4 Remaining Work
+
+| Item | Status |
+|------|--------|
+| Override confirmation with detailed metadata (vertex count, prompt count) | 🔶 Basic only |
+| Delete with framer-motion exit animation | 🔶 Inline confirmation; no animation |
+| Backend `first_time: true` signal for upload performance warning | 🔶 Static warning only |
+| Partial upload recovery (retry individual failed uploads) | ⬜ Not done |
+| Focus trapping for accessibility | ⬜ Not done |
+| Error toasts with auto-dismiss | ⬜ Errors display inline |
+| Empty state illustrations | ⬜ Text only |
 
 ---
 
@@ -1963,9 +2344,10 @@ cd frontend && npm run dev
 
 | Document | Purpose |
 |----------|---------|
+| `documentation/SCENARIOHANDLING.md` | Scenario management feature spec — UX design, backend schema, implementation phases, deviations |
 | `documentation/azure_deployment_lessons.md` | Detailed Azure deployment lessons (Private Endpoints, Policy, VNet, Bicep patterns) |
-| `documentation/BUGSTOFIX.md` | Known bugs tracker |
-| `documentation/TASKS.md` | Feature roadmap and completed work |
-| `documentation/SCENARIO.md` | Scenario design details |
-| `documentation/v8datamanagementplane.md` | V8 design decisions |
-| `documentation/v9fabricintegration.md` | Future Fabric integration plans |
+| `documentation/CUSTOM_SKILLS.md` | Custom skills documentation (neo4j, cosmosdb gremlin, etc.) |
+| `documentation/v11modularagentworkflows.md` | V11 modular agent workflows |
+| `documentation/v8codesimplificationandrefactor.md` | V8 code simplification and refactor notes |
+| `documentation/v10fabricintegration.md` | V10 Fabric integration plans |
+| `documentation/deprecated/` | 16 historical docs (TASKS, BUGSTOFIX, SCENARIO, older versions) — kept for reference |

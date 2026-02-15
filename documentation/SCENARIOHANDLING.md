@@ -2,8 +2,39 @@
 
 > **Created:** 2026-02-15  
 > **Last audited:** 2026-02-15  
-> **Status:** Proposed (UX-audited)  
+> **Implemented:** 2026-02-15  
+> **Status:** ✅ Phases 1-3 Complete · Phase 4 Partial  
 > **Goal:** Let users create, save, and switch between complete scenarios from the UI — one form to name a scenario, upload all 5 tarballs, and persist it. Selecting a saved scenario auto-configures all agents and data sources.
+
+---
+
+## Implementation Status
+
+| Phase | Status | Files |
+|-------|--------|-------|
+| **Phase 1:** Foundation — Backend + Shared Utils + Context | ✅ Complete | `router_scenarios.py` (new), `main.py`, `router_ingest.py`, `sseStream.ts` (new), `ScenarioContext.tsx`, `types/index.ts`, `useScenarios.ts` |
+| **Phase 2:** Add Scenario Form + Settings Restructure | ✅ Complete | `AddScenarioModal.tsx` (new), `SettingsModal.tsx` |
+| **Phase 3:** Header Integration + Scenario Selection | ✅ Complete | `ScenarioChip.tsx` (new), `ProvisioningBanner.tsx` (new), `Header.tsx` |
+| **Phase 4:** Polish & Edge Cases | 🔶 Partial | See [Phase 4 Status](#phase-4-polish--edge-cases) below |
+
+### Deviations From Plan
+
+6 minor deviations were made during implementation:
+
+| # | Plan Said | What Was Done | Rationale |
+|---|-----------|---------------|----------|
+| D-1 | Use `@microsoft/fetch-event-source` for SSE in `selectScenario` | Used native `fetch()` + `ReadableStream` via shared `consumeSSE()` utility | Plan's UX-11 explicitly specifies extracting the *existing* native `ReadableStream` pattern. The `fetchEventSource` reference in the pseudocode contradicts UX-11. Native fetch works correctly with POST + SSE. |
+| D-2 | `selectScenario` calls `setActiveScenario` AND all 4 individual setters | Calls only `setActiveScenario(name)` | `setActiveScenario()` already auto-derives all 4 bindings when name is non-null. Individual calls would be redundant. |
+| D-3 | Rename runbooks/tickets `scenario` param to `scenario_name` | Kept old `scenario` param AND added `scenario_name`; `scenario_name` takes priority | Backwards compatibility — removing `scenario` would break existing callers/scripts. Priority inversion achieves the plan's behavioral goal. |
+| D-4 | `ProvisioningStatus` type in `types/index.ts` | Defined and exported from `ScenarioContext.tsx` | Tightly coupled to `ScenarioState` context interface. Co-locating avoids circular dependency. Type is still exported and available. |
+| D-5 | SSE complete-event detection via `event:` type markers | Heuristic field-checking (`scenario`, `index`, `graph`, `prompts_stored` keys) | Backend SSE streams don't use `event:` markers — only `data:` lines. Heuristic matches existing backend behavior. |
+| D-6 | Auto-clear setTimeout guards against race conditions | Unconditional `setProvisioningStatus({ state: 'idle' })` after 3s | TypeScript constraint — `setProvisioningStatus` accepts `ProvisioningStatus`, not an updater function. Low practical risk (provisioning takes ~30s). |
+
+### Extra Work Not In Plan
+
+- **Bug fix:** Added missing `COSMOS_GREMLIN_GRAPH` import in `router_ingest.py` (variable used at line 639 but never imported from `config.py`)
+- **`uploadWithSSE()` helper:** Added convenience wrapper in `sseStream.ts` combining FormData + fetch + consumeSSE — reduces boilerplate in AddScenarioModal
+- **`ProvisioningStatus` as discriminated union:** `{ state: 'idle' } | { state: 'provisioning'; step; scenarioName } | ...` — better TypeScript narrowing than a flat interface
 
 ---
 
@@ -690,23 +721,23 @@ explicitly add it to the file change inventory as cleanup.
 
 ### Summary of UX Improvements
 
-| # | Improvement | Impact | Effort |
-|---|-------------|--------|--------|
-| UX-1 | Scenario chip in Header bar | High — instant access | Small |
-| UX-2 | Active scenario indicator always visible | High — situational awareness | Small |
-| UX-3 | 3-tab Settings (Scenarios / Data Sources / Upload) | High — dedicated scenario space | Medium |
-| UX-4 | Smart file auto-detection from filename | Medium — friction reduction | Small |
-| UX-5 | Enhanced AddScenarioModal layout & states | High — clear progress | Medium |
-| UX-6 | Override confirmation dialog | Medium — data safety | Small |
-| UX-7 | Non-blocking provisioning banner | High — responsive feedback | Small |
-| UX-8 | Simplified Data Sources tab | Medium — reduced clutter | Small |
-| UX-9 | Escape & backdrop dismiss for modals | Medium — polish | Small |
-| UX-10 | Persist active scenario to localStorage | Medium — session continuity | Small |
-| UX-11 | Shared SSE parsing utility | Low (code quality) — DRY | Small |
-| UX-12 | activePromptSet in ScenarioContext | Medium — bug fix | Small |
-| UX-13 | Delete scenario UX spec | Medium — complete lifecycle | Small |
-| UX-14 | First-time performance warning | Low — expectation setting | Small |
-| UX-15 | Dead code cleanup | Low (code quality) — housekeeping | Small |
+| # | Improvement | Impact | Effort | Status |
+|---|-------------|--------|--------|--------|
+| UX-1 | Scenario chip in Header bar | High — instant access | Small | ✅ `ScenarioChip.tsx` |
+| UX-2 | Active scenario indicator always visible | High — situational awareness | Small | ✅ `Header.tsx` dynamic agent status |
+| UX-3 | 3-tab Settings (Scenarios / Data Sources / Upload) | High — dedicated scenario space | Medium | ✅ `SettingsModal.tsx` |
+| UX-4 | Smart file auto-detection from filename | Medium — friction reduction | Small | ✅ `AddScenarioModal.tsx` `detectSlot()` |
+| UX-5 | Enhanced AddScenarioModal layout & states | High — clear progress | Medium | ✅ `AddScenarioModal.tsx` |
+| UX-6 | Override confirmation dialog | Medium — data safety | Small | 🔶 Basic confirmation; no detailed metadata breakdown |
+| UX-7 | Non-blocking provisioning banner | High — responsive feedback | Small | ✅ `ProvisioningBanner.tsx` |
+| UX-8 | Simplified Data Sources tab | Medium — reduced clutter | Small | ✅ Read-only bindings when scenario active |
+| UX-9 | Escape & backdrop dismiss for modals | Medium — polish | Small | 🔶 Escape + backdrop done; focus trapping not done |
+| UX-10 | Persist active scenario to localStorage | Medium — session continuity | Small | ✅ `ScenarioContext.tsx` |
+| UX-11 | Shared SSE parsing utility | Low (code quality) — DRY | Small | ✅ `sseStream.ts` (see deviation D-1) |
+| UX-12 | activePromptSet in ScenarioContext | Medium — bug fix | Small | ✅ `ScenarioContext.tsx` |
+| UX-13 | Delete scenario UX spec | Medium — complete lifecycle | Small | 🔶 Inline confirmation in Scenarios tab; no exit animation |
+| UX-14 | First-time performance warning | Low — expectation setting | Small | 🔶 Static warning in modal; no backend `first_time` signal |
+| UX-15 | Dead code cleanup | Low (code quality) — housekeeping | Small | ✅ Dead code removed from `useScenarios.ts` |
 
 ---
 
@@ -1167,71 +1198,67 @@ service or agent provisioner needed. The provisioner already supports:
 
 ## Implementation Phases
 
-### Phase 1: Foundation — Backend + Shared Utils + Context
+### Phase 1: Foundation — Backend + Shared Utils + Context ✅
 
 **Files to create:**
-- `graph-query-api/router_scenarios.py` — scenario CRUD (save, list, delete)
-- `frontend/src/utils/sseStream.ts` — shared SSE parser (UX-11)
+- ✅ `graph-query-api/router_scenarios.py` — scenario CRUD (save, list, delete)
+- ✅ `frontend/src/utils/sseStream.ts` — shared SSE parser (UX-11)
 
 **Files to modify:**
-- `graph-query-api/main.py` — mount the new router
-- `graph-query-api/router_ingest.py` — add optional `scenario_name` query parameter to all 5 upload endpoints (see [Backend Changes → Upload Endpoint Parameters](#tarball-scenarioyaml-name-override) for details)
-- `frontend/src/context/ScenarioContext.tsx` — add `activeScenario`, `activePromptSet`, localStorage persistence (UX-10, UX-12)
-- `frontend/src/types/index.ts` — add `SavedScenario`, `ScenarioUploadSlot`, `ProvisioningStatus` interfaces
-- `frontend/src/hooks/useScenarios.ts` — add `savedScenarios`, `fetchSavedScenarios()`, `saveScenario()`, `selectScenario()`; remove dead `uploadScenario()` (UX-15)
+- ✅ `graph-query-api/main.py` — mount the new router
+- ✅ `graph-query-api/router_ingest.py` — add optional `scenario_name` query parameter to all 5 upload endpoints (see [Backend Changes → Upload Endpoint Parameters](#tarball-scenarioyaml-name-override) for details). **Deviation D-3:** runbooks/tickets retain old `scenario` param for backwards compat.
+- ✅ `frontend/src/context/ScenarioContext.tsx` — add `activeScenario`, `activePromptSet`, localStorage persistence (UX-10, UX-12). Also added `provisioningStatus` state + `ProvisioningStatus` discriminated union type (**Deviation D-4**).
+- ✅ `frontend/src/types/index.ts` — add `SavedScenario`, `ScenarioUploadSlot`, `SlotKey`, `SlotStatus` interfaces. (`ProvisioningStatus` lives in `ScenarioContext.tsx` per D-4.)
+- ✅ `frontend/src/hooks/useScenarios.ts` — add `savedScenarios`, `fetchSavedScenarios()`, `saveScenario()`, `deleteSavedScenario()`, `selectScenario()` (uses native `consumeSSE` per **D-1**); remove dead `uploadScenario()` (UX-15)
 
-**Estimated effort:** Small-Medium. Cosmos pattern is identical to `router_prompts.py`. SSE util is extraction, not new logic.
-
-### Phase 2: Add Scenario Form + Settings Restructure
+### Phase 2: Add Scenario Form + Settings Restructure ✅
 
 **Files to create:**
-- `frontend/src/components/AddScenarioModal.tsx` — scenario creation form with multi-drop zone, auto-slot detection, staged file state, sequential upload with per-step progress (UX-4, UX-5)
+- ✅ `frontend/src/components/AddScenarioModal.tsx` — scenario creation form with multi-drop zone, auto-slot detection, staged file state, sequential upload with per-step progress (UX-4, UX-5)
 
 **Files to modify:**
-- `frontend/src/components/SettingsModal.tsx` — restructure to 3 tabs (Scenarios / Data Sources / Upload); Scenarios tab shows saved scenario cards with ⋮ menu; Data Sources tab simplifies when scenario active (UX-3, UX-8); add Escape/backdrop dismiss (UX-9)
+- ✅ `frontend/src/components/SettingsModal.tsx` — restructure to 3 tabs (Scenarios / Data Sources / Upload); Scenarios tab shows saved scenario cards with delete confirmation; Data Sources tab simplifies when scenario active (UX-3, UX-8); Escape/backdrop dismiss (UX-9); replaced inline SSE parsing with `consumeSSE` utility
 
-**Estimated effort:** Medium-Large. This is the bulk of the new UI work.
-
-### Phase 3: Header Integration + Scenario Selection
+### Phase 3: Header Integration + Scenario Selection ✅
 
 **Files to create:**
-- `frontend/src/components/ScenarioChip.tsx` — header bar scenario selector (UX-1)
-- `frontend/src/components/ProvisioningBanner.tsx` — non-blocking provisioning feedback (UX-7)
+- ✅ `frontend/src/components/ScenarioChip.tsx` — header bar scenario selector (UX-1)
+- ✅ `frontend/src/components/ProvisioningBanner.tsx` — non-blocking provisioning feedback (UX-7)
 
 **Files to modify:**
-- `frontend/src/components/Header.tsx` — add `ScenarioChip` and `ProvisioningBanner`; replace hardcoded "5 Agents" with dynamic status (UX-1, UX-2)
+- ✅ `frontend/src/components/Header.tsx` — add `ScenarioChip` and `ProvisioningBanner`; replace hardcoded "5 Agents" with dynamic status (UX-1, UX-2)
 
-**Estimated effort:** Medium. The provisioning flow already exists — this wires it to scenario selection with proper visual feedback.
+### Phase 4: Polish & Edge Cases 🔶
 
-### Phase 4: Polish & Edge Cases
-
-- Override confirmation dialog with existing scenario metadata (UX-6)
-- Delete scenario with confirmation dialog and animation (UX-13)
-- First-time upload performance warning (UX-14)
-- Partial upload recovery — retry individual failed uploads
-- Focus trapping and `aria-modal` for accessibility (UX-9)
-- Loading/spinner states during all async operations
-- Error toasts with auto-dismiss
-- Empty state illustrations for Scenarios tab
+| Item | Status | Notes |
+|------|--------|-------|
+| Override confirmation dialog with existing scenario metadata (UX-6) | 🔶 Partial | Basic confirmation exists in AddScenarioModal; lacks detailed metadata breakdown (vertex count, prompt count) |
+| Delete scenario with confirmation dialog and animation (UX-13) | 🔶 Partial | Inline confirmation dropdown in Scenarios tab; no framer-motion exit animation |
+| First-time upload performance warning (UX-14) | 🔶 Partial | Static warning note in AddScenarioModal; backend doesn't signal `"first_time": true` |
+| Partial upload recovery — retry individual failed uploads | ⬜ Not done | |
+| Focus trapping for accessibility (UX-9) | ⬜ Not done | `aria-modal` and `role="dialog"` are set; true tab-cycle trapping not implemented |
+| Loading/spinner states during all async operations | 🔶 Partial | Provisioning spinner in ScenarioChip; no global loading states |
+| Error toasts with auto-dismiss | ⬜ Not done | Errors display inline, not as toast notifications |
+| Empty state illustrations for Scenarios tab | ⬜ Not done | Empty state text present but no illustration graphics |
 
 ---
 
 ## File Change Inventory
 
-| File | Action | Changes |
-|------|--------|---------|
-| `graph-query-api/router_scenarios.py` | **CREATE** | Scenario CRUD endpoints + `_get_scenarios_container()` |
-| `graph-query-api/main.py` | MODIFY | Add `from router_scenarios import router` + `app.include_router(...)` |
-| `graph-query-api/router_ingest.py` | MODIFY | Add optional `scenario_name: str = Query(default=None)` param to all 5 upload endpoints; use it to override `scenario.yaml` name |
-| `frontend/src/components/AddScenarioModal.tsx` | **CREATE** | Scenario creation form with name input + multi-drop zone + 5 file slots + staged/uploading/done states + Save (UX-4, UX-5) |
-| `frontend/src/components/ScenarioChip.tsx` | **CREATE** | Header bar scenario selector chip + flyout dropdown (UX-1) |
-| `frontend/src/components/ProvisioningBanner.tsx` | **CREATE** | Slim non-blocking provisioning progress banner (UX-7) |
-| `frontend/src/utils/sseStream.ts` | **CREATE** | Shared SSE ReadableStream parser utility (UX-11) |
-| `frontend/src/components/SettingsModal.tsx` | MODIFY | 3 tabs (Scenarios / Data Sources / Upload); scenario card list; simplified Data Sources (UX-3, UX-8); Escape/backdrop dismiss (UX-9) |
-| `frontend/src/components/Header.tsx` | MODIFY | Add `ScenarioChip` + `ProvisioningBanner`; dynamic agent status (UX-1, UX-2) |
-| `frontend/src/context/ScenarioContext.tsx` | MODIFY | Add `activeScenario` + `activePromptSet` state, `setActiveScenario()`, `setActivePromptSet()`, localStorage persistence (UX-10, UX-12) |
-| `frontend/src/hooks/useScenarios.ts` | MODIFY | Add `savedScenarios`, `fetchSavedScenarios()`, `saveScenario()`, `selectScenario()` (uses `fetchEventSource`); remove dead `uploadScenario()` (UX-15) |
-| `frontend/src/types/index.ts` | MODIFY | Add `SavedScenario`, `ScenarioUploadSlot`, `ProvisioningStatus` interfaces |
+| File | Action | Status | Changes |
+|------|--------|--------|--------|
+| `graph-query-api/router_scenarios.py` | **CREATE** | ✅ | Scenario CRUD endpoints + `_get_scenarios_container()` — 272 lines |
+| `graph-query-api/main.py` | MODIFY | ✅ | Add `from router_scenarios import router` + `app.include_router(...)` |
+| `graph-query-api/router_ingest.py` | MODIFY | ✅ | Added `scenario_name` param to all 5 endpoints; graph/telemetry force hardcoded suffixes when override present; runbooks/tickets retain old `scenario` param (D-3); fixed missing `COSMOS_GREMLIN_GRAPH` import (bonus bug fix) |
+| `frontend/src/components/AddScenarioModal.tsx` | **CREATE** | ✅ | Scenario creation form — 628 lines. Multi-drop, `detectSlot()`, staged states, AbortController, override confirmation, first-time warning |
+| `frontend/src/components/ScenarioChip.tsx` | **CREATE** | ✅ | Header chip + flyout dropdown + "+ New Scenario" + Custom mode |
+| `frontend/src/components/ProvisioningBanner.tsx` | **CREATE** | ✅ | 28px banner, SSE step display, 3s auto-dismiss, error dismiss |
+| `frontend/src/utils/sseStream.ts` | **CREATE** | ✅ | `consumeSSE()` + `uploadWithSSE()` — native ReadableStream (D-1) — 143 lines |
+| `frontend/src/components/SettingsModal.tsx` | MODIFY | ✅ | 3 tabs; scenario cards; read-only Data Sources; `consumeSSE` for provisioning; Escape/backdrop dismiss — ~745 lines |
+| `frontend/src/components/Header.tsx` | MODIFY | ✅ | `ScenarioChip` + `ProvisioningBanner`; dynamic agent status from `provisioningStatus` |
+| `frontend/src/context/ScenarioContext.tsx` | MODIFY | ✅ | `activeScenario`, `activePromptSet`, `provisioningStatus` + `ProvisioningStatus` type (D-4), localStorage, `setActiveScenario()` auto-derivation — ~105 lines |
+| `frontend/src/hooks/useScenarios.ts` | MODIFY | ✅ | `savedScenarios`, `fetchSavedScenarios()`, `saveScenario()`, `deleteSavedScenario()`, `selectScenario()` (uses `consumeSSE`, D-1/D-2); dead code removed (UX-15) — ~175 lines |
+| `frontend/src/types/index.ts` | MODIFY | ✅ | `SavedScenario`, `SlotKey`, `SlotStatus`, `ScenarioUploadSlot` — `ProvisioningStatus` in ScenarioContext (D-4) — ~55 lines |
 
 ### Files NOT Changed
 
