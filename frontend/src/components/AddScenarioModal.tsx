@@ -197,12 +197,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
   const nameError = name ? validateName(name) : null;
 
-  // Compute mismatch hint
-  const detectedNamesFromSlots = Object.values(slots)
-    .filter(s => s.file)
-    .map(s => detectSlot(s.file!.name)?.scenarioName)
-    .filter(Boolean) as string[];
-
   const allFilled = SLOT_DEFS.every(d => slots[d.key].file);
   const canSave = !!name && !nameError && allFilled && modalState === 'idle';
 
