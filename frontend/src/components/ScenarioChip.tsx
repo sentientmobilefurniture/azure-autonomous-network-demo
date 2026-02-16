@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { useScenarioContext } from '../context/ScenarioContext';
 import { useScenarios } from '../hooks/useScenarios';
 import { AddScenarioModal } from './AddScenarioModal';
@@ -13,11 +13,11 @@ export function ScenarioChip() {
     activeScenario,
     provisioningStatus,
     setActiveScenario,
+    refreshScenarios,
   } = useScenarioContext();
 
   const {
     savedScenarios,
-    fetchSavedScenarios,
     selectScenario,
     saveScenario,
   } = useScenarios();
@@ -25,15 +25,6 @@ export function ScenarioChip() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const chipRef = useRef<HTMLDivElement>(null);
-
-  // Fetch saved scenarios on first dropdown open
-  const [hasFetched, setHasFetched] = useState(false);
-  useEffect(() => {
-    if (dropdownOpen && !hasFetched) {
-      fetchSavedScenarios();
-      setHasFetched(true);
-    }
-  }, [dropdownOpen, hasFetched, fetchSavedScenarios]);
 
   useClickOutside(chipRef, () => setDropdownOpen(false), dropdownOpen);
 
@@ -156,8 +147,7 @@ export function ScenarioChip() {
         open={addModalOpen}
         onClose={() => setAddModalOpen(false)}
         onSaved={() => {
-          fetchSavedScenarios();
-          setHasFetched(false); // force re-fetch next open
+          refreshScenarios();
         }}
         existingNames={savedScenarios.map(s => s.id)}
         saveScenarioMeta={saveScenario}

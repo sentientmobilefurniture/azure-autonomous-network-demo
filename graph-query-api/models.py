@@ -66,6 +66,7 @@ class TopologyMeta(BaseModel):
     edge_count: int
     query_time_ms: float
     labels: list[str] = []
+    cached: bool = False
 
 
 class TopologyRequest(BaseModel):

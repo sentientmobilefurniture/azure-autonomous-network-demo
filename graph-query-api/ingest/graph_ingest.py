@@ -177,6 +177,10 @@ async def upload_graph(
                 f"Graph loaded: {total_v} vertices, {total_e} edges → {gremlin_graph}",
                 100,
             )
+            # Invalidate topology cache for this graph
+            from router_topology import invalidate_topology_cache
+            invalidate_topology_cache(gremlin_graph)
+
             progress.complete({
                 "scenario": sc_name,
                 "graph": gremlin_graph,

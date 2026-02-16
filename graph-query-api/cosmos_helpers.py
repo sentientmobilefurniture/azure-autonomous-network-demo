@@ -119,15 +119,25 @@ def _arm_ensure_container(db_name: str, container_name: str, pk_path: str) -> No
 
     try:
         mgmt = get_mgmt_client()
+        # Check existence first — partition keys are immutable so update would
+        # fail with BadRequest if the PK path doesn't match.
+        try:
+            mgmt.sql_resources.get_sql_container(rg, account_name, db_name, container_name)
+            logger.debug("Container %s/%s already exists — skipping ARM creation", db_name, container_name)
+            return
+        except Exception:
+            pass  # doesn't exist yet — create below
+
         mgmt.sql_resources.begin_create_update_sql_container(
             rg, account_name, db_name, container_name,
             {
                 "resource": {
                     "id": container_name,
-                    "partitionKey": {"paths": [pk_path], "kind": "Hash"},
+                    "partitionKey": {"paths": [pk_path], "kind": "Hash", "version": 2},
                 }
             },
         ).result()
+        logger.info("Created container %s/%s (pk=%s)", db_name, container_name, pk_path)
     except Exception as e:
         if "Conflict" not in str(e):
             logger.warning("ARM container creation failed: %s", e)

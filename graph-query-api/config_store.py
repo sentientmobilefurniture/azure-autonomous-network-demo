@@ -25,7 +25,7 @@ def _get_store():
     global _config_store
     if _config_store is None:
         _config_store = get_document_store(
-            "scenarios", "configs", "/scenario_name", ensure_created=True,
+            "scenarios", "configs", "/id", ensure_created=True,
         )
     return _config_store
 

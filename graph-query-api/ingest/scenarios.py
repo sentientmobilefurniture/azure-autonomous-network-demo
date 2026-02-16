@@ -89,6 +89,11 @@ async def delete_scenario(graph_name: str):
         c = create_gremlin_client(graph_name)
         gremlin_submit_with_retry(c, "g.V().drop()")
         c.close()
+
+        # Invalidate topology cache for this graph
+        from router_topology import invalidate_topology_cache
+        invalidate_topology_cache(graph_name)
+
         return {"status": "cleared", "graph": graph_name}
     except Exception as e:
         raise HTTPException(500, f"Failed to clear graph: {e}")

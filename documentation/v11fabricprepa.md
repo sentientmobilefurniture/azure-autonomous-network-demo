@@ -1,6 +1,7 @@
 # V11 Fabric Prep-A — Zero-Risk Foundational Tasks
 
 > **Created:** 2026-02-16
+> **Audited:** 2026-02-16 (against actual codebase + post-v11b/v11c state)
 > **Status:** ⬜ Not started
 > **Source:** v11fabricv3.md
 > **Purpose:** Extract every task from the consolidated plan that is zero-risk,
@@ -14,10 +15,33 @@
 
 Every task below meets ALL of these criteria:
 - **No existing behavior changes** — adds new constants, fixes dead-on-arrival bugs, or adds commented-out template values
-- **No UI changes** — backend config / constants / template files only (except two trivial frontend bug fixes)
+- **No UI changes** — backend config / constants / template files only (except hook-level frontend bug fixes in `useFabricDiscovery.ts`)
 - **No new dependencies required** (except one pyproject.toml addition that adds no code)
 - **Independently testable** — each task can be verified in isolation
 - **Fail-safe** — if any task is wrong, the app continues working exactly as before
+
+### v11b compatibility
+
+v11b (Terminal Visibility Overhaul) was implemented. **Zero conflicts** with this prep
+plan — no overlapping files. Two synergies:
+- After PREP-6 (URL fix), Fabric provisioning SSE progress will be visible in the
+  always-on Data Ops terminal tab
+- After PREP-8 (upload guard), the rejection log will appear in Data Ops via the
+  `graph-query-api.ingest` logger
+
+### v11c compatibility
+
+v11c (Data Retrieval Performance Optimisation) was implemented. **One overlapping file,
+zero conflicts.** Key changes from v11c that affect this plan:
+
+| v11c change | File | Impact on prep |
+|---|---|---|
+| Topology TTL cache + `invalidate_topology_cache()` | `ingest/graph_ingest.py` | PREP-8 guard (early return for Fabric) fires BEFORE the cache invalidation call — correct behavior, no data was loaded so nothing to invalidate |
+| Scenario list TTL cache + `invalidate_scenarios_cache()` | `router_scenarios.py` | No overlap with any prep task |
+| Deduplicate frontend fetches | `useScenarios.ts`, `ScenarioChip.tsx`, etc. | No overlap — `useFabricDiscovery.ts` was not touched |
+| Gremlin connection warm-up in lifespan | `backends/cosmosdb.py`, `main.py` | No overlap |
+
+**One gotcha corrected in PREP-8** — see the updated audit note there.
 
 ---
 
@@ -36,6 +60,8 @@ have a reference for what can be configured:
 # -- Microsoft Fabric (optional) -------------------------------------------
 # FABRIC_WORKSPACE_ID=                # Fabric workspace GUID
 # FABRIC_GRAPH_MODEL_ID=              # Graph Model GUID (auto-set by provisioning)
+# FABRIC_API_URL=https://api.fabric.microsoft.com/v1
+# FABRIC_SCOPE=https://api.fabric.microsoft.com/.default
 # FABRIC_WORKSPACE_NAME=AutonomousNetworkDemo
 # FABRIC_CAPACITY_ID=                 # Fabric capacity GUID
 # FABRIC_ONTOLOGY_ID=                 # Ontology GUID (auto-set by provisioning)
@@ -46,6 +72,10 @@ have a reference for what can be configured:
 # FABRIC_KQL_DB_NAME=                 # KQL DB name (auto-set)
 # EVENTHOUSE_QUERY_URI=               # Eventhouse query endpoint
 ```
+
+> **Audit note:** Added `FABRIC_API_URL` and `FABRIC_SCOPE` — these already exist in
+> `fabric_config.py` with sensible defaults but were missing from the template. Including
+> them lets deployers know they can override the API base URL (useful for sovereign clouds).
 
 ---
 
@@ -105,41 +135,112 @@ until you have a Graph Model ID, but you need discovery to provision and GET tha
 GQL query execution (`FabricGQLBackend.execute_query()`) keeps gating on
 `FABRIC_QUERY_READY` — no change to query behavior.
 
+> **⚠️ Audit gotcha — import + error message:**
+>
+> 1. **Import update required.** The current import block in `router_fabric_discovery.py` is:
+>    ```python
+>    from adapters.fabric_config import (
+>        FABRIC_API_URL,
+>        FABRIC_SCOPE,
+>        FABRIC_WORKSPACE_ID,
+>        FABRIC_CONFIGURED,
+>    )
+>    ```
+>    Add `FABRIC_WORKSPACE_CONNECTED` to this import. Keep `FABRIC_CONFIGURED` —
+>    it's still used by the `/health` endpoint.
+>
+> 2. **Error message is wrong after gate change.** The current 503 detail says:
+>    `"Set FABRIC_WORKSPACE_ID and FABRIC_GRAPH_MODEL_ID environment variables."`
+>    After gating on workspace-only, update to:
+>    `"Fabric workspace not configured. Set FABRIC_WORKSPACE_ID environment variable."`
+
 ---
 
-### PREP-5: Fix provision URL bug in `useFabricDiscovery.ts` _(from FE-2 / Bug B2)_
+### PREP-5: Fix health check bug in `useFabricDiscovery.ts` _(from FE-1 / Bug B1 — was missing from plan)_
 
-**File:** `frontend/src/hooks/useFabricDiscovery.ts` (or equivalent path)
+**File:** `frontend/src/hooks/useFabricDiscovery.ts`
+**Effort:** 10 min
+**Risk:** Zero — currently always evaluates to `false`. Can only improve things.
+
+> **⚠️ Audit finding: this task was omitted from the original prep plan.** The plan
+> skipped B1 because v11fabricv3.md couples it with BE-3 (richer health endpoint).
+> But the fix can be done independently against the current backend response format.
+
+The backend `/query/fabric/health` returns `{configured: bool, workspace_id: str}`.
+The frontend checks `data.status === 'ok'` — there is no `status` field, so `healthy`
+is **always `false`**.
+
+```typescript
+// BEFORE (broken — data.status is always undefined):
+setHealthy(data.status === 'ok');
+if (data.status !== 'ok') {
+  setError(data.error || 'Fabric not configured');
+}
+
+// AFTER (matches current backend response):
+setHealthy(data.configured === true);
+if (!data.configured) {
+  setError('Fabric not fully configured');
+}
+```
+
+When BE-3 (richer health) is implemented later, this will change again to
+`data.workspace_connected`, but fixing it now unblocks accurate health display.
+
+---
+
+### PREP-6: Fix provision URL bug in `useFabricDiscovery.ts` _(from FE-2 / Bug B2)_
+
+**File:** `frontend/src/hooks/useFabricDiscovery.ts`
 **Effort:** 10 min
 **Risk:** Zero — fixes a route that currently 404s every time. Can only improve things.
 
-```typescript
-// BEFORE (broken — always 404):
-const url = '/api/fabric/provision/pipeline';
+**Verified against codebase:** Line 142 has `'/api/fabric/provision/pipeline'`. The
+backend route is `@router.post("/provision")` on a router with `prefix="/api/fabric"`,
+making the correct URL `/api/fabric/provision`.
 
-// AFTER (correct):
-const url = '/api/fabric/provision';
+```typescript
+// BEFORE (broken — always 404, line 142):
+const res = await fetch('/api/fabric/provision/pipeline', {
+
+// AFTER (correct — matches router prefix + route):
+const res = await fetch('/api/fabric/provision', {
 ```
+
+> **v11b synergy:** After this fix, Fabric provisioning SSE progress events will be
+> visible in the persistent Data Ops terminal tab (v11b monitors `app.fabric-provision` logger).
 
 ---
 
-### PREP-6: Fix discovery response parsing in `useFabricDiscovery.ts` _(from FE-4 / Bug B4)_
+### PREP-7: Fix discovery response parsing in `useFabricDiscovery.ts` _(from FE-4 / Bug B4)_
 
-**File:** `frontend/src/hooks/useFabricDiscovery.ts` (or equivalent path)
+**File:** `frontend/src/hooks/useFabricDiscovery.ts`
 **Effort:** 10 min
 **Risk:** Zero — fixes parsing that currently returns empty arrays every time
 
-```typescript
-// BEFORE (broken — backend returns flat list, not {items: [...]}):
-const items = data.items || [];
+> **⚠️ Audit gotcha — THREE locations, not one.** The `data.items || []` bug appears
+> in all three discovery fetch functions. All three must be fixed:
 
-// AFTER:
-const items = Array.isArray(data) ? data : [];
+```typescript
+// fetchOntologies (line ~89):
+// BEFORE: setOntologies(data.items || []);
+setOntologies(Array.isArray(data) ? data : []);
+
+// fetchGraphModels (line ~102):
+// BEFORE: setGraphModels(data.items || []);
+setGraphModels(Array.isArray(data) ? data : []);
+
+// fetchEventhouses (line ~117):
+// BEFORE: setEventhouses(data.items || []);
+setEventhouses(Array.isArray(data) ? data : []);
 ```
+
+**Why this is the correct fix:** All three backend endpoints declare
+`response_model=list[FabricItem]` — they return a flat JSON array, not a wrapper object.
 
 ---
 
-### PREP-7: Upload guard for Fabric scenarios _(from A5 / BE-4)_
+### PREP-8: Upload guard for Fabric scenarios _(from A5 / BE-4)_
 
 **File:** `graph-query-api/ingest/graph_ingest.py`
 **Effort:** 30 min
@@ -147,17 +248,70 @@ const items = Array.isArray(data) ? data : [];
 (`FabricGQLBackend.ingest()` raises `NotImplementedError`). Replaces a 500 with a
 clear 400 error message.
 
-When `POST /query/upload/graph` is called for a scenario with
-`graph_connector: "fabric-gql"`, return HTTP 400:
+> **⚠️ Audit gotcha #1 — connector detection source matters.**
+>
+> `graph_ingest.py` calls `get_backend_for_graph(gremlin_graph)` with NO `backend_type`
+> argument — it falls back to the **global** `GRAPH_BACKEND` env var. This means:
+> - If `GRAPH_BACKEND=cosmosdb` (the common case), uploading a Fabric scenario tarball
+>   would try to ingest into Cosmos (wrong, but won't crash)
+> - If `GRAPH_BACKEND=fabric-gql`, it crashes with `NotImplementedError`
+>
+> **The guard must check the uploaded tarball's manifest, NOT the global backend type.**
 
-> "This scenario uses Fabric for graph data. Graph topology is managed via the
-> Fabric provisioning pipeline. Upload telemetry, runbooks, and tickets normally."
+> **⚠️ Audit gotcha #2 — can't return JSONResponse from inside `work()`.**
+>
+> The original plan said to return `JSONResponse(status_code=400, ...)`. This is
+> **wrong** — the guard runs inside `async def work(progress: SSEProgress):`, which
+> is a callback passed to `sse_upload_response()`. The `sse_upload_response` wrapper
+> catches ALL exceptions from `work()` via `progress.error(str(e))` and streams them
+> as SSE error events. You cannot return an HTTP response from inside `work()`.
+>
+> **Two correct approaches:**
+>
+> **Option A (preferred): Raise inside `work()` — let SSE wrapper handle it.**
+> The `sse_upload_response` wrapper catches exceptions and calls
+> `progress.error(str(e))`, which streams `{"event": "error", "data": ...}` to the
+> frontend. The frontend `consumeSSE` already has an `onError` handler.
+>
+> ```python
+> # Inside work(), after manifest is parsed, BEFORE backend.ingest():
+> graph_connector = manifest.get("data_sources", {}).get("graph", {}).get("connector", "")
+> if graph_connector == "fabric-gql":
+>     raise ValueError(
+>         "This scenario uses Fabric for graph data. "
+>         "Graph topology is managed via the Fabric provisioning pipeline. "
+>         "Upload telemetry, runbooks, and tickets normally."
+>     )
+> ```
+>
+> **Option B: Check before `sse_upload_response()` — requires pre-reading tarball.**
+> Extract `scenario.yaml` before entering the SSE stream to return a proper HTTP 400.
+> More correct HTTP semantics but adds complexity. Not recommended for this prep task.
 
-This prevents a confusing unhandled exception and gives users a clear explanation.
+> **⚠️ Audit gotcha #3 (v11c) — file has changed since original plan.**
+>
+> v11c added `invalidate_topology_cache(gremlin_graph)` at the end of `work()`,
+> after `backend.ingest()` completes (line ~185). The PREP-8 guard fires BEFORE
+> `backend.ingest()` — if the guard raises, the topology cache invalidation is
+> correctly skipped (no data was loaded, nothing to invalidate). No conflict.
+
+> **Safety-net catch** around `backend.ingest()` for the global-override case:
+> ```python
+> try:
+>     result = await backend.ingest(...)
+> except NotImplementedError:
+>     raise ValueError(
+>         "This backend does not support direct graph ingest. "
+>         "Use the provisioning pipeline instead."
+>     )
+> ```
+
+> **v11b synergy:** The rejection will be logged by `graph-query-api.ingest` logger
+> and visible in the always-on Data Ops terminal tab.
 
 ---
 
-### PREP-8: Add Fabric provision dependencies to `pyproject.toml` _(from B6)_
+### PREP-9: Add Fabric provision dependencies to `pyproject.toml` _(from B6)_
 
 **File:** `api/pyproject.toml`
 **Effort:** 15 min
@@ -170,6 +324,15 @@ This prevents a confusing unhandled exception and gives users a clear explanatio
 
 Having these installed early means Phase B can focus on logic, not environment setup.
 
+> **⚠️ Audit gotcha — dependency chain.** `azure-kusto-ingest` pulls in
+> `azure-kusto-data`, which depends on `msal` and `azure-core`. These *should* be
+> compatible since `azure-identity>=1.19.0` is already a dependency, but version
+> pinning conflicts are possible.
+>
+> **Action:** After adding, run `pip install -e . --dry-run` (or `uv pip compile`) to
+> verify resolution succeeds before deploying. If conflicts arise, pin
+> `azure-kusto-data>=4.3.0` explicitly to control the resolved version.
+
 ---
 
 ## Dependency Graph
@@ -179,25 +342,27 @@ PREP-1 (env template)         — independent, do anytime
 PREP-2 (split CONFIGURED)     — independent, do first (unblocks PREP-4)
 PREP-3 (re-add env vars)      — independent, do anytime
 PREP-4 (discovery gate)       — depends on PREP-2
-PREP-5 (fix provision URL)    — independent, do anytime
-PREP-6 (fix discovery parse)  — independent, do anytime
-PREP-7 (upload guard)         — independent, do anytime
-PREP-8 (add pip deps)         — independent, do anytime
+PREP-5 (fix health check)     — independent, do anytime
+PREP-6 (fix provision URL)    — independent, do anytime
+PREP-7 (fix discovery parse)  — independent, do anytime
+PREP-8 (upload guard)         — independent, do anytime
+PREP-9 (add pip deps)         — independent, do anytime
 ```
 
-Recommended order: PREP-2 → PREP-3 → PREP-4 → PREP-1 → PREP-5 → PREP-6 → PREP-7 → PREP-8
+Recommended order: PREP-2 → PREP-3 → PREP-4 → PREP-1 → PREP-5 → PREP-6 → PREP-7 → PREP-8 → PREP-9
 
-All 8 tasks are independent of each other except PREP-4 depends on PREP-2.
-Five of the eight can be done in parallel.
+All 9 tasks are independent of each other except PREP-4 depends on PREP-2.
+Six of the nine can be done in parallel.
 
 ---
 
 ## What This Unblocks
 
-After completing all 8 tasks:
+After completing all 9 tasks:
 
 | Capability | Before | After |
 |---|---|---|
+| Fabric health check | Always shows unhealthy (checks missing `status` field) | Correctly reflects `configured` state |
 | Fabric discovery (list lakehouses, ontologies, etc.) | Blocked until Graph Model ID set | Works with workspace ID only |
 | Provision button | 404s every time | Hits correct endpoint |
 | Discovery response parsing | Always returns empty arrays | Returns real resource lists |
@@ -206,5 +371,23 @@ After completing all 8 tasks:
 | Config constants for provisioning | Deleted by refactor | Available for Phase B |
 | Provision pipeline dependencies | Not installed | Ready for Phase B code |
 
-**This prep work makes Phase A (bug fixes + config) from v11fabricv3.md ~80% complete
+**This prep work makes Phase A (bug fixes + config) from v11fabricv3.md ~90% complete
 and removes all blockers for Phase B (provision pipeline completion).**
+
+---
+
+## Audit Log
+
+| # | Finding | Severity | Resolution |
+|---|---------|----------|------------|
+| 1 | Health check bug (B1) was omitted — `data.status === 'ok'` always false | **HIGH** | Added as PREP-5 |
+| 2 | PREP-4: error message says "Set WORKSPACE_ID and GRAPH_MODEL_ID" but gate only requires workspace | MEDIUM | Added audit note to PREP-4 |
+| 3 | PREP-4: import of `FABRIC_WORKSPACE_CONNECTED` not mentioned | MEDIUM | Added audit note to PREP-4 |
+| 4 | PREP-7: `data.items \|\| []` bug appears in 3 functions, not 1 | MEDIUM | Updated PREP-7 to list all 3 locations |
+| 5 | PREP-8: guard must check manifest connector, not global backend | **HIGH** | Rewrote PREP-8 with manifest check + safety-net catch |
+| 6 | PREP-9: `azure-kusto-ingest` has a deep dependency chain | LOW | Added dry-run verification step |
+| 7 | PREP-1: `FABRIC_API_URL` and `FABRIC_SCOPE` missing from template | LOW | Added to PREP-1 template block |
+| 8 | v11b (Terminal Visibility Overhaul) — no conflicts, synergies noted | INFO | Added header note + per-task synergy notes |
+| 9 | **PREP-8: can't return JSONResponse from inside `work()`** — `sse_upload_response` wraps `work()` in a task; exceptions are caught and streamed as SSE error events, not HTTP responses | **HIGH** | Rewrote PREP-8: use `raise ValueError(...)` instead of `return JSONResponse(...)`. Also changed safety-net from `HTTPException` to `ValueError` for same reason. |
+| 10 | v11c added `invalidate_topology_cache()` call at end of `work()` in `graph_ingest.py` — PREP-8 guard fires before this point, no conflict | INFO | Added v11c gotcha note to PREP-8 |
+| 11 | v11c — no other overlapping files (scenarios cache, frontend dedup, Gremlin warm-up all in separate files) | INFO | Added v11c compatibility section |

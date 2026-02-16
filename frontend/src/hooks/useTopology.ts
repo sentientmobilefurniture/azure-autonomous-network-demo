@@ -50,6 +50,7 @@ export function useTopology() {
   // Refetch when active graph changes
   useEffect(() => {
     fetchTopology();
+    return () => { abortRef.current?.abort(); };
   }, [fetchTopology]);
 
   return { data, loading, error, refetch: fetchTopology };

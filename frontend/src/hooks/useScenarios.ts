@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { SavedScenario } from '../types';
 import { useScenarioContext } from '../context/ScenarioContext';
 import { triggerProvisioning } from '../utils/triggerProvisioning';
 
@@ -23,11 +22,11 @@ export function useScenarios() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // New: saved scenario records from Cosmos
-  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>([]);
-  const [savedLoading, setSavedLoading] = useState(false);
-
+  // Saved scenarios — single source of truth from ScenarioContext
   const {
+    savedScenarios,
+    scenariosLoading,
+    refreshScenarios,
     setActiveScenario,
     setProvisioningStatus,
     setScenarioStyles,
@@ -60,20 +59,6 @@ export function useScenarios() {
     }
   }, []);
 
-  // Fetch saved scenario records from Cosmos
-  const fetchSavedScenarios = useCallback(async () => {
-    setSavedLoading(true);
-    try {
-      const res = await fetch('/query/scenarios/saved');
-      const data = await res.json();
-      setSavedScenarios(data.scenarios || []);
-    } catch (e) {
-      console.warn('Failed to fetch saved scenarios:', e);
-    } finally {
-      setSavedLoading(false);
-    }
-  }, []);
-
   // Save a scenario record to Cosmos (after all uploads succeed)
   const saveScenario = useCallback(async (meta: {
     name: string;
@@ -96,10 +81,10 @@ export function useScenarios() {
       throw new Error(`Save failed: ${res.status} ${text}`);
     }
     const data = await res.json();
-    // Refresh the list
-    await fetchSavedScenarios();
+    // Refresh the canonical list in context
+    await refreshScenarios();
     return data;
-  }, [fetchSavedScenarios]);
+  }, [refreshScenarios]);
 
   // Delete a saved scenario record
   const deleteSavedScenario = useCallback(async (name: string) => {
@@ -110,9 +95,9 @@ export function useScenarios() {
       const text = await res.text();
       throw new Error(`Delete failed: ${res.status} ${text}`);
     }
-    // Refresh the list
-    await fetchSavedScenarios();
-  }, [fetchSavedScenarios]);
+    // Refresh the canonical list in context
+    await refreshScenarios();
+  }, [refreshScenarios]);
 
   // Select a saved scenario: update context bindings + auto-provision agents
   const selectScenario = useCallback(async (name: string) => {
@@ -149,10 +134,10 @@ export function useScenarios() {
     fetchScenarios,
     fetchIndexes,
 
-    // Saved scenario management
+    // Saved scenario management — backed by ScenarioContext
     savedScenarios,
-    savedLoading,
-    fetchSavedScenarios,
+    savedLoading: scenariosLoading,
+    fetchSavedScenarios: refreshScenarios,  // alias for backward compat
     saveScenario,
     deleteSavedScenario,
     selectScenario,

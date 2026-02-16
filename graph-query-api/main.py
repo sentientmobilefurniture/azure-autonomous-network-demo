@@ -56,7 +56,7 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(nam
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Validate config at startup; clean up backend on shutdown."""
+    """Validate config at startup; pre-warm backends; clean up on shutdown."""
     required = BACKEND_REQUIRED_VARS.get(GRAPH_BACKEND, ())
     missing = [v for v in required if not os.getenv(v)]
     if missing:
@@ -71,8 +71,40 @@ async def _lifespan(app: FastAPI):
             "Missing telemetry env vars — /query/telemetry will not work: %s",
             ", ".join(missing_telemetry),
         )
+
+    # ------------------------------------------------------------------
+    # Pre-warm Gremlin backends for known scenarios (v11c Phase 3)
+    # ------------------------------------------------------------------
+    keepalive_tasks: list[asyncio.Task] = []
+    try:
+        from router_scenarios import _get_store
+        from backends import get_backend_for_graph
+
+        store = _get_store()
+        scenarios = await store.list(query="SELECT c.id, c.resources FROM c")
+        for s in scenarios:
+            graph = (s.get("resources") or {}).get("graph")
+            if graph:
+                try:
+                    backend = get_backend_for_graph(graph)
+                    if hasattr(backend, "warm_connection"):
+                        await asyncio.to_thread(backend.warm_connection)
+                    if hasattr(backend, "keepalive_loop"):
+                        task = asyncio.create_task(backend.keepalive_loop())
+                        keepalive_tasks.append(task)
+                except Exception as e:
+                    logger.warning("Pre-warm failed for graph=%s: %s", graph, e)
+        logger.info("Pre-warmed %d Gremlin backend(s)", len(keepalive_tasks))
+    except Exception as e:
+        logger.warning("Skipping Gremlin pre-warm (scenarios unavailable): %s", e)
+
     logger.info("Starting with GRAPH_BACKEND=%s", GRAPH_BACKEND)
     yield
+
+    # Cancel keepalive tasks
+    for task in keepalive_tasks:
+        task.cancel()
+
     await close_graph_backend()
     close_telemetry_backend()
 

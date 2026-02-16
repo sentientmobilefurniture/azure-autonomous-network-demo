@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
@@ -57,16 +59,38 @@ def _validate_scenario_name(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# DocumentStore helper
+# DocumentStore helper (lazy singleton)
 # ---------------------------------------------------------------------------
+
+_store: DocumentStore | None = None
 
 
 def _get_store() -> DocumentStore:
-    """Get the DocumentStore for scenario metadata."""
-    return get_document_store(
-        SCENARIOS_DATABASE, SCENARIOS_CONTAINER, "/id",
-        ensure_created=True,
-    )
+    """Get (or create) the singleton DocumentStore for scenario metadata."""
+    global _store
+    if _store is None:
+        _store = get_document_store(
+            SCENARIOS_DATABASE, SCENARIOS_CONTAINER, "/id",
+            ensure_created=True,
+        )
+    return _store
+
+
+# ---------------------------------------------------------------------------
+# Scenario list TTL cache
+# ---------------------------------------------------------------------------
+
+_scenarios_cache: tuple[float, list[dict]] | None = None
+_scenarios_lock = threading.Lock()
+SCENARIOS_TTL = 15  # seconds
+
+
+def invalidate_scenarios_cache() -> None:
+    """Clear the cached scenario list."""
+    global _scenarios_cache
+    with _scenarios_lock:
+        _scenarios_cache = None
+    logger.debug("Scenarios cache invalidated")
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +147,21 @@ class ScenarioSaveRequest(BaseModel):
 @router.get("/scenarios/saved", summary="List saved scenarios")
 async def list_saved_scenarios():
     """Return all saved scenario documents from the scenarios database."""
+    global _scenarios_cache
+
+    # Check cache
+    with _scenarios_lock:
+        if _scenarios_cache and time.time() < _scenarios_cache[0]:
+            return {"scenarios": _scenarios_cache[1]}
+
     try:
         store = _get_store()
         items = await store.list(
             query="SELECT * FROM c ORDER BY c.updated_at DESC",
         )
+        # Cache the result
+        with _scenarios_lock:
+            _scenarios_cache = (time.time() + SCENARIOS_TTL, items)
         return {"scenarios": items}
     except HTTPException:
         raise
@@ -184,6 +218,7 @@ async def save_scenario(req: ScenarioSaveRequest):
         pass  # Document doesn't exist yet — OK
 
     result = await store.upsert(doc)
+    invalidate_scenarios_cache()
     logger.info("Saved scenario: %s", name)
     return {"scenario": result, "status": "saved"}
 
@@ -206,6 +241,7 @@ async def delete_saved_scenario(name: str):
         raise
 
     logger.info("Deleted scenario record: %s", name)
+    invalidate_scenarios_cache()
     return {"name": name, "status": "deleted"}
 
 

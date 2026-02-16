@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
 import type { SavedScenario } from '../types';
 
 interface ScenarioState {
@@ -187,30 +187,39 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
     return headers;
   }, [activeGraph]);
 
+  const contextValue = useMemo(() => ({
+    activeScenario,
+    activeGraph,
+    activeRunbooksIndex,
+    activeTicketsIndex,
+    activePromptSet,
+    provisioningStatus,
+    scenarioNodeColors,
+    scenarioNodeSizes,
+    savedScenarios,
+    activeScenarioRecord,
+    scenariosLoading,
+    refreshScenarios,
+    setActiveScenario,
+    setActiveGraph,
+    setActiveRunbooksIndex,
+    setActiveTicketsIndex,
+    setActivePromptSet,
+    setProvisioningStatus,
+    setScenarioStyles,
+    scenarioReady,
+    getQueryHeaders,
+  }), [
+    activeScenario, activeGraph, activeRunbooksIndex, activeTicketsIndex,
+    activePromptSet, provisioningStatus, scenarioNodeColors, scenarioNodeSizes,
+    savedScenarios, activeScenarioRecord, scenariosLoading, refreshScenarios,
+    setActiveScenario, setActiveGraph, setActiveRunbooksIndex, setActiveTicketsIndex,
+    setActivePromptSet, setProvisioningStatus, setScenarioStyles, scenarioReady,
+    getQueryHeaders,
+  ]);
+
   return (
-    <ScenarioCtx.Provider value={{
-      activeScenario,
-      activeGraph,
-      activeRunbooksIndex,
-      activeTicketsIndex,
-      activePromptSet,
-      provisioningStatus,
-      scenarioNodeColors,
-      scenarioNodeSizes,
-      savedScenarios,
-      activeScenarioRecord,
-      scenariosLoading,
-      refreshScenarios,
-      setActiveScenario,
-      setActiveGraph,
-      setActiveRunbooksIndex,
-      setActiveTicketsIndex,
-      setActivePromptSet,
-      setProvisioningStatus,
-      setScenarioStyles,
-      scenarioReady,
-      getQueryHeaders,
-    }}>
+    <ScenarioCtx.Provider value={contextValue}>
       {children}
     </ScenarioCtx.Provider>
   );

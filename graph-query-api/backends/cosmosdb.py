@@ -457,3 +457,32 @@ class CosmosDBGremlinBackend:
                 except Exception:
                     pass
                 self._client = None
+
+    # ------------------------------------------------------------------
+    # Connection warm-up & keepalive (Phase 3 — v11c)
+    # ------------------------------------------------------------------
+
+    def warm_connection(self) -> None:
+        """Eagerly establish the Gremlin WSS connection.
+
+        Call via ``asyncio.to_thread()`` to avoid blocking the event loop.
+        """
+        try:
+            self._get_client()
+            logger.info("Gremlin WSS connection warmed for graph=%s", self._graph_name)
+        except Exception as e:
+            logger.warning("Gremlin warm-up failed for graph=%s: %s", self._graph_name, e)
+
+    async def keepalive_loop(self) -> None:
+        """Periodic lightweight ping to prevent Cosmos Gremlin idle disconnect.
+
+        Cosmos disconnects idle WSS after ~30 min.  A ``g.V().count()``
+        every 5 min keeps the connection alive (~3 RU per ping).
+        """
+        while True:
+            await asyncio.sleep(300)  # 5 minutes
+            try:
+                await asyncio.to_thread(self._submit_query, "g.V().count()")
+                logger.debug("Keepalive ping OK  graph=%s", self._graph_name)
+            except Exception:
+                pass  # will reconnect on next real query
