@@ -15,7 +15,7 @@ interface ModalShellProps {
 
 /**
  * Shared modal chrome — backdrop, dialog container, header with title + close,
- * scrollable body, and footer. Used by SettingsModal and AddScenarioModal.
+ * scrollable body, and footer.
  */
 export function ModalShell({ title, onClose, footer, children, className }: ModalShellProps) {
   const handleBackdropClick = (e: React.MouseEvent) => {

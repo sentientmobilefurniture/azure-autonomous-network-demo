@@ -71,6 +71,7 @@ class ScenarioContext:
     prompts_database: str            # "prompts" (shared DB, pre-created by Bicep)
     prompts_container: str           # "cloud-outage" (per-scenario container name)
     backend_type: str
+    telemetry_backend_type: str  # "cosmosdb-nosql" or "fabric-kql"
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +82,11 @@ CONNECTOR_TO_BACKEND: dict[str, str] = {
     "cosmosdb-gremlin": "cosmosdb",
     "fabric-gql": "fabric-gql",
     "mock": "mock",
+}
+
+TELEMETRY_CONNECTOR_MAP: dict[str, str] = {
+    "cosmosdb-nosql": "cosmosdb-nosql",
+    "fabric-kql": "fabric-kql",
 }
 
 
@@ -107,6 +113,7 @@ async def get_scenario_context(
 
     # Per-scenario backend resolution: check config store for connector type
     backend_type = GRAPH_BACKEND  # default
+    telemetry_backend_type = "cosmosdb-nosql"  # default
     try:
         from config_store import fetch_scenario_config
         config = await fetch_scenario_config(prefix)
@@ -117,6 +124,13 @@ async def get_scenario_context(
         )
         if connector:
             backend_type = CONNECTOR_TO_BACKEND.get(connector, connector)
+        tel_connector = (
+            config.get("data_sources", {})
+                  .get("telemetry", {})
+                  .get("connector", "")
+        )
+        if tel_connector:
+            telemetry_backend_type = TELEMETRY_CONNECTOR_MAP.get(tel_connector, "cosmosdb-nosql")
     except Exception:
         pass  # No config in store — use env var default
 
@@ -128,6 +142,7 @@ async def get_scenario_context(
         prompts_database="prompts",                # shared DB
         prompts_container=prefix,                  # scenario container name
         backend_type=backend_type,
+        telemetry_backend_type=telemetry_backend_type,
     )
 
 # ---------------------------------------------------------------------------

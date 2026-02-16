@@ -45,6 +45,10 @@ export interface FabricDiscoveryState {
 export function useFabricDiscovery() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(false);
+  const [workspaceConnected, setWorkspaceConnected] = useState<boolean | null>(null);
+  const [queryReady, setQueryReady] = useState<boolean | null>(null);
+  const [provisionRetryFrom, setProvisionRetryFrom] = useState<string | null>(null);
+  const [provisionCompleted, setProvisionCompleted] = useState<string[]>([]);
 
   const [ontologies, setOntologies] = useState<FabricItem[]>([]);
   const [graphModels, setGraphModels] = useState<FabricItem[]>([]);
@@ -67,9 +71,11 @@ export function useFabricDiscovery() {
     try {
       const res = await fetch('/query/fabric/health');
       const data = await res.json();
-      setHealthy(data.configured === true);
-      if (!data.configured) {
-        setError('Fabric not fully configured');
+      setHealthy(data.workspace_connected === true);
+      setWorkspaceConnected(data.workspace_connected ?? false);
+      setQueryReady(data.query_ready ?? false);
+      if (!data.workspace_connected) {
+        setError('Fabric workspace not connected');
       }
     } catch (e) {
       setHealthy(false);
@@ -198,6 +204,8 @@ export function useFabricDiscovery() {
           receivedTerminalEvent = true;
           setProvisionState('error');
           setProvisionError(data.error);
+          setProvisionRetryFrom(data.retry_from ?? null);
+          setProvisionCompleted(data.completed ?? []);
         },
       });
 
@@ -227,6 +235,10 @@ export function useFabricDiscovery() {
     // State
     healthy,
     checking,
+    workspaceConnected,
+    queryReady,
+    provisionRetryFrom,
+    provisionCompleted,
     ontologies,
     graphModels,
     eventhouses,

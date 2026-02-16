@@ -66,6 +66,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [selectedBackend, setSelectedBackend] = useState<'cosmosdb-gremlin' | 'fabric-gql'>('cosmosdb-gremlin');
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -102,6 +103,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       setDisplayName('');
       setDescription('');
       setShowAdvanced(false);
+      setSelectedBackend('cosmosdb-gremlin');
     }
   }, [open]);
 
@@ -146,7 +148,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
   const nameError = name ? validateName(name) : null;
 
-  const allFilled = SLOT_DEFS.every(d => slots[d.key].file);
+  const allFilled = SLOT_DEFS.every(d => {\n    if (d.key === 'graph' && selectedBackend === 'fabric-gql') return true;\n    return slots[d.key].file;\n  });
   const canSave = !!name && !nameError && allFilled && modalState === 'idle';
 
   // Handle Save button click
@@ -281,6 +283,37 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
             </div>
           )}
 
+          {/* Backend chooser (D2) */}
+          <div className="text-xs text-text-muted font-medium uppercase tracking-wider">Graph Backend</div>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => setSelectedBackend('cosmosdb-gremlin')}
+              disabled={modalState !== 'idle'}
+              className={`text-left p-3 rounded-lg border transition-colors ${
+                selectedBackend === 'cosmosdb-gremlin'
+                  ? 'border-brand/40 bg-brand/10'
+                  : 'border-white/10 bg-neutral-bg1 hover:bg-white/5'
+              }`}
+            >
+              <p className="text-xs font-medium text-text-primary">Azure CosmosDB</p>
+              <p className="text-[10px] text-text-muted mt-0.5">Gremlin graph database</p>
+              <p className="text-[10px] text-text-muted">Upload graph via tarball</p>
+            </button>
+            <button
+              onClick={() => setSelectedBackend('fabric-gql')}
+              disabled={modalState !== 'idle'}
+              className={`text-left p-3 rounded-lg border transition-colors ${
+                selectedBackend === 'fabric-gql'
+                  ? 'border-cyan-400/40 bg-cyan-400/10'
+                  : 'border-white/10 bg-neutral-bg1 hover:bg-white/5'
+              }`}
+            >
+              <p className="text-xs font-medium text-text-primary">Microsoft Fabric</p>
+              <p className="text-[10px] text-text-muted mt-0.5">GQL via Ontology</p>
+              <p className="text-[10px] text-text-muted">Graph managed by Fabric</p>
+            </button>
+          </div>
+
           {/* Multi-drop zone */}
           <div className="text-xs text-text-muted font-medium uppercase tracking-wider">Upload Data Files</div>
           <div
@@ -313,6 +346,20 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           <div className="grid grid-cols-2 gap-3">
             {SLOT_DEFS.map((def) => {
               const slot = slots[def.key];
+              // D3: Replace graph slot with confirmation card for Fabric
+              if (def.key === 'graph' && selectedBackend === 'fabric-gql') {
+                return (
+                  <div key={def.key} className="bg-cyan-500/5 border border-cyan-500/20 rounded-lg p-3 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🗸</span>
+                      <span className="text-xs font-medium text-cyan-300">Graph Topology</span>
+                      <span className="text-xs text-status-success ml-auto">✓</span>
+                    </div>
+                    <p className="text-[10px] text-cyan-400/70">Loaded from Fabric Lakehouse</p>
+                    <p className="text-[10px] text-text-muted">No upload needed — managed by Fabric.</p>
+                  </div>
+                );
+              }
               return (
                 <FileSlot
                   key={def.key}

@@ -16,11 +16,15 @@ the CosmosDB upload endpoints in graph-query-api.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
+import uuid
+from pathlib import Path
 from typing import Any
 
+import yaml
 from azure.identity import DefaultAzureCredential
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -366,6 +370,534 @@ async def _find_or_create_ontology(client: AsyncFabricClient, workspace_id: str,
 
 
 # ---------------------------------------------------------------------------
+# Data path resolution (B0b)
+# ---------------------------------------------------------------------------
+
+SCENARIOS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "scenarios"
+
+
+def _resolve_scenario_data(scenario_name: str) -> dict:
+    """Resolve scenario_name → data directory paths and manifest."""
+    scenario_dir = SCENARIOS_DIR / scenario_name
+    if not scenario_dir.exists():
+        raise ValueError(f"Scenario directory not found: {scenario_dir}")
+
+    manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
+    paths = manifest.get("paths", {})
+
+    entities_dir = scenario_dir / paths.get("entities", "data/entities")
+    telemetry_dir = scenario_dir / paths.get("telemetry", "data/telemetry")
+
+    return {
+        "entities_dir": entities_dir,
+        "telemetry_dir": telemetry_dir,
+        "manifest": manifest,
+    }
+
+
+# ---------------------------------------------------------------------------
+# B1: Lakehouse data upload (CSV → OneLake → delta tables)
+# ---------------------------------------------------------------------------
+
+ONELAKE_URL = "https://onelake.dfs.fabric.microsoft.com"
+
+# Table names matching the CSV files in data/entities/
+LAKEHOUSE_TABLES = [
+    "DimCoreRouter", "DimTransportLink", "DimAggSwitch", "DimBaseStation",
+    "DimBGPSession", "DimMPLSPath", "DimService", "DimSLAPolicy",
+    "FactMPLSPathHops", "FactServiceDependency",
+]
+
+
+async def _upload_csvs_to_onelake(
+    workspace_name: str, lakehouse_name: str, entities_dir: Path,
+    on_progress=None,
+) -> list[str]:
+    """Upload CSV files to Lakehouse Files/ via OneLake ADLS Gen2 API."""
+    from azure.storage.filedatalake import DataLakeServiceClient
+
+    credential = DefaultAzureCredential()
+    service_client = DataLakeServiceClient(ONELAKE_URL, credential=credential)
+    fs_client = service_client.get_file_system_client(workspace_name)
+    data_path = f"{lakehouse_name}.Lakehouse/Files"
+
+    uploaded = []
+    csv_files = sorted(entities_dir.glob("*.csv"))
+    for i, csv_file in enumerate(csv_files):
+        table_name = csv_file.stem
+        remote_path = f"{data_path}/{csv_file.name}"
+        dir_client = fs_client.get_directory_client(data_path)
+        file_client = dir_client.get_file_client(csv_file.name)
+
+        with open(csv_file, "rb") as f:
+            await asyncio.to_thread(file_client.upload_data, f, overwrite=True)
+
+        uploaded.append(table_name)
+        if on_progress:
+            pct = 20 + int((i + 1) / len(csv_files) * 20)  # 20-40%
+            on_progress(f"Uploaded {csv_file.name}", pct)
+        logger.info("Uploaded %s to OneLake", csv_file.name)
+
+    return uploaded
+
+
+async def _load_delta_tables(
+    client: "AsyncFabricClient", workspace_id: str, lakehouse_id: str,
+    table_names: list[str], on_progress=None,
+) -> None:
+    """Load CSV files from Lakehouse Files/ into managed delta tables."""
+    for i, table_name in enumerate(table_names):
+        relative_path = f"Files/{table_name}.csv"
+        body = {
+            "relativePath": relative_path,
+            "pathType": "File",
+            "mode": "Overwrite",
+            "formatOptions": {"format": "Csv", "header": True, "delimiter": ","},
+        }
+        status, headers, resp = await client.post(
+            f"/workspaces/{workspace_id}/lakehouses/{lakehouse_id}/tables/{table_name}/load",
+            body,
+        )
+        if status == 202:
+            await client.wait_for_lro(headers, f"Load table {table_name}")
+        elif status not in (200, 201):
+            logger.warning("Table load %s returned %d: %s", table_name, status, resp)
+
+        if on_progress:
+            pct = 40 + int((i + 1) / len(table_names) * 5)  # 40-45%
+            on_progress(f"Loaded table {table_name}", pct)
+        logger.info("Delta table loaded: %s", table_name)
+
+
+# ---------------------------------------------------------------------------
+# B2: Eventhouse KQL table creation + data ingest
+# ---------------------------------------------------------------------------
+
+TABLE_SCHEMAS = {
+    "AlertStream": {
+        "AlertId": "string", "Timestamp": "datetime",
+        "SourceNodeId": "string", "SourceNodeType": "string",
+        "AlertType": "string", "Severity": "string", "Description": "string",
+        "OpticalPowerDbm": "real", "BitErrorRate": "real",
+        "CPUUtilPct": "real", "PacketLossPct": "real",
+    },
+    "LinkTelemetry": {
+        "LinkId": "string", "Timestamp": "datetime",
+        "UtilizationPct": "real", "OpticalPowerDbm": "real",
+        "BitErrorRate": "real", "LatencyMs": "real",
+    },
+}
+
+
+async def _discover_kql_database(
+    client: "AsyncFabricClient", workspace_id: str, eventhouse_id: str,
+) -> dict:
+    """Find the default KQL database auto-created with the Eventhouse."""
+    data = await client.get(f"/workspaces/{workspace_id}/kqlDatabases")
+    for db in data.get("value", []):
+        props = db.get("properties", {})
+        if props.get("parentEventhouseItemId") == eventhouse_id:
+            return db
+    dbs = data.get("value", [])
+    if dbs:
+        return dbs[0]
+    raise ValueError("No KQL database found for eventhouse")
+
+
+async def _create_kql_tables(query_uri: str, db_name: str) -> None:
+    """Create KQL tables and CSV ingestion mappings."""
+    from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+
+    credential = DefaultAzureCredential()
+    kcsb = KustoConnectionStringBuilder.with_azure_token_credential(query_uri, credential)
+    kusto_client = KustoClient(kcsb)
+
+    for table_name, schema in TABLE_SCHEMAS.items():
+        columns = ", ".join(f"['{col}']: {dtype}" for col, dtype in schema.items())
+        cmd = f".create-merge table {table_name} ({columns})"
+        await asyncio.to_thread(kusto_client.execute_mgmt, db_name, cmd)
+        logger.info("Created KQL table: %s", table_name)
+
+        # CSV ingestion mapping
+        mapping_name = f"{table_name}_csv_mapping"
+        mapping_json = ", ".join(
+            f'{{"Name": "{col}", "DataType": "{dtype}", "Ordinal": {i}}}'
+            for i, (col, dtype) in enumerate(schema.items())
+        )
+        cmd = (
+            f'.create-or-alter table {table_name} ingestion csv mapping '
+            f"'{mapping_name}' '[{mapping_json}]'"
+        )
+        await asyncio.to_thread(kusto_client.execute_mgmt, db_name, cmd)
+        logger.info("Created CSV mapping: %s", mapping_name)
+
+
+async def _ingest_kql_data(
+    query_uri: str, db_name: str, telemetry_dir: Path,
+) -> None:
+    """Ingest CSV files into KQL tables via queued ingestion with inline fallback."""
+    from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+
+    credential = DefaultAzureCredential()
+
+    # Try queued ingestion first
+    ingest_uri = query_uri.replace("https://", "https://ingest-")
+    try:
+        from azure.kusto.ingest import QueuedIngestClient, IngestionProperties
+        from azure.kusto.data.data_format import DataFormat
+
+        kcsb_ingest = KustoConnectionStringBuilder.with_azure_token_credential(
+            ingest_uri, credential,
+        )
+        ingest_client = QueuedIngestClient(kcsb_ingest)
+
+        for table_name in TABLE_SCHEMAS:
+            csv_path = telemetry_dir / f"{table_name}.csv"
+            if not csv_path.exists():
+                logger.warning("Skipping %s — file not found", csv_path)
+                continue
+
+            mapping_name = f"{table_name}_csv_mapping"
+            props = IngestionProperties(
+                database=db_name,
+                table=table_name,
+                data_format=DataFormat.CSV,
+                ingestion_mapping_reference=mapping_name,
+                ignore_first_record=True,
+            )
+            await asyncio.to_thread(
+                ingest_client.ingest_from_file, str(csv_path),
+                ingestion_properties=props,
+            )
+            logger.info("Queued ingestion: %s", table_name)
+        return
+    except Exception as e:
+        logger.warning("Queued ingestion failed (%s), falling back to inline", e)
+
+    # Fallback: .ingest inline
+    kcsb = KustoConnectionStringBuilder.with_azure_token_credential(query_uri, credential)
+    kusto_client = KustoClient(kcsb)
+
+    for table_name in TABLE_SCHEMAS:
+        csv_path = telemetry_dir / f"{table_name}.csv"
+        if not csv_path.exists():
+            continue
+
+        with open(csv_path) as f:
+            lines = f.readlines()
+        if len(lines) < 2:
+            continue
+
+        data_lines = [line.strip() for line in lines[1:] if line.strip()]
+        batch_size = 500
+        for start in range(0, len(data_lines), batch_size):
+            batch = data_lines[start:start + batch_size]
+            inline_data = "\n".join(batch)
+            cmd = f".ingest inline into table {table_name} <|\n{inline_data}"
+            await asyncio.to_thread(kusto_client.execute_mgmt, db_name, cmd)
+        logger.info("Inline ingested: %s (%d rows)", table_name, len(data_lines))
+
+
+# ---------------------------------------------------------------------------
+# B3: Ontology definition (entity types, relationships, data bindings)
+# ---------------------------------------------------------------------------
+
+def _b64(obj: dict) -> str:
+    return base64.b64encode(json.dumps(obj).encode()).decode()
+
+
+def _duuid(seed: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, seed))
+
+
+def _prop(pid: int, name: str, vtype: str = "String") -> dict:
+    return {"id": str(pid), "name": name, "redefines": None,
+            "baseTypeNamespaceType": None, "valueType": vtype}
+
+
+# Entity type IDs
+ET_CORE_ROUTER = 1000000000001
+ET_TRANSPORT_LINK = 1000000000002
+ET_AGG_SWITCH = 1000000000003
+ET_BASE_STATION = 1000000000004
+ET_BGP_SESSION = 1000000000005
+ET_MPLS_PATH = 1000000000006
+ET_SERVICE = 1000000000007
+ET_SLA_POLICY = 1000000000008
+
+# Property IDs
+P_ROUTER_ID = 2000000000001; P_ROUTER_CITY = 2000000000003
+P_ROUTER_REGION = 2000000000004; P_ROUTER_VENDOR = 2000000000005; P_ROUTER_MODEL = 2000000000006
+P_LINK_ID = 2000000000011; P_LINK_TYPE = 2000000000013
+P_CAPACITY_GBPS = 2000000000014; P_SOURCE_ROUTER_ID = 2000000000015; P_TARGET_ROUTER_ID = 2000000000016
+P_SWITCH_ID = 2000000000031; P_SWITCH_CITY = 2000000000033; P_UPLINK_ROUTER_ID = 2000000000034
+P_STATION_ID = 2000000000041; P_STATION_TYPE = 2000000000043
+P_STATION_AGG_SWITCH = 2000000000044; P_STATION_CITY = 2000000000045
+P_SESSION_ID = 2000000000051; P_PEER_A_ROUTER = 2000000000052; P_PEER_B_ROUTER = 2000000000053
+P_AS_NUMBER_A = 2000000000054; P_AS_NUMBER_B = 2000000000055
+P_PATH_ID = 2000000000061; P_PATH_TYPE = 2000000000063
+P_SERVICE_ID = 2000000000071; P_SERVICE_TYPE = 2000000000073; P_CUSTOMER_NAME = 2000000000074
+P_CUSTOMER_COUNT = 2000000000075; P_ACTIVE_USERS = 2000000000076
+P_SLA_POLICY_ID = 2000000000081; P_SLA_SERVICE_ID = 2000000000082
+P_AVAILABILITY_PCT = 2000000000083; P_MAX_LATENCY_MS = 2000000000084
+P_PENALTY_PER_HOUR = 2000000000085; P_SLA_TIER = 2000000000086
+
+# Relationship type IDs
+R_CONNECTS_TO = 3000000000001; R_AGGREGATES_TO = 3000000000002; R_BACKHAULS_VIA = 3000000000003
+R_ROUTES_VIA = 3000000000004; R_DEPENDS_ON = 3000000000005; R_GOVERNED_BY = 3000000000006
+R_PEERS_OVER = 3000000000007
+
+
+def _entity_type(et_id, name, props, id_prop_id):
+    return {
+        "id": str(et_id), "namespace": "usertypes", "baseEntityTypeId": None,
+        "name": name, "entityIdParts": [str(id_prop_id)],
+        "displayNamePropertyId": str(id_prop_id), "namespaceType": "Custom",
+        "visibility": "Visible", "properties": props, "timeseriesProperties": [],
+    }
+
+
+ENTITY_TYPES = [
+    _entity_type(ET_CORE_ROUTER, "CoreRouter", [
+        _prop(P_ROUTER_ID, "RouterId"), _prop(P_ROUTER_CITY, "City"),
+        _prop(P_ROUTER_REGION, "Region"), _prop(P_ROUTER_VENDOR, "Vendor"),
+        _prop(P_ROUTER_MODEL, "Model"),
+    ], P_ROUTER_ID),
+    _entity_type(ET_TRANSPORT_LINK, "TransportLink", [
+        _prop(P_LINK_ID, "LinkId"), _prop(P_LINK_TYPE, "LinkType"),
+        _prop(P_CAPACITY_GBPS, "CapacityGbps", "BigInt"),
+        _prop(P_SOURCE_ROUTER_ID, "SourceRouterId"), _prop(P_TARGET_ROUTER_ID, "TargetRouterId"),
+    ], P_LINK_ID),
+    _entity_type(ET_AGG_SWITCH, "AggSwitch", [
+        _prop(P_SWITCH_ID, "SwitchId"), _prop(P_SWITCH_CITY, "City"),
+        _prop(P_UPLINK_ROUTER_ID, "UplinkRouterId"),
+    ], P_SWITCH_ID),
+    _entity_type(ET_BASE_STATION, "BaseStation", [
+        _prop(P_STATION_ID, "StationId"), _prop(P_STATION_TYPE, "StationType"),
+        _prop(P_STATION_AGG_SWITCH, "AggSwitchId"), _prop(P_STATION_CITY, "City"),
+    ], P_STATION_ID),
+    _entity_type(ET_BGP_SESSION, "BGPSession", [
+        _prop(P_SESSION_ID, "SessionId"), _prop(P_PEER_A_ROUTER, "PeerARouterId"),
+        _prop(P_PEER_B_ROUTER, "PeerBRouterId"),
+        _prop(P_AS_NUMBER_A, "ASNumberA", "BigInt"), _prop(P_AS_NUMBER_B, "ASNumberB", "BigInt"),
+    ], P_SESSION_ID),
+    _entity_type(ET_MPLS_PATH, "MPLSPath", [
+        _prop(P_PATH_ID, "PathId"), _prop(P_PATH_TYPE, "PathType"),
+    ], P_PATH_ID),
+    _entity_type(ET_SERVICE, "Service", [
+        _prop(P_SERVICE_ID, "ServiceId"), _prop(P_SERVICE_TYPE, "ServiceType"),
+        _prop(P_CUSTOMER_NAME, "CustomerName"),
+        _prop(P_CUSTOMER_COUNT, "CustomerCount", "BigInt"),
+        _prop(P_ACTIVE_USERS, "ActiveUsers", "BigInt"),
+    ], P_SERVICE_ID),
+    _entity_type(ET_SLA_POLICY, "SLAPolicy", [
+        _prop(P_SLA_POLICY_ID, "SLAPolicyId"), _prop(P_SLA_SERVICE_ID, "ServiceId"),
+        _prop(P_AVAILABILITY_PCT, "AvailabilityPct", "Double"),
+        _prop(P_MAX_LATENCY_MS, "MaxLatencyMs", "BigInt"),
+        _prop(P_PENALTY_PER_HOUR, "PenaltyPerHourUSD", "BigInt"),
+        _prop(P_SLA_TIER, "Tier"),
+    ], P_SLA_POLICY_ID),
+]
+
+RELATIONSHIP_TYPES = [
+    {"id": str(R_CONNECTS_TO), "namespace": "usertypes", "name": "connects_to", "namespaceType": "Custom",
+     "source": {"entityTypeId": str(ET_TRANSPORT_LINK)}, "target": {"entityTypeId": str(ET_CORE_ROUTER)}},
+    {"id": str(R_AGGREGATES_TO), "namespace": "usertypes", "name": "aggregates_to", "namespaceType": "Custom",
+     "source": {"entityTypeId": str(ET_AGG_SWITCH)}, "target": {"entityTypeId": str(ET_CORE_ROUTER)}},
+    {"id": str(R_BACKHAULS_VIA), "namespace": "usertypes", "name": "backhauls_via", "namespaceType": "Custom",
+     "source": {"entityTypeId": str(ET_BASE_STATION)}, "target": {"entityTypeId": str(ET_AGG_SWITCH)}},
+    {"id": str(R_ROUTES_VIA), "namespace": "usertypes", "name": "routes_via", "namespaceType": "Custom",
+     "source": {"entityTypeId": str(ET_MPLS_PATH)}, "target": {"entityTypeId": str(ET_TRANSPORT_LINK)}},
+    {"id": str(R_DEPENDS_ON), "namespace": "usertypes", "name": "depends_on", "namespaceType": "Custom",
+     "source": {"entityTypeId": str(ET_SERVICE)}, "target": {"entityTypeId": str(ET_MPLS_PATH)}},
+    {"id": str(R_GOVERNED_BY), "namespace": "usertypes", "name": "governed_by", "namespaceType": "Custom",
+     "source": {"entityTypeId": str(ET_SLA_POLICY)}, "target": {"entityTypeId": str(ET_SERVICE)}},
+    {"id": str(R_PEERS_OVER), "namespace": "usertypes", "name": "peers_over", "namespaceType": "Custom",
+     "source": {"entityTypeId": str(ET_BGP_SESSION)}, "target": {"entityTypeId": str(ET_CORE_ROUTER)}},
+]
+
+
+def _lakehouse_binding(seed, table, bindings, workspace_id, lakehouse_id):
+    return {
+        "id": _duuid(seed),
+        "dataBindingConfiguration": {
+            "dataBindingType": "NonTimeSeries",
+            "propertyBindings": [
+                {"sourceColumnName": col, "targetPropertyId": str(pid)}
+                for col, pid in bindings
+            ],
+            "sourceTableProperties": {
+                "sourceType": "LakehouseTable",
+                "workspaceId": workspace_id,
+                "itemId": lakehouse_id,
+                "sourceTableName": table,
+            },
+        },
+    }
+
+
+def _ctx(seed, table, src_bindings, tgt_bindings, workspace_id, lakehouse_id):
+    return {
+        "id": _duuid(seed),
+        "dataBindingTable": {
+            "sourceType": "LakehouseTable",
+            "workspaceId": workspace_id,
+            "itemId": lakehouse_id,
+            "sourceTableName": table,
+        },
+        "sourceKeyRefBindings": [
+            {"sourceColumnName": col, "targetPropertyId": str(pid)}
+            for col, pid in src_bindings
+        ],
+        "targetKeyRefBindings": [
+            {"sourceColumnName": col, "targetPropertyId": str(pid)}
+            for col, pid in tgt_bindings
+        ],
+    }
+
+
+def _build_ontology_definition(
+    workspace_id: str, lakehouse_id: str, ontology_name: str,
+) -> list[dict]:
+    """Build the full ontology definition parts array."""
+    lb = lambda seed, table, bindings: _lakehouse_binding(
+        seed, table, bindings, workspace_id, lakehouse_id,
+    )
+    c = lambda seed, table, src, tgt: _ctx(
+        seed, table, src, tgt, workspace_id, lakehouse_id,
+    )
+
+    # Static data bindings
+    bindings: dict[int, list[dict]] = {
+        ET_CORE_ROUTER: [lb("CoreRouter-static", "DimCoreRouter", [
+            ("RouterId", P_ROUTER_ID), ("City", P_ROUTER_CITY),
+            ("Region", P_ROUTER_REGION), ("Vendor", P_ROUTER_VENDOR), ("Model", P_ROUTER_MODEL),
+        ])],
+        ET_TRANSPORT_LINK: [lb("TransportLink-static", "DimTransportLink", [
+            ("LinkId", P_LINK_ID), ("LinkType", P_LINK_TYPE),
+            ("CapacityGbps", P_CAPACITY_GBPS),
+            ("SourceRouterId", P_SOURCE_ROUTER_ID), ("TargetRouterId", P_TARGET_ROUTER_ID),
+        ])],
+        ET_AGG_SWITCH: [lb("AggSwitch-static", "DimAggSwitch", [
+            ("SwitchId", P_SWITCH_ID), ("City", P_SWITCH_CITY), ("UplinkRouterId", P_UPLINK_ROUTER_ID),
+        ])],
+        ET_BASE_STATION: [lb("BaseStation-static", "DimBaseStation", [
+            ("StationId", P_STATION_ID), ("StationType", P_STATION_TYPE),
+            ("AggSwitchId", P_STATION_AGG_SWITCH), ("City", P_STATION_CITY),
+        ])],
+        ET_BGP_SESSION: [lb("BGPSession-static", "DimBGPSession", [
+            ("SessionId", P_SESSION_ID), ("PeerARouterId", P_PEER_A_ROUTER),
+            ("PeerBRouterId", P_PEER_B_ROUTER), ("ASNumberA", P_AS_NUMBER_A), ("ASNumberB", P_AS_NUMBER_B),
+        ])],
+        ET_MPLS_PATH: [lb("MPLSPath-static", "DimMPLSPath", [
+            ("PathId", P_PATH_ID), ("PathType", P_PATH_TYPE),
+        ])],
+        ET_SERVICE: [lb("Service-static", "DimService", [
+            ("ServiceId", P_SERVICE_ID), ("ServiceType", P_SERVICE_TYPE),
+            ("CustomerName", P_CUSTOMER_NAME), ("CustomerCount", P_CUSTOMER_COUNT),
+            ("ActiveUsers", P_ACTIVE_USERS),
+        ])],
+        ET_SLA_POLICY: [lb("SLAPolicy-static", "DimSLAPolicy", [
+            ("SLAPolicyId", P_SLA_POLICY_ID), ("ServiceId", P_SLA_SERVICE_ID),
+            ("AvailabilityPct", P_AVAILABILITY_PCT), ("MaxLatencyMs", P_MAX_LATENCY_MS),
+            ("PenaltyPerHourUSD", P_PENALTY_PER_HOUR), ("Tier", P_SLA_TIER),
+        ])],
+    }
+
+    # Contextualizations (relationship data bindings)
+    contextualizations: dict[int, list[dict]] = {
+        R_CONNECTS_TO: [
+            c("connects_to-source", "DimTransportLink", [("LinkId", P_LINK_ID)], [("SourceRouterId", P_ROUTER_ID)]),
+            c("connects_to-target", "DimTransportLink", [("LinkId", P_LINK_ID)], [("TargetRouterId", P_ROUTER_ID)]),
+        ],
+        R_AGGREGATES_TO: [c("aggregates_to", "DimAggSwitch", [("SwitchId", P_SWITCH_ID)], [("UplinkRouterId", P_ROUTER_ID)])],
+        R_BACKHAULS_VIA: [c("backhauls_via", "DimBaseStation", [("StationId", P_STATION_ID)], [("AggSwitchId", P_SWITCH_ID)])],
+        R_ROUTES_VIA: [c("routes_via", "FactMPLSPathHops", [("PathId", P_PATH_ID)], [("NodeId", P_LINK_ID)])],
+        R_DEPENDS_ON: [c("depends_on", "FactServiceDependency", [("ServiceId", P_SERVICE_ID)], [("DependsOnId", P_PATH_ID)])],
+        R_GOVERNED_BY: [c("governed_by", "DimSLAPolicy", [("SLAPolicyId", P_SLA_POLICY_ID)], [("ServiceId", P_SERVICE_ID)])],
+        R_PEERS_OVER: [
+            c("peers_over-a", "DimBGPSession", [("SessionId", P_SESSION_ID)], [("PeerARouterId", P_ROUTER_ID)]),
+            c("peers_over-b", "DimBGPSession", [("SessionId", P_SESSION_ID)], [("PeerBRouterId", P_ROUTER_ID)]),
+        ],
+    }
+
+    # Build parts array
+    parts = [
+        {"path": ".platform", "payload": _b64({"metadata": {"type": "Ontology", "displayName": ontology_name}}),
+         "payloadType": "InlineBase64"},
+        {"path": "definition.json", "payload": _b64({}), "payloadType": "InlineBase64"},
+    ]
+
+    for et in ENTITY_TYPES:
+        et_id = et["id"]
+        parts.append({"path": f"EntityTypes/{et_id}/definition.json", "payload": _b64(et), "payloadType": "InlineBase64"})
+        for binding in bindings.get(int(et_id), []):
+            parts.append({"path": f"EntityTypes/{et_id}/DataBindings/{binding['id']}.json",
+                          "payload": _b64(binding), "payloadType": "InlineBase64"})
+
+    for rel in RELATIONSHIP_TYPES:
+        rel_id = rel["id"]
+        parts.append({"path": f"RelationshipTypes/{rel_id}/definition.json", "payload": _b64(rel), "payloadType": "InlineBase64"})
+        for ctx_item in contextualizations.get(int(rel_id), []):
+            parts.append({"path": f"RelationshipTypes/{rel_id}/Contextualizations/{ctx_item['id']}.json",
+                          "payload": _b64(ctx_item), "payloadType": "InlineBase64"})
+
+    return parts
+
+
+async def _apply_ontology_definition(
+    client: "AsyncFabricClient", workspace_id: str, ontology_id: str, parts: list[dict],
+) -> None:
+    """Apply ontology definition via updateDefinition API."""
+    body = {"definition": {"parts": parts}}
+    status, headers, resp = await client.post(
+        f"/workspaces/{workspace_id}/ontologies/{ontology_id}/updateDefinition",
+        body,
+    )
+    if status == 202:
+        await client.wait_for_lro(headers, "Update Ontology definition", timeout=600)
+    elif status not in (200, 201):
+        raise HTTPException(status_code=status, detail=f"Ontology update failed: {resp}")
+
+
+# ---------------------------------------------------------------------------
+# B4: Graph Model auto-discovery
+# ---------------------------------------------------------------------------
+
+async def _discover_graph_model(
+    client: "AsyncFabricClient", workspace_id: str, ontology_name: str,
+) -> str | None:
+    """Find the auto-created Graph Model in the workspace."""
+    try:
+        data = await client.get(f"/workspaces/{workspace_id}/items")
+        for item in data.get("value", []):
+            if item.get("type") in ("GraphModel", "Graph"):
+                if ontology_name.lower() in item["displayName"].lower():
+                    return item["id"]
+        # Fallback: return first graph item
+        for item in data.get("value", []):
+            if item.get("type") in ("GraphModel", "Graph"):
+                return item["id"]
+    except Exception as e:
+        logger.warning("Graph Model discovery failed: %s", e)
+    return None
+
+
+def _write_env_var(key: str, value: str) -> None:
+    """Write a key=value pair to azure_config.env (create or update)."""
+    import re
+    env_file = Path(__file__).resolve().parent.parent.parent.parent / "azure_config.env"
+    content = env_file.read_text() if env_file.exists() else ""
+    pattern = rf"^{re.escape(key)}=.*$"
+    if re.search(pattern, content, re.MULTILINE):
+        content = re.sub(pattern, f"{key}={value}", content, flags=re.MULTILINE)
+    else:
+        content = content.rstrip("\n") + f"\n{key}={value}\n"
+    env_file.write_text(content)
+    logger.info("Wrote %s=%s to azure_config.env", key, value)
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -397,73 +929,153 @@ async def provision_fabric_resources(req: FabricProvisionRequest):
     async def stream():
         async with _fabric_provision_lock:
             client = AsyncFabricClient()
+            completed_steps: list[str] = []
             try:
-                # Step 1: Workspace
+                # B0b: Resolve scenario data paths
+                scenario_data = _resolve_scenario_data(req.scenario_name)
+                manifest = scenario_data["manifest"]
+                graph_connector = manifest.get("data_sources", {}).get("graph", {}).get("connector", "")
+                telemetry_connector = manifest.get("data_sources", {}).get("telemetry", {}).get("connector", "")
+
+                # Step 1: Workspace (always)
                 yield _sse_event("progress", {
-                    "step": "workspace",
-                    "detail": f"Finding or creating workspace '{workspace_name}'...",
-                    "pct": 5,
+                    "step": "workspace", "detail": "Setting up workspace…", "pct": 5,
                 })
                 workspace_id = await _find_or_create_workspace(
                     client, workspace_name, capacity_id,
                 )
+                completed_steps.append("workspace")
                 yield _sse_event("progress", {
-                    "step": "workspace",
-                    "detail": f"Workspace ready: {workspace_id}",
-                    "pct": 15,
+                    "step": "workspace", "detail": f"Workspace ready: {workspace_id}", "pct": 10,
                 })
 
-                # Step 2: Lakehouse
-                yield _sse_event("progress", {
-                    "step": "lakehouse",
-                    "detail": f"Finding or creating lakehouse '{lakehouse_name}'...",
-                    "pct": 20,
-                })
-                lakehouse_id = await _find_or_create_lakehouse(
-                    client, workspace_id, lakehouse_name,
-                )
-                yield _sse_event("progress", {
-                    "step": "lakehouse",
-                    "detail": f"Lakehouse ready: {lakehouse_id}",
-                    "pct": 35,
-                })
+                lakehouse_id = None
+                eventhouse_id = None
+                ontology_id = None
+                graph_model_id = None
 
-                # Step 3: Eventhouse
-                yield _sse_event("progress", {
-                    "step": "eventhouse",
-                    "detail": f"Finding or creating eventhouse '{eventhouse_name}'...",
-                    "pct": 40,
-                })
-                eventhouse_id = await _find_or_create_eventhouse(
-                    client, workspace_id, eventhouse_name,
-                )
-                yield _sse_event("progress", {
-                    "step": "eventhouse",
-                    "detail": f"Eventhouse ready: {eventhouse_id}",
-                    "pct": 55,
-                })
+                # B5: Conditional — Lakehouse + Ontology if graph is fabric-gql
+                if graph_connector == "fabric-gql":
+                    # Step 2: Lakehouse
+                    yield _sse_event("progress", {
+                        "step": "lakehouse", "detail": "Preparing data storage…", "pct": 12,
+                    })
+                    lakehouse_id = await _find_or_create_lakehouse(
+                        client, workspace_id, lakehouse_name,
+                    )
+                    completed_steps.append("lakehouse")
+                    yield _sse_event("progress", {
+                        "step": "lakehouse", "detail": f"Lakehouse ready: {lakehouse_id}", "pct": 20,
+                    })
 
-                # Step 4: Ontology
-                yield _sse_event("progress", {
-                    "step": "ontology",
-                    "detail": f"Finding or creating ontology '{ontology_name}'...",
-                    "pct": 60,
-                })
-                ontology_id = await _find_or_create_ontology(
-                    client, workspace_id, ontology_name,
-                )
-                yield _sse_event("progress", {
-                    "step": "ontology",
-                    "detail": f"Ontology ready: {ontology_id}",
-                    "pct": 85,
-                })
+                    # Step 3: Upload CSVs to OneLake
+                    yield _sse_event("progress", {
+                        "step": "upload", "detail": "Uploading graph data…", "pct": 22,
+                    })
+                    entities_dir = scenario_data["entities_dir"]
+                    uploaded = await _upload_csvs_to_onelake(
+                        workspace_name, lakehouse_name, entities_dir,
+                        on_progress=lambda msg, pct: None,  # SSE progress handled below
+                    )
+                    completed_steps.append("upload")
+                    yield _sse_event("progress", {
+                        "step": "upload",
+                        "detail": f"Uploaded {len(uploaded)} files",
+                        "pct": 40,
+                    })
+
+                    # Step 4: Load delta tables
+                    yield _sse_event("progress", {
+                        "step": "tables", "detail": "Configuring data tables…", "pct": 42,
+                    })
+                    await _load_delta_tables(client, workspace_id, lakehouse_id, uploaded)
+                    completed_steps.append("tables")
+                    yield _sse_event("progress", {
+                        "step": "tables", "detail": "Delta tables loaded", "pct": 45,
+                    })
+
+                # B5: Conditional — Eventhouse if telemetry is fabric-kql
+                if telemetry_connector == "fabric-kql":
+                    yield _sse_event("progress", {
+                        "step": "eventhouse", "detail": "Setting up telemetry database…", "pct": 48,
+                    })
+                    eventhouse_id = await _find_or_create_eventhouse(
+                        client, workspace_id, eventhouse_name,
+                    )
+                    completed_steps.append("eventhouse")
+                    yield _sse_event("progress", {
+                        "step": "eventhouse", "detail": f"Eventhouse ready: {eventhouse_id}", "pct": 50,
+                    })
+
+                    # Discover KQL database
+                    kql_db = await _discover_kql_database(client, workspace_id, eventhouse_id)
+                    kql_db_name = kql_db["displayName"]
+                    query_uri = kql_db.get("properties", {}).get("queryServiceUri", "")
+
+                    if query_uri:
+                        yield _sse_event("progress", {
+                            "step": "kql_tables", "detail": "Loading telemetry data…", "pct": 55,
+                        })
+                        await _create_kql_tables(query_uri, kql_db_name)
+                        await _ingest_kql_data(query_uri, kql_db_name, scenario_data["telemetry_dir"])
+                        completed_steps.append("kql_ingest")
+                        yield _sse_event("progress", {
+                            "step": "kql_tables", "detail": "Telemetry data loaded", "pct": 65,
+                        })
+                    else:
+                        logger.warning("No query URI for Eventhouse — KQL tables skipped")
+
+                # Ontology (if graph is fabric-gql)
+                if graph_connector == "fabric-gql":
+                    yield _sse_event("progress", {
+                        "step": "ontology", "detail": "Building graph ontology…", "pct": 68,
+                    })
+                    ontology_id = await _find_or_create_ontology(
+                        client, workspace_id, ontology_name,
+                    )
+                    completed_steps.append("ontology_create")
+
+                    # Apply full definition
+                    yield _sse_event("progress", {
+                        "step": "ontology_def", "detail": "Indexing — this may take a minute…", "pct": 75,
+                    })
+                    parts = _build_ontology_definition(workspace_id, lakehouse_id, ontology_name)
+                    await _apply_ontology_definition(client, workspace_id, ontology_id, parts)
+                    completed_steps.append("ontology_def")
+                    yield _sse_event("progress", {
+                        "step": "ontology_def", "detail": "Ontology indexed", "pct": 88,
+                    })
+
+                    # B4: Graph Model discovery
+                    yield _sse_event("progress", {
+                        "step": "graph_model", "detail": "Discovering graph model…", "pct": 92,
+                    })
+                    graph_model_id = await _discover_graph_model(client, workspace_id, ontology_name)
+                    if graph_model_id:
+                        completed_steps.append("graph_model")
+                        # Write to env file
+                        _write_env_var("FABRIC_GRAPH_MODEL_ID", graph_model_id)
+                        yield _sse_event("progress", {
+                            "step": "graph_model", "detail": f"Graph Model: {graph_model_id}", "pct": 98,
+                        })
+                    else:
+                        yield _sse_event("progress", {
+                            "step": "graph_model",
+                            "detail": "Graph Model not yet visible — check Fabric portal",
+                            "pct": 95,
+                        })
 
                 # Complete
+                yield _sse_event("progress", {
+                    "step": "done", "detail": "Almost done… ✓", "pct": 100,
+                })
                 yield _sse_event("complete", {
                     "workspace_id": workspace_id,
                     "lakehouse_id": lakehouse_id,
                     "eventhouse_id": eventhouse_id,
                     "ontology_id": ontology_id,
+                    "graph_model_id": graph_model_id,
+                    "completed": completed_steps,
                     "message": "Fabric provisioning complete.",
                 })
 
@@ -471,14 +1083,20 @@ async def provision_fabric_resources(req: FabricProvisionRequest):
                 yield _sse_event("error", {
                     "step": "error",
                     "detail": str(exc.detail),
+                    "error": str(exc.detail),
                     "pct": -1,
+                    "retry_from": completed_steps[-1] if completed_steps else None,
+                    "completed": completed_steps,
                 })
             except Exception as exc:
                 logger.exception("Fabric provisioning failed")
                 yield _sse_event("error", {
                     "step": "error",
                     "detail": f"Unexpected error: {exc}",
+                    "error": f"Unexpected error: {exc}",
                     "pct": -1,
+                    "retry_from": completed_steps[-1] if completed_steps else None,
+                    "completed": completed_steps,
                 })
             finally:
                 await client.close()

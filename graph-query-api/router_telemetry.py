@@ -83,6 +83,11 @@ async def query_telemetry(
     req: TelemetryQueryRequest,
     ctx: ScenarioContext = Depends(get_scenario_context),
 ):
+    # F5: Connector-aware dispatch — route to KQL or Cosmos based on scenario config
+    if ctx.telemetry_backend_type == "fabric-kql":
+        return await _query_fabric_kql(req, ctx)
+
+    # Default: Cosmos NoSQL path
     # Prefix container name with scenario prefix for shared DB isolation
     container_name = (
         f"{ctx.telemetry_container_prefix}-{req.container_name}"
@@ -120,3 +125,34 @@ async def query_telemetry(
             error=f"Cosmos SQL backend error: {type(e).__name__}: {e}. Try simplifying the query and retry.",
         )
     return TelemetryQueryResponse(columns=result["columns"], rows=result["rows"])
+
+
+async def _query_fabric_kql(
+    req: TelemetryQueryRequest,
+    ctx: ScenarioContext,
+) -> TelemetryQueryResponse:
+    """Route telemetry queries to Fabric Eventhouse via KQL."""
+    from backends.fabric_kql import FabricKQLBackend
+
+    logger.info(
+        "POST /query/telemetry [KQL] — query=%.200s",
+        req.query,
+    )
+    try:
+        backend = FabricKQLBackend()
+        result = await backend.execute_query(req.query)
+        if "error" in result:
+            return TelemetryQueryResponse(
+                columns=[], rows=[],
+                error=result.get("detail", "KQL query failed"),
+            )
+        return TelemetryQueryResponse(
+            columns=result.get("columns", []),
+            rows=result.get("rows", []),
+        )
+    except Exception as e:
+        logger.exception("KQL backend error")
+        return TelemetryQueryResponse(
+            columns=[], rows=[],
+            error=f"KQL backend error: {type(e).__name__}: {e}",
+        )

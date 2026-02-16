@@ -20,10 +20,18 @@ export interface SSEProgressData {
   message?: string;
 }
 
+export interface SSEErrorData {
+  error: string;
+  /** Step name to retry from (for idempotent retry). */
+  retry_from?: string;
+  /** Steps that completed successfully before the error. */
+  completed?: string[];
+}
+
 export interface SSEHandlers {
   onProgress?: (data: SSEProgressData) => void;
   onComplete?: (data: Record<string, unknown>) => void;
-  onError?: (data: { error: string }) => void;
+  onError?: (data: SSEErrorData) => void;
 }
 
 /**
@@ -71,7 +79,11 @@ export async function consumeSSE(
           const parsed = JSON.parse(jsonStr);
 
           if ('error' in parsed) {
-            handlers.onError?.({ error: parsed.error });
+            handlers.onError?.({
+              error: parsed.error,
+              retry_from: parsed.retry_from,
+              completed: parsed.completed,
+            });
           } else if (
             'scenario' in parsed ||
             'index' in parsed ||

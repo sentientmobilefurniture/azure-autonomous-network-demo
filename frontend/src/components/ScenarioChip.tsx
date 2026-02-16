@@ -14,6 +14,7 @@ export function ScenarioChip() {
     provisioningStatus,
     setActiveScenario,
     refreshScenarios,
+    scenariosLoading,
   } = useScenarioContext();
 
   const {
@@ -43,7 +44,13 @@ export function ScenarioChip() {
   return (
     <>
       <div ref={chipRef} className="relative">
-        {/* Chip button */}
+        {/* Skeleton shimmer while loading */}
+        {scenariosLoading ? (
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-white/10 bg-white/5">
+            <div className="h-3 w-20 bg-white/10 rounded animate-pulse" />
+          </div>
+        ) : (
+        /* Chip button */
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
           className={`
@@ -71,6 +78,7 @@ export function ScenarioChip() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
         </button>
+        )}
 
         {/* Flyout dropdown */}
         {dropdownOpen && (

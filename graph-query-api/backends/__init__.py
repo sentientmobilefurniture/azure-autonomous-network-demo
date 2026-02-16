@@ -167,3 +167,12 @@ except ImportError:
     logging.getLogger("graph-query-api").warning(
         "FabricGQLBackend not available (missing httpx?)"
     )
+
+try:
+    from .fabric_kql import FabricKQLBackend
+    register_backend("fabric-kql", FabricKQLBackend)
+except ImportError:
+    import logging
+    logging.getLogger("graph-query-api").warning(
+        "FabricKQLBackend not available (missing azure-kusto-data?)"
+    )
