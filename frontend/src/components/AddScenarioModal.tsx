@@ -148,10 +148,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
   const nameError = name ? validateName(name) : null;
 
-  const allFilled = SLOT_DEFS.every(d => {
-    if (d.key === 'graph' && selectedBackend === 'fabric-gql') return true;
-    return slots[d.key].file;
-  });
+  const allFilled = SLOT_DEFS.every(d => slots[d.key].file);
   const canSave = !!name && !nameError && allFilled && modalState === 'idle';
 
   // Handle Save button click
@@ -349,24 +346,15 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           <div className="grid grid-cols-2 gap-3">
             {SLOT_DEFS.map((def) => {
               const slot = slots[def.key];
-              // D3: Replace graph slot with confirmation card for Fabric
-              if (def.key === 'graph' && selectedBackend === 'fabric-gql') {
-                return (
-                  <div key={def.key} className="bg-cyan-500/5 border border-cyan-500/20 rounded-lg p-3 space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">🗸</span>
-                      <span className="text-xs font-medium text-cyan-300">Graph Topology</span>
-                      <span className="text-xs text-status-success ml-auto">✓</span>
-                    </div>
-                    <p className="text-[10px] text-cyan-400/70">Loaded from Fabric Lakehouse</p>
-                    <p className="text-[10px] text-text-muted">No upload needed — managed by Fabric.</p>
-                  </div>
-                );
-              }
+              // For Fabric scenarios, show different label on graph slot
+              const fabricGraph = def.key === 'graph' && selectedBackend === 'fabric-gql';
+              const slotDef = fabricGraph
+                ? { ...def, label: 'Graph Data (Fabric)', icon: '🔗' }
+                : def;
               return (
                 <FileSlot
                   key={def.key}
-                  def={def}
+                  def={slotDef}
                   slot={slot}
                   disabled={modalState !== 'idle'}
                   onFile={(file) => handleSlotFile(def.key, file)}

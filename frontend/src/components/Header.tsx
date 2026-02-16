@@ -1,22 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ScenarioChip } from './ScenarioChip';
 import { AgentBar } from './AgentBar';
 import { ProvisioningBanner } from './ProvisioningBanner';
-import { FabricSetupWizard } from './FabricSetupWizard';
+import { FabricConnectionPanel } from './FabricConnectionPanel';
 import { ServiceHealthSummary } from './ServiceHealthSummary';
 import { ServiceHealthPopover } from './ServiceHealthPopover';
-import { useFabricDiscovery } from '../hooks/useFabricDiscovery';
+import { ScenarioStatusPanel, UploadStatusBadge } from './ScenarioStatusPanel';
 
 export function Header() {
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [fabricOpen, setFabricOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
-  const fabric = useFabricDiscovery();
-
-  // Check health once on mount to determine button state
-  useEffect(() => { fabric.checkHealth(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const showFabricButton = fabric.healthy !== null;
-  const fabricReady = fabric.queryReady === true;
+  const [statusOpen, setStatusOpen] = useState(false);
 
   return (
     <>
@@ -32,32 +26,31 @@ export function Header() {
           <ScenarioChip />
         </div>
         <div className="flex items-center gap-2 relative">
-          {showFabricButton && (
-            <button
-              onClick={() => setWizardOpen(true)}
-              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                fabricReady
-                  ? 'text-cyan-400/60 hover:text-cyan-400 border-white/10 hover:bg-cyan-400/10'
-                  : 'text-amber-400 bg-amber-400/10 border-amber-400/30 hover:bg-amber-400/20'
-              }`}
-              title="Fabric Setup"
-            >
-              🔌 {fabricReady ? 'Fabric' : 'Set Up Fabric'}
-            </button>
-          )}
+          <button
+            onClick={() => setFabricOpen(true)}
+            className="text-xs px-2 py-0.5 rounded border border-white/10 hover:bg-white/5 transition-colors text-cyan-400/70 hover:text-cyan-400"
+            title="Fabric Workspaces"
+          >
+            🔌 Fabric
+          </button>
+          <UploadStatusBadge onClick={() => setStatusOpen(!statusOpen)} />
           <ServiceHealthSummary onClick={() => setHealthOpen(!healthOpen)} />
           <ServiceHealthPopover
             open={healthOpen}
             onClose={() => setHealthOpen(false)}
-            onFabricSetup={() => setWizardOpen(true)}
+            onFabricSetup={() => setFabricOpen(true)}
+          />
+          <ScenarioStatusPanel
+            open={statusOpen}
+            onClose={() => setStatusOpen(false)}
           />
         </div>
       </header>
       <AgentBar />
       <ProvisioningBanner />
-      <FabricSetupWizard
-        open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
+      <FabricConnectionPanel
+        open={fabricOpen}
+        onClose={() => setFabricOpen(false)}
       />
     </>
   );

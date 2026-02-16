@@ -25,6 +25,7 @@ logging.getLogger("app").setLevel(logging.DEBUG)
 
 from app.routers import alert, agents, logs, config  # noqa: E402
 from app.routers import fabric_provision  # noqa: E402
+from app.routers import upload_jobs  # noqa: E402
 
 # Load project-level config (CORS_ORIGINS, etc.)
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "azure_config.env"))
@@ -51,6 +52,7 @@ app.include_router(agents.router)
 app.include_router(logs.router)
 app.include_router(config.router)
 app.include_router(fabric_provision.router)
+app.include_router(upload_jobs.router)
 
 logger = logging.getLogger("app")
 
