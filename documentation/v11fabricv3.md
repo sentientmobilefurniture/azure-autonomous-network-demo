@@ -1,7 +1,7 @@
 # V11 UI Revamp + Fabric Experience — Consolidated Working Plan
 
 > **Created:** 2026-02-16
-> **Status:** ⬜ Not started
+> **Status:** 🔶 In progress (v11fabricprepa.md implemented)
 > **Depends on:** V11 Fabric Integration (v11fabricv2.md — Phases 0–3, implemented)
 > **Assumes:** v11refactor.md has been completed (codebase is cleaner/restructured)
 > **Scope:** Fix the broken Fabric UX end-to-end. Backend bug fixes, provision
@@ -59,15 +59,15 @@ Python 0 errors). Key changes affecting this plan:
 
 ## 2. The Problems
 
-### P1: Four bugs in useFabricDiscovery.ts (one was fixed by refactor)
+### P1: ~~Four bugs in useFabricDiscovery.ts~~ ✅ Fixed by v11fabricprepa.md
 
-| # | Bug | Impact |
+| # | Bug | Status |
 |---|-----|--------|
-| B1 | `checkHealth()` reads `data.status === 'ok'` but backend returns `{configured: bool}` | Fabric always shows unhealthy |
-| B2 | `runProvisionPipeline()` calls `/api/fabric/provision/pipeline` but route is `/api/fabric/provision` | Provision always 404s |
-| ~~B3~~ | ~~Stale closure: `provisionState` in both callback body and dep array~~ | **Fixed by refactor** — replaced with local `receivedTerminalEvent` flag |
-| B4 | Discovery reads `data.items || []` but backend returns flat `list[FabricItem]` | All resource lists always empty |
-| B5 | Discovery endpoints gate on `FABRIC_CONFIGURED` (requires BOTH workspace ID AND graph model ID) | Can't discover resources until fully configured — chicken-and-egg |
+| ~~B1~~ | ~~`checkHealth()` reads `data.status === 'ok'` but backend returns `{configured: bool}`~~ | ✅ Fixed — now checks `data.configured === true` |
+| ~~B2~~ | ~~`runProvisionPipeline()` calls `/api/fabric/provision/pipeline` but route is `/api/fabric/provision`~~ | ✅ Fixed — correct URL |
+| ~~B3~~ | ~~Stale closure: `provisionState` in both callback body and dep array~~ | ✅ Fixed by refactor |
+| ~~B4~~ | ~~Discovery reads `data.items \|\| []` but backend returns flat `list[FabricItem]`~~ | ✅ Fixed — `Array.isArray(data) ? data : []` |
+| ~~B5~~ | ~~Discovery endpoints gate on `FABRIC_CONFIGURED` (requires BOTH workspace ID AND graph model ID)~~ | ✅ Fixed — gates on `FABRIC_WORKSPACE_CONNECTED` |
 
 ### P2: Fabric tab is invisible until you already have a Fabric scenario
 
@@ -193,36 +193,24 @@ at `fabric_implementation_references/scripts/fabric/` proves these are automatab
 
 ## 4. Backend Changes Required
 
-### BE-1: Split `FABRIC_CONFIGURED` into two lifecycle stages
+### BE-1: Split `FABRIC_CONFIGURED` into two lifecycle stages ✅ _(implemented by v11fabricprepa.md)_
 
 **File:** `graph-query-api/adapters/fabric_config.py`
 
-Currently: `FABRIC_CONFIGURED = bool(WORKSPACE_ID and GRAPH_MODEL_ID)`. This conflates
-"I can reach the workspace" with "I can execute GQL queries." Discovery endpoints gate
-on `FABRIC_CONFIGURED`, creating a chicken-and-egg: you can't discover resources
-until you have a Graph Model ID, but you need discovery to provision and GET that ID.
+~~Currently: `FABRIC_CONFIGURED = bool(WORKSPACE_ID and GRAPH_MODEL_ID)`.~~
 
-> **Note:** Refactor #40 deleted unused Fabric env var constants
-> (`FABRIC_WORKSPACE_NAME`, `FABRIC_ONTOLOGY_NAME`, etc.) from this file. Some of
-> these must be **re-added** when Phase B extends the provision pipeline
-> (the ontology definition needs names, the lakehouse upload needs the lakehouse name).
-> Re-add only what the provision pipeline actually reads.
+**Done.** Added `FABRIC_WORKSPACE_CONNECTED`, `FABRIC_QUERY_READY`, kept
+`FABRIC_CONFIGURED = FABRIC_QUERY_READY` as backward-compat alias. Also re-added
+provisioning constants: `FABRIC_WORKSPACE_NAME`, `FABRIC_LAKEHOUSE_NAME`,
+`FABRIC_EVENTHOUSE_NAME`, `FABRIC_ONTOLOGY_NAME`, `FABRIC_CAPACITY_ID`.
 
-**Fix:**
-```python
-FABRIC_WORKSPACE_CONNECTED = bool(os.getenv("FABRIC_WORKSPACE_ID"))
-FABRIC_QUERY_READY = bool(
-    os.getenv("FABRIC_WORKSPACE_ID") and os.getenv("FABRIC_GRAPH_MODEL_ID")
-)
-FABRIC_CONFIGURED = FABRIC_QUERY_READY  # backward compat
-```
-
-### BE-2: Discovery endpoints gate on workspace-only
+### BE-2: Discovery endpoints gate on workspace-only ✅ _(implemented by v11fabricprepa.md)_
 
 **File:** `graph-query-api/router_fabric_discovery.py`
 
-Change `_fabric_get()` check from `FABRIC_CONFIGURED` to `FABRIC_WORKSPACE_CONNECTED`.
-This allows users to list resources during setup before a Graph Model exists.
+**Done.** `_fabric_get()` now checks `FABRIC_WORKSPACE_CONNECTED` instead of
+`FABRIC_CONFIGURED`. Import updated. Error message updated to reference only
+`FABRIC_WORKSPACE_ID`.
 
 GQL query execution (`FabricGQLBackend.execute_query()`) keeps gating on `FABRIC_QUERY_READY`.
 
@@ -253,20 +241,17 @@ Three UI states derive from this:
 | Partially ready | `workspace_connected && !query_ready` | ⚠ "Workspace connected. Graph queries not ready." |
 | Connected | `workspace_connected && query_ready` | ● "Connected ✓" |
 
-### BE-4: Upload guard for Fabric scenarios
+### BE-4: Upload guard for Fabric scenarios ✅ _(implemented by v11fabricprepa.md)_
 
 **File:** `graph-query-api/ingest/graph_ingest.py`
 
-The graph upload endpoint lives in `ingest/graph_ingest.py` (refactor #31 split
-`router_ingest.py` into 7 focused modules; `router_ingest.py` is now a 2-line re-export).
+**Done.** Two guards added:
+1. Manifest connector check — if `data_sources.graph.connector == "fabric-gql"`,
+   raises `ValueError` (streamed as SSE error event by `sse_upload_response` wrapper).
+2. Safety-net `try/except NotImplementedError` around `backend.ingest()` for the
+   case where the global `GRAPH_BACKEND` env var forces a Fabric backend.
 
-When `POST /query/upload/graph` is called for a scenario with `graph_connector: "fabric-gql"`,
-the upload calls `FabricGQLBackend.ingest()` which raises `NotImplementedError` → 500 error.
-
-**Fix:** Check the scenario's connector before calling `backend.ingest()`. If `fabric-gql`,
-return HTTP 400 with: "This scenario uses Fabric for graph data. Graph topology is
-managed via the Fabric provisioning pipeline. Upload telemetry, runbooks, and tickets
-normally."
+Both fire before the v11c `invalidate_topology_cache()` call, so no conflict.
 
 ### BE-5: `GET /api/services/health` — aggregate service health
 
@@ -298,25 +283,12 @@ Returns grouped status for all configured Azure services:
 Cached 30s server-side. Polls real endpoints (Cosmos health, Blob health, etc.).
 Fabric uses the improved health endpoint from BE-3.
 
-### BE-6: Add FABRIC_* vars to azure_config.env.template
+### BE-6: Add FABRIC_* vars to azure_config.env.template ✅ _(implemented by v11fabricprepa.md)_
 
 **File:** `azure_config.env.template`
 
-Currently has zero `FABRIC_*` variables. Add:
-```env
-# -- Microsoft Fabric (optional) -------------------------------------------
-# FABRIC_WORKSPACE_ID=                # Fabric workspace GUID
-# FABRIC_GRAPH_MODEL_ID=              # Graph Model GUID (auto-set by provisioning)
-# FABRIC_WORKSPACE_NAME=AutonomousNetworkDemo
-# FABRIC_CAPACITY_ID=                 # Fabric capacity GUID
-# FABRIC_ONTOLOGY_ID=                 # Ontology GUID (auto-set by provisioning)
-# FABRIC_ONTOLOGY_NAME=NetworkTopologyOntology
-# FABRIC_LAKEHOUSE_NAME=NetworkTopologyLH
-# FABRIC_EVENTHOUSE_NAME=NetworkTelemetryEH
-# FABRIC_KQL_DB_ID=                   # KQL DB GUID (auto-set by provisioning)
-# FABRIC_KQL_DB_NAME=                 # KQL DB name (auto-set)
-# EVENTHOUSE_QUERY_URI=               # Eventhouse query endpoint
-```
+**Done.** Added 13 commented-out `FABRIC_*` vars including `FABRIC_API_URL` and
+`FABRIC_SCOPE` (which were missing from the original plan but exist in `fabric_config.py`).
 
 ### BE-7: Runtime Fabric config via config store
 
@@ -826,10 +798,10 @@ Inline scenario picker + CTA button.
 
 | # | Change | Detail |
 |---|--------|--------|
-| FE-1 | Fix B1: health check | `data.status === 'ok'` → `data.workspace_connected === true` (after BE-3) |
-| FE-2 | Fix B2: provision URL | `/api/fabric/provision/pipeline` → `/api/fabric/provision` |
+| FE-1 | ~~Fix B1: health check~~ | ✅ **Done (v11fabricprepa)** — `data.configured === true` (interim fix against current backend; will update to `data.workspace_connected` after BE-3) |
+| FE-2 | ~~Fix B2: provision URL~~ | ✅ **Done (v11fabricprepa)** — `/api/fabric/provision` |
 | FE-3 | ~~Fix B3: stale closure~~ | **Already fixed by refactor** — replaced with `receivedTerminalEvent` flag |
-| FE-4 | Fix B4: discovery parsing | `data.items \|\| []` → `Array.isArray(data) ? data : []` |
+| FE-4 | ~~Fix B4: discovery parsing~~ | ✅ **Done (v11fabricprepa)** — `Array.isArray(data) ? data : []` in all 3 fetch functions |
 | FE-5 | Add `fetchLakehouses()` | Call `GET /query/fabric/lakehouses` |
 | FE-6 | Add `fetchKqlDatabases()` | Call `GET /query/fabric/kql-databases` |
 | FE-7 | Update `fetchAll()` | Include lakehouses + KQL databases |
@@ -869,16 +841,15 @@ Inline scenario picker + CTA button.
 
 | Task | Files | Effort |
 |------|-------|--------|
-| A1: Fix 4 remaining bugs in useFabricDiscovery.ts (B1, B2, B4, B5) | `useFabricDiscovery.ts` | Low (1hr) |
-| A2: Split FABRIC_CONFIGURED (BE-1) + re-add needed env vars | `adapters/fabric_config.py` | Low (30min) |
-| A3: Discovery gates on workspace-only (BE-2) | `router_fabric_discovery.py` | Low (30min) |
+| A1: Fix 4 remaining bugs in useFabricDiscovery.ts (B1, B2, B4, B5) | `useFabricDiscovery.ts` | ✅ Done (v11fabricprepa) |
+| A2: Split FABRIC_CONFIGURED (BE-1) + re-add needed env vars | `adapters/fabric_config.py` | ✅ Done (v11fabricprepa) |
+| A3: Discovery gates on workspace-only (BE-2) | `router_fabric_discovery.py` | ✅ Done (v11fabricprepa) |
 | A4: Richer health endpoint (BE-3) | `router_fabric_discovery.py` | Low (1hr) |
-| A5: Upload guard for Fabric scenarios (BE-4) | `ingest/graph_ingest.py` | Low (30min) |
-| A6: Add FABRIC_* to env template (BE-6) | `azure_config.env.template` | Low (15min) |
+| A5: Upload guard for Fabric scenarios (BE-4) | `ingest/graph_ingest.py` | ✅ Done (v11fabricprepa) |
+| A6: Add FABRIC_* to env template (BE-6) | `azure_config.env.template` | ✅ Done (v11fabricprepa) |
 
-**After Phase A:** The Fabric discovery hook works. Health shows real state. Discovery
-lists resources. Provision button hits the right URL. Upload gracefully rejects graph
-data for Fabric scenarios. ~4 hours total.
+**After Phase A:** ~~~4 hours total.~~ **5 of 6 tasks done** (v11fabricprepa). Only A4
+(richer health endpoint, BE-3) remains — ~1 hour.
 
 ### Phase B: Provision pipeline completion
 
@@ -886,13 +857,13 @@ data for Fabric scenarios. ~4 hours total.
 
 | Task | Files | Effort |
 |------|-------|--------|
-| B0: Re-add needed Fabric env vars deleted by refactor #40 | `adapters/fabric_config.py` | Low (15min) |
+| B0: Re-add needed Fabric env vars deleted by refactor #40 | `adapters/fabric_config.py` | ✅ Done (v11fabricprepa) |
 | B1: Lakehouse data upload (CSV → OneLake → delta tables) | `fabric_provision.py` | Medium (1 day) |
 | B2: Eventhouse KQL table creation + data ingest | `fabric_provision.py` | Medium (1 day) |
 | B3: Ontology full definition (8 entities, 7 rels, bindings) | `fabric_provision.py` | High (1 day) |
 | B4: Graph Model auto-discovery + config write | `fabric_provision.py` | Low (2hr) |
 | B5: Conditional execution (read scenario config, skip unneeded resources) | `fabric_provision.py` | Medium (3hr) |
-| B6: Add azure-storage-file-datalake + azure-kusto-ingest deps | `api/pyproject.toml` | Low (15min) |
+| B6: Add azure-storage-file-datalake + azure-kusto-ingest deps | `api/pyproject.toml` | ✅ Done (v11fabricprepa) |
 | B7: Add provisioning concurrency lock (or reuse refactor #48's pattern) | `fabric_provision.py` | Low (30min) |
 
 **After Phase B:** Provision pipeline creates resources WITH data. Ontology has full
@@ -1116,7 +1087,7 @@ var changes still work as fallback defaults but are overridden by config store v
 | File | Phase | Change |
 |------|-------|--------|
 | `api/app/routers/fabric_provision.py` (586 lines) | B | +~800 lines (data upload, ontology def, graph model discovery, conditional execution). Uses existing `_find_or_create()` and `sse_provision_stream()`. |
-| `adapters/fabric_config.py` | A+B+F | Split FABRIC_CONFIGURED + re-add env vars + add dynamic config layer |
+| `adapters/fabric_config.py` | ~~A+B~~+F | ~~Split FABRIC_CONFIGURED + re-add env vars~~ ✅ Done (v11fabricprepa) + add dynamic config layer (Phase F) |
 
 ### Medium Edits (5)
 
@@ -1132,10 +1103,10 @@ var changes still work as fallback defaults but are overridden by config store v
 
 | File | Phase | Change |
 |------|-------|--------|
-| `useFabricDiscovery.ts` | A | 5 bug fixes + 2 new fetch methods |
-| `router_fabric_discovery.py` | A+F | Gate change + richer health + data agent discovery |
-| `ingest/graph_ingest.py` | A | Upload guard for Fabric scenarios |
-| `azure_config.env.template` | A | Add FABRIC_* vars |
+| `useFabricDiscovery.ts` | ~~A~~ | ~~5 bug fixes~~ ✅ Done (v11fabricprepa) + 2 new fetch methods (FE-5, FE-6 remain) |
+| `router_fabric_discovery.py` | ~~A~~+F | ~~Gate change~~ ✅ Done (v11fabricprepa) + richer health + data agent discovery |
+| `ingest/graph_ingest.py` | ~~A~~ | ~~Upload guard for Fabric scenarios~~ ✅ Done (v11fabricprepa) |
+| `azure_config.env.template` | ~~A~~ | ~~Add FABRIC_* vars~~ ✅ Done (v11fabricprepa) |
 | `EmptyState.tsx` | D | Interactive checklist |
 | `backends/__init__.py` | F | Register `fabric-kql` backend |
 | `agent_provisioner.py` | F | KQL telemetry spec wiring for fabric-kql connector |

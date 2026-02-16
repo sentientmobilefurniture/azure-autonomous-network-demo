@@ -24,9 +24,26 @@ FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
 FABRIC_GRAPH_MODEL_ID = os.getenv("FABRIC_GRAPH_MODEL_ID", "")
 
 # ---------------------------------------------------------------------------
-# Readiness check
+# Provisioning defaults (re-added for Phase B provision pipeline)
 # ---------------------------------------------------------------------------
 
-FABRIC_CONFIGURED = bool(
+FABRIC_WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
+FABRIC_LAKEHOUSE_NAME = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
+FABRIC_EVENTHOUSE_NAME = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH")
+FABRIC_ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
+FABRIC_CAPACITY_ID = os.getenv("FABRIC_CAPACITY_ID", "")
+
+# ---------------------------------------------------------------------------
+# Readiness checks (two-stage lifecycle)
+# ---------------------------------------------------------------------------
+
+# Stage 1: workspace reachable — enough for discovery endpoints
+FABRIC_WORKSPACE_CONNECTED = bool(os.getenv("FABRIC_WORKSPACE_ID"))
+
+# Stage 2: graph queries ready — workspace + graph model both set
+FABRIC_QUERY_READY = bool(
     os.getenv("FABRIC_WORKSPACE_ID") and os.getenv("FABRIC_GRAPH_MODEL_ID")
 )
+
+# Backward compat alias — existing code that imports FABRIC_CONFIGURED is unaffected
+FABRIC_CONFIGURED = FABRIC_QUERY_READY

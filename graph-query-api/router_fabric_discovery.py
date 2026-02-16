@@ -25,6 +25,8 @@ from adapters.fabric_config import (
     FABRIC_SCOPE,
     FABRIC_WORKSPACE_ID,
     FABRIC_CONFIGURED,
+    FABRIC_WORKSPACE_CONNECTED,
+    FABRIC_QUERY_READY,
 )
 from backends.fabric import acquire_fabric_token
 
@@ -67,11 +69,11 @@ async def _fabric_get(path: str, params: dict[str, str] | None = None) -> Any:
     Returns:
         Parsed JSON response body.
     """
-    if not FABRIC_CONFIGURED:
+    if not FABRIC_WORKSPACE_CONNECTED:
         raise HTTPException(
             status_code=503,
-            detail="Fabric backend not configured. Set FABRIC_WORKSPACE_ID "
-                   "and FABRIC_GRAPH_MODEL_ID environment variables.",
+            detail="Fabric workspace not configured. Set FABRIC_WORKSPACE_ID "
+                   "environment variable.",
         )
 
     token = await _get_token()

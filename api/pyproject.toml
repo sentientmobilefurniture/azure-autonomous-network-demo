@@ -13,6 +13,8 @@ dependencies = [
     "azure-ai-agents==1.2.0b6",
     "pyyaml>=6.0",
     "httpx>=0.27.0",
+    "azure-storage-file-datalake>=12.14.0",  # OneLake CSV upload (Fabric Lakehouse)
+    "azure-kusto-ingest>=4.3.0",             # Eventhouse KQL ingestion
 ]
 
 [dependency-groups]

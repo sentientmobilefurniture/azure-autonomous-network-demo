@@ -61,9 +61,9 @@ export function useFabricDiscovery() {
     try {
       const res = await fetch('/query/fabric/health');
       const data = await res.json();
-      setHealthy(data.status === 'ok');
-      if (data.status !== 'ok') {
-        setError(data.error || 'Fabric not configured');
+      setHealthy(data.configured === true);
+      if (!data.configured) {
+        setError('Fabric not fully configured');
       }
     } catch (e) {
       setHealthy(false);
@@ -81,7 +81,7 @@ export function useFabricDiscovery() {
       const res = await fetch('/query/fabric/ontologies');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setOntologies(data.items || []);
+      setOntologies(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(`Failed to fetch ontologies: ${e}`);
     } finally {
@@ -97,7 +97,7 @@ export function useFabricDiscovery() {
       const res = await fetch(`/query/fabric/ontologies/${encodeURIComponent(ontologyId)}/models`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setGraphModels(data.items || []);
+      setGraphModels(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(`Failed to fetch graph models: ${e}`);
     } finally {
@@ -113,7 +113,7 @@ export function useFabricDiscovery() {
       const res = await fetch('/query/fabric/eventhouses');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setEventhouses(data.items || []);
+      setEventhouses(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(`Failed to fetch eventhouses: ${e}`);
     } finally {
@@ -135,7 +135,7 @@ export function useFabricDiscovery() {
     setProvisionError(null);
 
     try {
-      const res = await fetch('/api/fabric/provision/pipeline', {
+      const res = await fetch('/api/fabric/provision', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(opts || {}),

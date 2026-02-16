@@ -2,7 +2,8 @@
 
 > **Created:** 2026-02-16
 > **Audited:** 2026-02-16 (against actual codebase + post-v11b/v11c state)
-> **Status:** ⬜ Not started
+> **Implemented:** 2026-02-16
+> **Status:** ✅ Complete
 > **Source:** v11fabricv3.md
 > **Purpose:** Extract every task from the consolidated plan that is zero-risk,
 > foundational, and can be implemented quickly — no behavioral changes to working
@@ -31,8 +32,8 @@ plan — no overlapping files. Two synergies:
 
 ### v11c compatibility
 
-v11c (Data Retrieval Performance Optimisation) was implemented. **One overlapping file,
-zero conflicts.** Key changes from v11c that affect this plan:
+v11c (Data Retrieval Performance Optimisation) was implemented, plus three
+post-deployment fixes. **One overlapping file, zero conflicts.**
 
 | v11c change | File | Impact on prep |
 |---|---|---|
@@ -40,6 +41,15 @@ zero conflicts.** Key changes from v11c that affect this plan:
 | Scenario list TTL cache + `invalidate_scenarios_cache()` | `router_scenarios.py` | No overlap with any prep task |
 | Deduplicate frontend fetches | `useScenarios.ts`, `ScenarioChip.tsx`, etc. | No overlap — `useFabricDiscovery.ts` was not touched |
 | Gremlin connection warm-up in lifespan | `backends/cosmosdb.py`, `main.py` | No overlap |
+
+Post-deployment fixes (all confirmed in codebase):
+
+| Fix | File | Impact on prep |
+|---|---|---|
+| Partition key `/scenario_name` → `/id` | `config_store.py` | No impact — `save_scenario_config()` is called in `graph_ingest.py` BEFORE the PREP-8 guard point, and the partition key change is invisible to the guard logic |
+| ARM container existence check before PUT | `cosmos_helpers.py` | No impact — eliminates 31s startup block, no prep tasks touch this file |
+| `ScenarioContext` provider value wrapped in `useMemo` | `ScenarioContext.tsx` | No impact — no prep task touches this file |
+| `useTopology` abort cleanup | `useTopology.ts` | No impact — no prep task touches this file |
 
 **One gotcha corrected in PREP-8** — see the updated audit note there.
 
@@ -391,3 +401,4 @@ and removes all blockers for Phase B (provision pipeline completion).**
 | 9 | **PREP-8: can't return JSONResponse from inside `work()`** — `sse_upload_response` wraps `work()` in a task; exceptions are caught and streamed as SSE error events, not HTTP responses | **HIGH** | Rewrote PREP-8: use `raise ValueError(...)` instead of `return JSONResponse(...)`. Also changed safety-net from `HTTPException` to `ValueError` for same reason. |
 | 10 | v11c added `invalidate_topology_cache()` call at end of `work()` in `graph_ingest.py` — PREP-8 guard fires before this point, no conflict | INFO | Added v11c gotcha note to PREP-8 |
 | 11 | v11c — no other overlapping files (scenarios cache, frontend dedup, Gremlin warm-up all in separate files) | INFO | Added v11c compatibility section |
+| 12 | v11c post-deploy: `config_store.py` partition key changed `/scenario_name` → `/id`, `cosmos_helpers.py` ARM existence check, `ScenarioContext.tsx` useMemo, `useTopology.ts` abort cleanup — zero overlap with any prep task | INFO | Updated v11c compatibility section |
