@@ -30,10 +30,6 @@ COSMOS_GREMLIN_GRAPH = os.getenv("COSMOS_GREMLIN_GRAPH", "topology")
 # Required-var tuples (used by lifespan health checks)
 # ---------------------------------------------------------------------------
 
-# Canonical definition lives in config.py — import from there.
-# Kept here for backwards compatibility:
-from config import TELEMETRY_REQUIRED_VARS  # noqa: F401
-
 COSMOS_REQUIRED_VARS: tuple[str, ...] = (
     "COSMOS_GREMLIN_ENDPOINT", "COSMOS_GREMLIN_PRIMARY_KEY",
 )

@@ -36,6 +36,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY graph-query-api/*.py ./
 COPY graph-query-api/adapters/ ./adapters/
 COPY graph-query-api/backends/ ./backends/
+COPY graph-query-api/ingest/ ./ingest/
 COPY graph-query-api/openapi/ ./openapi/
 COPY graph-query-api/services/ ./services/
 COPY graph-query-api/stores/ ./stores/

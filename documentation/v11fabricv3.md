@@ -32,23 +32,28 @@ no Fabric" to "I have a working Fabric scenario."
 
 ### What the refactor (v11refactor.md) changed
 
-The completed refactor affects several files this plan touches. Key changes:
+All 50 refactor items are complete. Every file compiles cleanly (TypeScript 0 errors,
+Python 0 errors). Key changes affecting this plan:
 
-| Refactor item | Impact on this plan |
-|---|---|
-| #12: Fabric `_get_token()` deduplicated | Shared token helper now in `adapters/fabric_config.py` — BE-2 uses it |
-| #15: Generic `_find_or_create()` in fabric_provision.py | Four 40-line functions → one generic helper (~160 lines saved). Phase B builds on this. |
-| #19: SSE boilerplate extracted in fabric_provision.py | Shared `sse_provision_stream()` wrapper. Phase B's new steps use it. |
-| #27: `<ProgressBar>` component extracted | Reusable in ConnectionsDrawer provision progress |
-| #28: `<ModalShell>` wrapper extracted | ScenarioManagerModal uses it instead of reimplementing chrome |
-| #29: Provisioning SSE calls deduplicated | Shared `triggerProvisioning()` — ConnectionsDrawer provision uses it |
-| #31: `router_ingest.py` split into modules | Upload guard (BE-4) goes into `ingest/graph_ingest.py`, not the monolith |
-| #32: SettingsModal split into tab components | ScenarioManagerModal builds from tab pieces, not 860-line monolith |
-| #33: Upload orchestration extracted from AddScenarioModal | `useScenarioUpload.ts` hook exists — backend chooser integration simpler |
-| #37: `FabricGQLBackend.aclose()` deleted | Dead code removed |
-| #40: Unused Fabric env vars deleted from `fabric_config.py` | ⚠️ CONFLICT: Some vars (ontology name, lakehouse name) need re-adding for Phase B |
-| #44: `savedScenarios` + `activeScenarioRecord` in ScenarioContext | Phase C startup work is much simpler — context already has the data |
-| #48: Provisioning concurrency guard | Fabric provisioning should respect the same `asyncio.Lock` |
+| Refactor item | Current state | Impact on this plan |
+|---|---|---|
+| #7: `<BindingCard>` extracted | `BindingCard.tsx` exists, 5 inline blocks replaced in SettingsModal | ScenarioManagerModal can reuse it |
+| #12: Fabric `_get_token()` deduplicated | `acquire_fabric_token()` in `backends/fabric.py`, imported by discovery router | BE-2 uses shared helper |
+| #15: Generic `_find_or_create()` | `_find_or_create()` in `fabric_provision.py` (586 lines total now), 4 functions delegate to it | Phase B data-upload steps slot in cleanly |
+| #16: SSE log broadcast dedup | `log_broadcaster.py` shared module, both services use it | — |
+| #19: SSE provision boilerplate | `sse_provision_stream()` wrapper in `fabric_provision.py` | Phase B's new pipeline steps use it |
+| #27: `<ProgressBar>` extracted | `ProgressBar.tsx` exists | Reusable in ConnectionsDrawer provision progress |
+| #28: `<ModalShell>` extracted | `ModalShell.tsx` exists | ScenarioManagerModal uses it |
+| #29: Provisioning SSE dedup | `triggerProvisioning.ts` exists | ConnectionsDrawer provision button uses it |
+| #31: `router_ingest.py` split | `ingest/` package with 7 modules; `router_ingest.py` is 2-line re-export | Upload guard (BE-4) goes into `ingest/graph_ingest.py` |
+| #32: SettingsModal split | `settings/` dir with 4 tab components; SettingsModal is 201 lines | ScenarioManagerModal composes from tab pieces |
+| #33: Upload orchestration extracted | `useScenarioUpload.ts` exists; AddScenarioModal is 514 lines | Backend chooser integrates with this hook |
+| #37: `aclose()` deleted | Dead code removed from `backends/fabric.py` | — |
+| #40: Unused Fabric env vars deleted | Only `FABRIC_CONFIGURED`, `FABRIC_WORKSPACE_ID`, `FABRIC_GRAPH_MODEL_ID`, `FABRIC_API_URL`, `FABRIC_SCOPE` remain | ⚠️ Phase B must re-add vars needed by provision pipeline |
+| #43: Mock data to JSON | `mock_topology.json` fixture, `mock.py` loads from it | — |
+| #44: Context promotion | `savedScenarios`, `activeScenarioRecord`, `refreshScenarios()` in `ScenarioContext.tsx` | Phase C startup is largely done — context has the data |
+| #46: Persist config to disk | `_save_config()` with atomic writes; loads from `active_config.json` on startup | Fabric provisioning config writes use this pattern |
+| #48: Provisioning concurrency guard | `asyncio.Lock` in `config.py` `apply_config()` | Fabric provisioning respects the same lock pattern |
 
 ---
 
@@ -99,8 +104,8 @@ to see CosmosDB, Blob, AI Search, Foundry, or Fabric status. No connections pane
 
 ### P6: The ⚙ gear is a junk drawer
 
-SettingsModal was split into tab components (refactor #32) but it's still behind a
-gear icon with no discoverability. The Fabric tab (now `FabricSetupTab.tsx`) is
+SettingsModal is split into `settings/` tab components (201 lines shell + 4 tab files)
+but it's still behind a gear icon with no discoverability. The `FabricSetupTab.tsx` is
 conditionally hidden. Users have to hunt through tabs.
 
 ### P7: Startup loading overlay blocks the UI
@@ -197,9 +202,9 @@ Currently: `FABRIC_CONFIGURED = bool(WORKSPACE_ID and GRAPH_MODEL_ID)`. This con
 on `FABRIC_CONFIGURED`, creating a chicken-and-egg: you can't discover resources
 until you have a Graph Model ID, but you need discovery to provision and GET that ID.
 
-> **Post-refactor note:** Refactor #40 deleted unused Fabric env var constants
+> **Note:** Refactor #40 deleted unused Fabric env var constants
 > (`FABRIC_WORKSPACE_NAME`, `FABRIC_ONTOLOGY_NAME`, etc.) from this file. Some of
-> these will need to be **re-added** when Phase B extends the provision pipeline
+> these must be **re-added** when Phase B extends the provision pipeline
 > (the ontology definition needs names, the lakehouse upload needs the lakehouse name).
 > Re-add only what the provision pipeline actually reads.
 
@@ -221,9 +226,8 @@ This allows users to list resources during setup before a Graph Model exists.
 
 GQL query execution (`FabricGQLBackend.execute_query()`) keeps gating on `FABRIC_QUERY_READY`.
 
-> **Post-refactor note:** Refactor #12 deduplicated `_get_token()` — the shared
-> helper is now imported from `adapters/fabric_config.py`. No separate token
-> function in this file anymore.
+> **Refactor note:** `acquire_fabric_token()` lives in `backends/fabric.py` and is
+> imported by `router_fabric_discovery.py`. The shared helper is already in place.
 
 ### BE-3: Richer health endpoint
 
@@ -251,11 +255,10 @@ Three UI states derive from this:
 
 ### BE-4: Upload guard for Fabric scenarios
 
-**File:** `graph-query-api/ingest/graph_ingest.py` (post-refactor #31 split)
+**File:** `graph-query-api/ingest/graph_ingest.py`
 
-> **Post-refactor note:** `router_ingest.py` was split into modules (refactor #31).
-> The graph upload endpoint now lives in `ingest/graph_ingest.py`. The upload guard
-> goes there, not in the old monolith.
+The graph upload endpoint lives in `ingest/graph_ingest.py` (refactor #31 split
+`router_ingest.py` into 7 focused modules; `router_ingest.py` is now a 2-line re-export).
 
 When `POST /query/upload/graph` is called for a scenario with `graph_connector: "fabric-gql"`,
 the upload calls `FabricGQLBackend.ingest()` which raises `NotImplementedError` → 500 error.
@@ -459,13 +462,12 @@ assignment dropdowns.
 
 ### The gap
 
-`api/app/routers/fabric_provision.py` (~490 lines post-refactor) creates empty resource
+`api/app/routers/fabric_provision.py` (586 lines) creates empty resource
 containers. The reference scripts (3 files, ~1700 lines total) create resources **with data**.
 
-> **Post-refactor note:** Refactor #15 collapsed four `_find_or_create_*` functions
-> into a single generic `_find_or_create()` helper (~160 lines saved). Refactor #19
-> extracted SSE boilerplate into `sse_provision_stream()`. The file is now leaner and
-> the generic helper is directly reusable for extending the pipeline.
+The generic `_find_or_create()` helper and `sse_provision_stream()` SSE wrapper are
+already in place (refactors #15, #19). The file is lean and the helpers are directly
+reusable for extending the pipeline.
 
 The API route's docstring even says "Create Lakehouse + upload CSV data" and "Create
 Eventhouse + ingest telemetry" — but neither is implemented. This is the single
@@ -505,10 +507,8 @@ biggest fix needed for the Fabric experience to work end-to-end.
 Extend `fabric_provision.py` to port the reference scripts' logic into the SSE-streamed
 API endpoints. This is the biggest code change in the plan. The approach:
 
-> **Post-refactor advantage:** The generic `_find_or_create()` helper and the
-> `sse_provision_stream()` SSE wrapper from refactors #15 and #19 reduce the
-> boilerplate needed for each new step. New data-upload functions slot cleanly
-> into the existing pipeline structure.
+The generic `_find_or_create()` helper and `sse_provision_stream()` wrapper are already
+in place. New data-upload functions slot cleanly into the existing pipeline structure.
 
 1. **Re-add needed Fabric env vars** — Refactor #40 deleted them, but the provision
    pipeline needs: `FABRIC_WORKSPACE_NAME`, `FABRIC_LAKEHOUSE_NAME`,
@@ -573,9 +573,9 @@ eventhouse 35-65%, ontology 65-100%). With data upload, expand to finer granular
 This is the largest single task — porting ~1200 lines of reference script logic into
 the async SSE-streamed API endpoint. Estimate: **2-3 days** for a developer familiar
 with the reference codebase. The logic is well-understood (reference scripts work);
-the challenge is async adaptation + SSE progress integration. Post-refactor, the
-generic `_find_or_create()` and `sse_provision_stream()` helpers reduce boilerplate
-by ~200 lines vs. writing from scratch.
+the challenge is async adaptation + SSE progress integration. The existing
+`_find_or_create()` and `sse_provision_stream()` helpers save ~200 lines of
+boilerplate vs. writing from scratch.
 
 ---
 
@@ -589,11 +589,11 @@ BEFORE                                AFTER
 Header:                               Header:
   ◆ Title  [ScenarioChip ▾]  •API ⚙    ◆ Title  [ScenarioChip ▾]  •5/5  🔌
 
-⚙ → SettingsModal (split into tabs)   ScenarioChip dropdown:
-  ├─ ScenarioSettingsTab                 ├─ Scenario quick-select
-  ├─ DataSourceSettingsTab               ├─ + New Scenario
-  ├─ UploadSettingsTab                   ├─ ✦ Custom mode
-  └─ FabricSetupTab (hidden!)           ├─ ⊞ Manage scenarios… → ScenarioManagerModal
+⚙ → SettingsModal (201-line shell)    ScenarioChip dropdown:
+  ├─ ScenarioSettingsTab.tsx             ├─ Scenario quick-select
+  ├─ DataSourceSettingsTab.tsx           ├─ + New Scenario
+  ├─ UploadSettingsTab.tsx               ├─ ✦ Custom mode
+  └─ FabricSetupTab.tsx (hidden!)       ├─ ⊞ Manage scenarios… → ScenarioManagerModal
                                          └─ AddScenarioModal (with backend chooser)
 
                                        🔌 → ConnectionsDrawer (slide-over)
@@ -605,12 +605,15 @@ Loading overlay (blocks UI 5s)         Non-blocking startup:
   "Validating scenario..."               Init from localStorage → background validate
 ```
 
-> **Post-refactor context:** SettingsModal was split into tab components (refactor #32).
-> `<ModalShell>` wrapper exists (refactor #28). `<ProgressBar>` component exists
-> (refactor #27). `useClickOutside` hook exists (refactor #24). `useScenarioUpload`
-> hook extracted from AddScenarioModal (refactor #33). `savedScenarios` +
-> `activeScenarioRecord` are already in ScenarioContext (refactor #44). These
-> pre-existing pieces significantly reduce the work for this plan.
+Available building blocks from the completed refactor:
+- `<ModalShell>` — modal chrome wrapper (backdrop, header, close, footer)
+- `<ProgressBar>` — reusable progress bar component
+- `<BindingCard>` — data-source binding card
+- `useClickOutside` — click-outside hook
+- `useScenarioUpload` — upload orchestration (state machine, file slots, sequential uploads)
+- `triggerProvisioning()` — shared SSE provisioning call
+- `savedScenarios` / `activeScenarioRecord` / `refreshScenarios()` — in ScenarioContext
+- Split tab components in `settings/` — composable for ScenarioManagerModal
 
 ### Change 1: Kill the ⚙ gear — extend the ScenarioChip dropdown
 
@@ -735,15 +738,16 @@ config store and takes effect immediately via runtime reload (BE-7) — no resta
 ontologies + eventhouses). Graph Models shown as workspace-level items, NOT nested under ontologies.
 Data Agents are discoverable and assignable to roles directly from the drawer.
 
-### Change 4: ScenarioManagerModal (replaces split SettingsModal tabs)
+### Change 4: ScenarioManagerModal (replaces SettingsModal)
 
-Post-refactor, SettingsModal is already split into tab components (refactor #32):
-`ScenarioSettingsTab`, `DataSourceSettingsTab`, `UploadSettingsTab`, `FabricSetupTab`.
-ScenarioManagerModal is built by **composing the existing tab pieces**, not rewriting
-from scratch. Uses the pre-existing `<ModalShell>` wrapper (refactor #28).
+SettingsModal is already split into `settings/` tab components:
+`ScenarioSettingsTab.tsx`, `DataSourceSettingsTab.tsx`, `UploadSettingsTab.tsx`,
+`FabricSetupTab.tsx`. The shell is 201 lines. ScenarioManagerModal is built by
+**composing the existing tab pieces** + `<ModalShell>` wrapper.
 
 Simplified from 4 tabs to 2 (`Scenarios | Upload`). Kill DataSourceSettingsTab (inline
-bindings on scenario rows). Kill FabricSetupTab (moved to ConnectionsDrawer).
+bindings on scenario rows via `<BindingCard>`). Kill FabricSetupTab (moved to
+ConnectionsDrawer).
 
 Fabric-aware scenario rows:
 ```
@@ -765,10 +769,9 @@ For Cosmos scenarios, the "Graph" option appears in the re-upload dropdown norma
 
 Add "Where should graph data live?" selector before the upload slots.
 
-> **Post-refactor note:** Upload orchestration is now in `useScenarioUpload.ts`
-> (refactor #33). The backend chooser state (`selectedBackend`) integrates with
-> this hook, which already manages upload state, file slots, and sequential uploads.
-> The modal file is ~300 lines (down from 704), so adding the chooser cards is clean.
+Upload orchestration is in `useScenarioUpload.ts` (514-line modal, down from 699).
+The backend chooser state (`selectedBackend`) integrates with this hook, which already
+manages upload state, file slots, and sequential uploads.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -796,11 +799,10 @@ Fabric Lakehouse."
 
 ### Change 6: Non-blocking startup
 
-> **Post-refactor note:** Refactor #44 already added `savedScenarios`,
-> `activeScenarioRecord`, `scenariosLoading`, and `refreshScenarios()` to
-> ScenarioContext. The init-from-localStorage and background-validation patterns
-> described here are largely implemented. What remains is removing the blocking
-> overlay and adding the skeleton chip + crossfade.
+`ScenarioContext.tsx` already has `savedScenarios`, `activeScenarioRecord`,
+`scenariosLoading`, and `refreshScenarios()`. The init-from-localStorage and
+background-validation patterns are implemented. What remains is removing the
+blocking overlay and adding the skeleton chip + crossfade.
 
 - Skeleton chip while `scenariosLoading` (from context)
 - If persisted scenario was deleted → crossfade to null
@@ -867,7 +869,7 @@ Inline scenario picker + CTA button.
 | A2: Split FABRIC_CONFIGURED (BE-1) + re-add needed env vars | `adapters/fabric_config.py` | Low (30min) |
 | A3: Discovery gates on workspace-only (BE-2) | `router_fabric_discovery.py` | Low (30min) |
 | A4: Richer health endpoint (BE-3) | `router_fabric_discovery.py` | Low (1hr) |
-| A5: Upload guard for Fabric scenarios (BE-4) | `ingest/graph_ingest.py` (post-split) | Low (30min) |
+| A5: Upload guard for Fabric scenarios (BE-4) | `ingest/graph_ingest.py` | Low (30min) |
 | A6: Add FABRIC_* to env template (BE-6) | `azure_config.env.template` | Low (15min) |
 
 **After Phase A:** The Fabric discovery hook works. Health shows real state. Discovery
@@ -893,11 +895,9 @@ data for Fabric scenarios. ~4 hours total.
 definition. Graph Model is auto-created and discovered. `FABRIC_GRAPH_MODEL_ID` is
 set automatically. The end-to-end Fabric flow works. ~3 days total.
 
-> **Post-refactor advantage:** The generic `_find_or_create()` and
-> `sse_provision_stream()` helpers (refactors #15, #19) reduce boilerplate for new
-> pipeline steps. The `_find_or_create()` helper with its `list_endpoint`,
-> `type_filter`, and `fallback_endpoint` parameters already handles all the Fabric
-> API endpoint variations.
+The `_find_or_create()` helper with its `list_endpoint`, `type_filter`, and
+`fallback_endpoint` parameters already handles all the Fabric API endpoint variations.
+The `sse_provision_stream()` wrapper handles SSE error/completion boilerplate.
 
 ### Phase C: Startup + navigation restructure
 
@@ -905,10 +905,10 @@ set automatically. The end-to-end Fabric flow works. ~3 days total.
 
 | Task | Files | Effort |
 |------|-------|--------|
-| C1: Non-blocking startup (remove overlay, add crossfade) | `App.tsx` | Low (1hr) — refactor #44 already did the heavy lifting |
+| C1: Non-blocking startup (remove overlay, add crossfade) | `App.tsx` | Low (1hr) — context already has savedScenarios/activeScenarioRecord |
 | C2: Skeleton chip + crossfade | `ScenarioChip.tsx` | Low (1hr) |
 | C3: Add services health endpoint (BE-5) | New router | Medium (3hr) |
-| C4: Create ConnectionsDrawer | New `ConnectionsDrawer.tsx` | Medium (4hr) — uses `<ModalShell>`, `<ProgressBar>` |
+| C4: Create ConnectionsDrawer | New `ConnectionsDrawer.tsx` | Medium (4hr) — uses `<ModalShell>`, `<ProgressBar>`, `triggerProvisioning()` |
 | C5: Create ServiceHealthSummary | New `ServiceHealthSummary.tsx` | Low (1hr) |
 | C6: Update Header (remove gear, add health + connections) | `Header.tsx` | Low (1hr) |
 | C7: Extend ScenarioChip dropdown (add ⊞ Manage, backend badge) | `ScenarioChip.tsx` | Low (1hr) — uses `useClickOutside` |
@@ -923,11 +923,11 @@ due to refactor pre-work).
 
 | Task | Files | Effort |
 |------|-------|--------|
-| D1: ScenarioManagerModal (compose from split tab pieces) | New `ScenarioManagerModal.tsx` | Medium (3hr) — uses `<ModalShell>`, existing tab components |
-| D2: Backend chooser in AddScenarioModal | `AddScenarioModal.tsx` | Medium (2hr) — integrates with `useScenarioUpload` |
+| D1: ScenarioManagerModal (compose from tab pieces) | New `ScenarioManagerModal.tsx` | Medium (3hr) — uses `<ModalShell>`, `<BindingCard>`, existing tab components |
+| D2: Backend chooser in AddScenarioModal | `AddScenarioModal.tsx` (514 lines) | Medium (2hr) — integrates with `useScenarioUpload` |
 | D3: Grey out graph upload for Fabric scenarios | `AddScenarioModal.tsx` / `useScenarioUpload.ts` | Low (1hr) |
 | D4: Hide Graph from re-upload dropdown for Fabric scenarios | `ScenarioManagerModal.tsx` | Low (30min) |
-| D5: Add "Re-provision Fabric Resources" button for Fabric scenarios | `ScenarioManagerModal.tsx` | Low (1hr) — uses `triggerProvisioning()` (refactor #29) |
+| D5: Add "Re-provision Fabric Resources" button for Fabric scenarios | `ScenarioManagerModal.tsx` | Low (1hr) — uses `triggerProvisioning()` |
 | D6: Interactive EmptyState | `EmptyState.tsx` | Medium (2hr) |
 
 **After Phase D:** Full scenario lifecycle works for both Cosmos and Fabric. ~1.5 days
@@ -939,7 +939,7 @@ due to refactor pre-work).
 |------|-------|--------|
 | E1: Modal/panel animations (framer-motion) | All drawers/modals | Low (2hr) |
 | E2: Toast notification system | New utility | Medium (2hr) |
-| E3: Delete split SettingsModal tab files + cleanup imports | Tab files, SettingsModal.tsx shell | Low (1hr) |
+| E3: Delete SettingsModal (201-line shell) + settings/ tab files + cleanup imports | `SettingsModal.tsx`, `settings/*.tsx` | Low (1hr) |
 | E4: Accessibility (focus trap, aria-live, keyboard nav) | All modals/drawers | Medium (3hr) |
 | E5: Update architecture docs | `frontend-architecture.md` etc. | Low (1hr) |
 
@@ -1086,35 +1086,39 @@ var changes still work as fallback defaults but are overridden by config store v
 
 ## 11. File Change Inventory
 
-> **Note:** File paths and sizes reflect the post-refactor codebase.
-> SettingsModal is already split into tab files. AddScenarioModal has
-> `useScenarioUpload.ts` extracted. `router_ingest.py` is split into
-> `ingest/` modules. Shared helpers (`ModalShell`, `ProgressBar`,
-> `useClickOutside`, `triggerProvisioning`) already exist.
+> **Codebase state after refactor:** SettingsModal is 201 lines (shell) with 4 tab
+> files in `settings/`. AddScenarioModal is 514 lines with `useScenarioUpload.ts`
+> extracted. `router_ingest.py` is a 2-line re-export; actual code in `ingest/`
+> package (7 modules). `fabric_provision.py` is 586 lines with generic
+> `_find_or_create()` and `sse_provision_stream()`. Shared components exist:
+> `ModalShell`, `ProgressBar`, `BindingCard`, `useClickOutside`,
+> `triggerProvisioning`, `useScenarioUpload`. ScenarioContext has
+> `savedScenarios`/`activeScenarioRecord`/`refreshScenarios()`. Config persists to
+> `active_config.json` with atomic writes.
 
 ### New Files (6)
 
 | File | Phase | Size est. |
 |------|-------|-----------|
-| `frontend/src/components/ConnectionsDrawer.tsx` | C+F | ~320 lines (includes workspace setup UI + Data Agent section) |
+| `frontend/src/components/ConnectionsDrawer.tsx` | C+F | ~320 lines (workspace setup UI + Data Agent section) |
 | `frontend/src/components/ServiceHealthSummary.tsx` | C | ~60 lines |
 | `frontend/src/components/ScenarioManagerModal.tsx` | D | ~400 lines |
 | Backend services health endpoint (location TBD) | C | ~80 lines |
 | `graph-query-api/backends/fabric_kql.py` | F | ~150 lines |
-| `api/app/routers/fabric_config_api.py` | F | ~120 lines (connect + config + data agents) |
+| `api/app/routers/fabric_config_api.py` | F | ~120 lines |
 
 ### Heavily Modified (2)
 
 | File | Phase | Change |
 |------|-------|--------|
-| `api/app/routers/fabric_provision.py` | B | +~800 lines (data upload, ontology def, graph model discovery, conditional execution). Builds on generic `_find_or_create()` and `sse_provision_stream()` from refactor. |
-| `adapters/fabric_config.py` | A+B+F | Split FABRIC_CONFIGURED + re-add env vars + add dynamic config layer (get_fabric_config, invalidate_fabric_cache) |
+| `api/app/routers/fabric_provision.py` (586 lines) | B | +~800 lines (data upload, ontology def, graph model discovery, conditional execution). Uses existing `_find_or_create()` and `sse_provision_stream()`. |
+| `adapters/fabric_config.py` | A+B+F | Split FABRIC_CONFIGURED + re-add env vars + add dynamic config layer |
 
 ### Medium Edits (5)
 
 | File | Phase | Change |
 |------|-------|--------|
-| `AddScenarioModal.tsx` | D | +backend chooser cards, integration with `useScenarioUpload` hook |
+| `AddScenarioModal.tsx` (514 lines) | D | +backend chooser cards, integration with `useScenarioUpload` hook |
 | `Header.tsx` | C | Remove gear, add ServiceHealthSummary + connections button |
 | `ScenarioChip.tsx` | C | Add manage action, badge, skeleton. Uses `useClickOutside`. |
 | `App.tsx` | C | Remove overlay, add crossfade + slim loading banner |
@@ -1126,7 +1130,7 @@ var changes still work as fallback defaults but are overridden by config store v
 |------|-------|--------|
 | `useFabricDiscovery.ts` | A | 5 bug fixes + 2 new fetch methods |
 | `router_fabric_discovery.py` | A+F | Gate change + richer health + data agent discovery |
-| `ingest/graph_ingest.py` | A | Upload guard for Fabric (post-split location) |
+| `ingest/graph_ingest.py` | A | Upload guard for Fabric scenarios |
 | `azure_config.env.template` | A | Add FABRIC_* vars |
 | `EmptyState.tsx` | D | Interactive checklist |
 | `backends/__init__.py` | F | Register `fabric-kql` backend |
@@ -1136,8 +1140,8 @@ var changes still work as fallback defaults but are overridden by config store v
 
 | File | Phase | Reason |
 |------|-------|--------|
-| Split SettingsModal tab files | E | Replaced by ScenarioManagerModal + ConnectionsDrawer |
-| `SettingsModal.tsx` shell | E | Replaced by ScenarioManagerModal |
+| `SettingsModal.tsx` (201-line shell) | E | Replaced by ScenarioManagerModal |
+| `settings/*.tsx` (4 tab files) | E | Functionality moved to ScenarioManagerModal + ConnectionsDrawer |
 
 ---
 
