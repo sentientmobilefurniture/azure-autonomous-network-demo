@@ -38,7 +38,7 @@ Python 0 errors). Key changes affecting this plan:
 | Refactor item | Current state | Impact on this plan |
 |---|---|---|
 | #7: `<BindingCard>` extracted | `BindingCard.tsx` exists, 5 inline blocks replaced in SettingsModal | ScenarioManagerModal can reuse it |
-| #12: Fabric `_get_token()` deduplicated | `acquire_fabric_token()` in `backends/fabric.py`, imported by discovery router | BE-2 uses shared helper |
+| #12: Fabric `_get_token()` deduplicated | `acquire_fabric_token()` in `backends/fabric.py`, imported by `router_fabric_discovery.py` | BE-2 uses shared helper |
 | #15: Generic `_find_or_create()` | `_find_or_create()` in `fabric_provision.py` (586 lines total now), 4 functions delegate to it | Phase B data-upload steps slot in cleanly |
 | #16: SSE log broadcast dedup | `log_broadcaster.py` shared module, both services use it | — |
 | #19: SSE provision boilerplate | `sse_provision_stream()` wrapper in `fabric_provision.py` | Phase B's new pipeline steps use it |
@@ -59,13 +59,13 @@ Python 0 errors). Key changes affecting this plan:
 
 ## 2. The Problems
 
-### P1: Five bugs in useFabricDiscovery.ts
+### P1: Four bugs in useFabricDiscovery.ts (one was fixed by refactor)
 
 | # | Bug | Impact |
 |---|-----|--------|
 | B1 | `checkHealth()` reads `data.status === 'ok'` but backend returns `{configured: bool}` | Fabric always shows unhealthy |
 | B2 | `runProvisionPipeline()` calls `/api/fabric/provision/pipeline` but route is `/api/fabric/provision` | Provision always 404s |
-| B3 | Stale closure: `provisionState` in both callback body and dep array | Completion detection unreliable |
+| ~~B3~~ | ~~Stale closure: `provisionState` in both callback body and dep array~~ | **Fixed by refactor** — replaced with local `receivedTerminalEvent` flag |
 | B4 | Discovery reads `data.items || []` but backend returns flat `list[FabricItem]` | All resource lists always empty |
 | B5 | Discovery endpoints gate on `FABRIC_CONFIGURED` (requires BOTH workspace ID AND graph model ID) | Can't discover resources until fully configured — chicken-and-egg |
 
