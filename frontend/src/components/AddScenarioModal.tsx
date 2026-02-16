@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { SlotKey, ScenarioUploadSlot } from '../types';
-import { ProgressBar } from './ProgressBar';
-import { useScenarioUpload, SLOT_DEFS, formatElapsed } from '../hooks/useScenarioUpload';
+import { useScenarioUpload, SLOT_DEFS } from '../hooks/useScenarioUpload';
 
 // ---------------------------------------------------------------------------
 // Helpers (UI / form validation — not upload-related)
@@ -71,25 +70,19 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
   const {
     modalState,
-    overallPct,
-    currentUploadStep,
     globalError,
     slots,
-    elapsedSeconds,
     showOverrideConfirm,
     setShowOverrideConfirm,
     handleSlotFile,
     startUpload,
-    scenarioMetadataRef: _scenarioMetadataRef,
-    detectedConnector,
     updateSlot,
-    cancelUpload,
-    allDone,
   } = useScenarioUpload({
     name,
     displayName,
     description,
     existingNames,
+    selectedBackend,
     saveScenarioMeta,
     onSaved,
     onClose,
@@ -112,7 +105,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (modalState === 'uploading') return; // don't close during upload
+        if (modalState === 'uploading') return; // don't close while submitting
         onClose();
       }
     };
@@ -153,17 +146,13 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
   // Handle Save button click
   const handleSave = useCallback(async () => {
-    if (!canSave && !allDone) return;
+    if (!canSave) return;
     startUpload();
-  }, [canSave, allDone, startUpload]);
+  }, [canSave, startUpload]);
 
   const handleCancel = useCallback(() => {
-    if (modalState === 'uploading') {
-      cancelUpload();
-    } else {
-      onClose();
-    }
-  }, [modalState, onClose, cancelUpload]);
+    onClose();
+  }, [onClose]);
 
   if (!open) return null;
 
@@ -182,12 +171,12 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-white/10">
           <h2 className="text-lg font-semibold text-text-primary">
-            {modalState === 'done' ? '✓ Scenario Saved' : 'New Scenario'}
+            New Scenario
           </h2>
           <button
             onClick={handleCancel}
             className="text-text-muted hover:text-text-primary transition-colors text-xl leading-none"
-            disabled={modalState === 'saving'}
+            disabled={modalState === 'uploading'}
           >
             ✕
           </button>
@@ -365,48 +354,25 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
             })}
           </div>
 
-          {/* Fabric connector detected */}
-          {detectedConnector === 'fabric-gql' && modalState === 'idle' && (
+          {/* Fabric backend info */}
+          {selectedBackend === 'fabric-gql' && modalState === 'idle' && (
             <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-3 flex items-start gap-2">
               <span className="text-cyan-400 text-sm leading-none mt-0.5">⬡</span>
               <div>
-                <p className="text-xs font-medium text-cyan-300">Fabric Graph Connector Detected</p>
+                <p className="text-xs font-medium text-cyan-300">Fabric Graph Backend Selected</p>
                 <p className="text-[11px] text-cyan-400/70 mt-0.5">
-                  Graph data will be managed via Microsoft Fabric. After saving, use the
-                  Fabric Setup tab in Settings to provision resources.
+                  Graph data will be provisioned via Microsoft Fabric using the active workspace
+                  connection. Ensure a workspace is configured in Settings → Fabric Connections.
                 </p>
               </div>
             </div>
           )}
 
-          {/* Upload Progress */}
-          {(modalState === 'uploading' || modalState === 'saving') && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-text-muted">
-                <span>{currentUploadStep}</span>
-                <span>{overallPct}%</span>
-              </div>
-              <ProgressBar pct={Math.max(overallPct, 3)} className="bg-neutral-bg1" />
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-xs text-text-secondary">
-                  Overall: {SLOT_DEFS.filter(d => slots[d.key].status === 'done').length} of {SLOT_DEFS.length}
-                </span>
-                <span className={`text-xs font-mono tabular-nums ${
-                  elapsedSeconds > 30 ? 'text-text-secondary' : 'text-text-muted'
-                }`}>
-                  ⏱ {formatElapsed(elapsedSeconds)}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Done message */}
-          {modalState === 'done' && (
-            <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 text-center">
-              <p className="text-sm text-status-success">Scenario "{name}" saved successfully</p>
-              <p className="text-xs text-status-success/70 mt-1 font-mono tabular-nums">
-                Total: {formatElapsed(elapsedSeconds)}
-              </p>
+          {/* Submitting indicator */}
+          {modalState === 'uploading' && (
+            <div className="flex items-center gap-2 text-xs text-text-muted">
+              <span className="animate-spin">⏳</span>
+              <span>Submitting upload job…</span>
             </div>
           )}
 
@@ -416,14 +382,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
               <p className="text-xs text-status-error whitespace-pre-wrap">{globalError}</p>
             </div>
           )}
-
-          {/* First-time warning */}
-          {modalState === 'uploading' && (
-            <p className="text-xs text-text-muted">
-              ⓘ First-time setup may take 3-5 minutes while Azure resources are created.
-              Subsequent uploads will be faster.
-            </p>
-          )}
         </div>
 
         {/* Footer */}
@@ -432,21 +390,18 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
             onClick={handleCancel}
             className="px-4 py-1.5 text-sm text-text-primary bg-white/10 hover:bg-white/15 rounded-md transition-colors"
           >
-            {modalState === 'uploading' ? 'Cancel Upload' : 'Cancel'}
+            Cancel
           </button>
           <button
             onClick={handleSave}
-            disabled={!canSave && !allDone}
+            disabled={!canSave}
             className={`px-5 py-1.5 text-sm rounded-md transition-colors ${
-              canSave || allDone
+              canSave
                 ? 'bg-brand text-white hover:bg-brand/90'
                 : 'bg-white/5 text-text-muted cursor-not-allowed'
             }`}
           >
-            {modalState === 'saving' ? 'Saving...' :
-             modalState === 'done' ? '✓ Saved' :
-             modalState === 'uploading' ? 'Uploading...' :
-             'Save Scenario'}
+            {modalState === 'uploading' ? 'Submitting…' : 'Save Scenario'}
           </button>
         </div>
       </div>
@@ -526,7 +481,9 @@ function FileSlot({ def, slot, disabled, onFile, onClear, onRetry }: {
           {slot.category && (
             <p className="text-[10px] font-medium text-brand truncate">{slot.category}</p>
           )}
-          <ProgressBar pct={Math.max(slot.pct, 5)} className="h-1" />
+          <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+            <div className="h-full bg-brand rounded-full transition-all" style={{ width: `${Math.max(slot.pct, 5)}%` }} />
+          </div>
           <p className="text-[10px] text-text-muted truncate">{slot.progress}</p>
         </div>
       )}

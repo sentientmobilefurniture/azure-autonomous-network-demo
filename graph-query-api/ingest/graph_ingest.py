@@ -112,6 +112,21 @@ async def upload_graph(
 
             manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
             manifest = _normalize_manifest(manifest)
+            sc_name = manifest["name"]
+
+            # Guard: reject graph upload for Fabric scenarios (must be before schema read)
+            graph_connector = (
+                manifest.get("data_sources", {})
+                .get("graph", {})
+                .get("connector", "")
+            )
+            if graph_connector == "fabric-gql":
+                raise ValueError(
+                    "This scenario uses Fabric for graph data. "
+                    "Graph topology is managed via the Fabric provisioning pipeline. "
+                    "Upload telemetry, runbooks, and tickets normally."
+                )
+
             schema = yaml.safe_load((scenario_dir / "graph_schema.yaml").read_text())
             sc_name = manifest["name"]
 
@@ -143,19 +158,6 @@ async def upload_graph(
             data_dir = scenario_dir / schema.get("data_dir", "data/entities")
 
             progress.emit("graph", "Preparing graph data from schema...", 15)
-
-            # Guard: reject graph upload for Fabric scenarios
-            graph_connector = (
-                manifest.get("data_sources", {})
-                .get("graph", {})
-                .get("connector", "")
-            )
-            if graph_connector == "fabric-gql":
-                raise ValueError(
-                    "This scenario uses Fabric for graph data. "
-                    "Graph topology is managed via the Fabric provisioning pipeline. "
-                    "Upload telemetry, runbooks, and tickets normally."
-                )
 
             # Transform schema + CSV → generic dicts
             vertices = _prepare_vertices_from_schema(schema, data_dir)

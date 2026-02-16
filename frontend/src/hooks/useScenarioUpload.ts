@@ -1,30 +1,31 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { SlotKey, ScenarioUploadSlot } from '../types';
-import { uploadWithSSE } from '../utils/sseStream';
 
 // ---------------------------------------------------------------------------
 // Slot configuration
 // ---------------------------------------------------------------------------
 
-export const SLOT_DEFS: { key: SlotKey; label: string; icon: string; endpoint: string }[] = [
-  { key: 'graph', label: 'Graph Data', icon: '🔗', endpoint: '/query/upload/graph' },
-  { key: 'telemetry', label: 'Telemetry', icon: '📊', endpoint: '/query/upload/telemetry' },
-  { key: 'runbooks', label: 'Runbooks', icon: '📋', endpoint: '/query/upload/runbooks' },
-  { key: 'tickets', label: 'Tickets', icon: '🎫', endpoint: '/query/upload/tickets' },
-  { key: 'prompts', label: 'Prompts', icon: '📝', endpoint: '/query/upload/prompts' },
+export const SLOT_DEFS: { key: SlotKey; label: string; icon: string }[] = [
+  { key: 'graph', label: 'Graph Data', icon: '🔗' },
+  { key: 'telemetry', label: 'Telemetry', icon: '📊' },
+  { key: 'runbooks', label: 'Runbooks', icon: '📋' },
+  { key: 'tickets', label: 'Tickets', icon: '🎫' },
+  { key: 'prompts', label: 'Prompts', icon: '📝' },
 ];
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type ModalState = 'idle' | 'uploading' | 'saving' | 'done' | 'error';
+/** Post-refactor: uploading is the brief POST; 'saving'/'done' are gone. */
+export type ModalState = 'idle' | 'uploading' | 'error';
 
 export interface UseScenarioUploadProps {
   name: string;
   displayName: string;
   description: string;
   existingNames: string[];
+  selectedBackend: 'cosmosdb-gremlin' | 'fabric-gql';
   saveScenarioMeta: (meta: {
     name: string;
     display_name?: string;
@@ -74,55 +75,26 @@ export function formatElapsed(seconds: number): string {
 // ---------------------------------------------------------------------------
 
 export function useScenarioUpload(props: UseScenarioUploadProps) {
-  const { name, displayName, description, existingNames, saveScenarioMeta, onSaved, onClose, open } = props;
+  const { name, displayName, description, existingNames, selectedBackend, saveScenarioMeta, onSaved, onClose, open } = props;
 
   const [modalState, setModalState] = useState<ModalState>('idle');
-  const [overallPct, setOverallPct] = useState(0);
-  const [currentUploadStep, setCurrentUploadStep] = useState('');
   const [globalError, setGlobalError] = useState('');
   const [slots, setSlots] = useState<Record<SlotKey, ScenarioUploadSlot>>(() => makeEmptySlots());
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showOverrideConfirm, setShowOverrideConfirm] = useState(false);
-  const [detectedConnector, setDetectedConnector] = useState<string | null>(null);
-
-  const scenarioMetadataRef = useRef<Record<string, unknown> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const uploadStartRef = useRef<number>(0);
-  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ------- timer helpers -------
-
-  function stopTimer() {
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
-  }
 
   // ------- reset -------
 
   const reset = useCallback(() => {
     setSlots(makeEmptySlots());
     setModalState('idle');
-    setOverallPct(0);
-    setCurrentUploadStep('');
     setGlobalError('');
     setShowOverrideConfirm(false);
-    setDetectedConnector(null);
-    scenarioMetadataRef.current = null;
-    setElapsedSeconds(0);
-    stopTimer();
   }, []);
 
   // Auto-reset when modal opens
   useEffect(() => {
     if (open) reset();
   }, [open, reset]);
-
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => stopTimer();
-  }, []);
 
   // ------- slot helpers -------
 
@@ -134,14 +106,10 @@ export function useScenarioUpload(props: UseScenarioUploadProps) {
     updateSlot(key, { file, status: 'staged', progress: '', pct: 0, result: null, error: null });
   }, [updateSlot]);
 
-  // ------- derived state -------
-
-  const allDone = SLOT_DEFS.every(d => slots[d.key].status === 'done');
-
-  // ------- upload -------
+  // ------- upload: single POST to background job API -------
 
   const startUpload = useCallback(async () => {
-    // Check if scenario already exists — show confirmation
+    // Check if scenario already exists — show confirmation dialog
     if (existingNames.includes(name) && !showOverrideConfirm) {
       setShowOverrideConfirm(true);
       return;
@@ -150,149 +118,76 @@ export function useScenarioUpload(props: UseScenarioUploadProps) {
 
     setModalState('uploading');
     setGlobalError('');
-    abortRef.current = new AbortController();
-
-    // Start upload timer
-    uploadStartRef.current = Date.now();
-    setElapsedSeconds(0);
-    timerIntervalRef.current = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - uploadStartRef.current) / 1000));
-    }, 1000);
-
-    const uploadResults: Record<string, unknown> = {};
-
-    // Upload sequentially: graph → telemetry → runbooks → tickets → prompts
-    for (let i = 0; i < SLOT_DEFS.length; i++) {
-      const def = SLOT_DEFS[i];
-      const slot = slots[def.key];
-
-      // Skip already-done slots (for retry)
-      if (slot.status === 'done') {
-        uploadResults[def.key] = slot.result;
-        continue;
-      }
-
-      if (!slot.file) continue;
-
-      updateSlot(def.key, { status: 'uploading', progress: 'Starting...', pct: 0 });
-      setCurrentUploadStep(`Uploading ${def.label}...`);
-
-      try {
-        const result = await uploadWithSSE(
-          def.endpoint,
-          slot.file,
-          {
-            onProgress: (data) => {
-              updateSlot(def.key, { progress: data.detail, pct: data.pct, category: data.category });
-              setCurrentUploadStep(data.category ? `${def.label}: ${data.category}` : `Uploading ${def.label}...`);
-              const overallBase = (i / SLOT_DEFS.length) * 100;
-              const slotContribution = (data.pct / 100) * (100 / SLOT_DEFS.length);
-              setOverallPct(Math.round(overallBase + slotContribution));
-            },
-            onComplete: (data) => {
-              updateSlot(def.key, { status: 'done', result: data, progress: 'Complete', pct: 100 });
-              uploadResults[def.key] = data;
-              // Capture metadata from graph upload for save call
-              if (def.key === 'graph' && data.scenario_metadata) {
-                scenarioMetadataRef.current = data.scenario_metadata as Record<string, unknown>;
-                // Detect connector type from uploaded manifest
-                const meta = data.scenario_metadata as Record<string, unknown>;
-                const ds = meta?.data_sources as Record<string, unknown> | undefined;
-                const graphDs = ds?.graph as Record<string, unknown> | undefined;
-                const connector = (meta?.graph_connector as string)
-                  || (graphDs?.connector as string)
-                  || null;
-                if (connector) setDetectedConnector(connector);
-              }
-            },
-            onError: (data) => {
-              updateSlot(def.key, { status: 'error', error: data.error });
-            },
-          },
-          { scenario_name: name },
-          abortRef.current!.signal,
-        );
-
-        // If no complete event was received but no error either, mark as done
-        if (slot.status !== 'error' && result) {
-          uploadResults[def.key] = result;
-        }
-
-        // Check if the slot errored (set by onError handler)
-        if (slots[def.key]?.status === 'error') {
-          setModalState('idle');
-          return;
-        }
-      } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') {
-          setModalState('idle');
-          return;
-        }
-        updateSlot(def.key, { status: 'error', error: String(e) });
-        setModalState('idle');
-        return;
-      }
-    }
-
-    // All uploads done, save metadata
-    setModalState('saving');
-    setCurrentUploadStep('Saving scenario metadata...');
-    setOverallPct(95);
 
     try {
-      const meta = scenarioMetadataRef.current;
-      await saveScenarioMeta({
-        name,
-        display_name: (meta?.display_name as string) || displayName || undefined,
-        description: (meta?.description as string) || description || undefined,
-        use_cases: meta?.use_cases as string[] | undefined,
-        example_questions: meta?.example_questions as string[] | undefined,
-        graph_styles: meta?.graph_styles as Record<string, unknown> | undefined,
-        domain: meta?.domain as string | undefined,
-        graph_connector: detectedConnector || undefined,
-        upload_results: uploadResults,
-      });
-      setModalState('done');
-      setOverallPct(100);
-      stopTimer();
-      // Auto-close after brief delay
-      setTimeout(() => {
-        onSaved();
-        onClose();
-      }, 1500);
+      // Build multipart form with all staged files
+      const formData = new FormData();
+      formData.append('scenario_name', name);
+      formData.append('backend', selectedBackend);
+
+      // For Fabric uploads, resolve active workspace from connection panel
+      if (selectedBackend === 'fabric-gql') {
+        try {
+          const connResp = await fetch('/query/fabric/connections');
+          if (connResp.ok) {
+            const connData = await connResp.json();
+            const active = (connData.connections || []).find((c: { active: boolean }) => c.active);
+            if (active) {
+              formData.append('workspace_id', active.workspace_id || '');
+              formData.append('workspace_name', active.workspace_name || '');
+            }
+          }
+        } catch {
+          // Best-effort — job will proceed without workspace info
+        }
+      }
+
+      // Append each staged file
+      for (const def of SLOT_DEFS) {
+        const slot = slots[def.key];
+        if (slot.file) {
+          formData.append(def.key, slot.file);
+        }
+      }
+
+      // Submit to background job API
+      const resp = await fetch('/api/upload-jobs', { method: 'POST', body: formData });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Upload submission failed (${resp.status}): ${text}`);
+      }
+
+      // Save scenario metadata (basic — job will enrich later)
+      try {
+        await saveScenarioMeta({
+          name,
+          display_name: displayName || undefined,
+          description: description || undefined,
+          graph_connector: selectedBackend === 'fabric-gql' ? 'fabric-gql' : undefined,
+          upload_results: {},
+        });
+      } catch (e) {
+        console.warn('Failed to save scenario metadata:', e);
+      }
+
+      // Job submitted — close modal immediately
+      onSaved();
+      onClose();
     } catch (e) {
       setGlobalError(String(e));
       setModalState('error');
-      stopTimer();
     }
-  }, [existingNames, name, showOverrideConfirm, slots, updateSlot, saveScenarioMeta, displayName, description, detectedConnector, onSaved, onClose]);
-
-  // ------- cancel -------
-
-  const cancelUpload = useCallback(() => {
-    if (modalState === 'uploading') {
-      abortRef.current?.abort();
-      stopTimer();
-      setModalState('idle');
-    }
-  }, [modalState]);
+  }, [existingNames, name, showOverrideConfirm, selectedBackend, slots, saveScenarioMeta, displayName, description, onSaved, onClose]);
 
   return {
     modalState,
-    overallPct,
-    currentUploadStep,
     globalError,
     slots,
-    elapsedSeconds,
     showOverrideConfirm,
     setShowOverrideConfirm,
     handleSlotFile,
     startUpload,
     reset,
-    scenarioMetadataRef,
-    detectedConnector,
     updateSlot,
-    cancelUpload,
-    allDone,
   };
 }

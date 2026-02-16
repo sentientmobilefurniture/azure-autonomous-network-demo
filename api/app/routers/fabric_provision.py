@@ -17,16 +17,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import os
+import tarfile
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
 import yaml
 from azure.identity import DefaultAzureCredential
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -1200,6 +1203,176 @@ async def provision_ontology(req: OntologyRequest):
             "ontology_id": ontology_id,
             "message": f"Ontology '{ontology_name}' ready.",
         })
+
+    return EventSourceResponse(sse_provision_stream(_work))
+
+
+# ---------------------------------------------------------------------------
+# Graph tarball → Fabric pipeline (V11E Task 6)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/provision/graph")
+async def provision_graph_from_tarball(
+    file: UploadFile = File(...),
+    workspace_id: str = Form(...),
+    workspace_name: str = Form(...),
+    lakehouse_name: str = Form("lakehouse"),
+    ontology_name: str = Form("ontology"),
+):
+    """Upload a graph tarball and run the full Lakehouse → Ontology → Graph Model pipeline.
+
+    Accepts a .tar.gz containing entity CSVs (same layout as data/scenarios/*/entities/).
+    Streams SSE progress events.
+    """
+    if not file.filename or not (
+        file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")
+    ):
+        raise HTTPException(400, "File must be a .tar.gz archive")
+
+    if _fabric_provision_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Fabric provisioning already in progress",
+        )
+
+    content = await file.read()
+    logger.info(
+        "Graph tarball upload: %s (%d bytes), workspace=%s",
+        file.filename, len(content), workspace_id,
+    )
+
+    async def _work(client: AsyncFabricClient):
+        async with _fabric_provision_lock:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmppath = Path(tmpdir)
+
+                # Step 1: Extract tarball
+                yield _sse_event("progress", {
+                    "step": "extract", "detail": "Extracting graph tarball…", "pct": 5,
+                })
+                with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+                    tar.extractall(tmppath, filter="data")
+
+                # Find entities directory — check common layouts
+                entities_dir = None
+                for candidate in [
+                    tmppath / "data" / "entities",
+                    tmppath / "entities",
+                ]:
+                    if candidate.is_dir() and list(candidate.glob("*.csv")):
+                        entities_dir = candidate
+                        break
+                # Also check one level down (tarball may have a root folder)
+                if entities_dir is None:
+                    for sub in tmppath.iterdir():
+                        if sub.is_dir():
+                            for candidate in [
+                                sub / "data" / "entities",
+                                sub / "entities",
+                            ]:
+                                if candidate.is_dir() and list(candidate.glob("*.csv")):
+                                    entities_dir = candidate
+                                    break
+                        if entities_dir:
+                            break
+
+                if entities_dir is None:
+                    # Fallback: if CSVs are at root of the tarball
+                    csv_files = list(tmppath.glob("*.csv"))
+                    if csv_files:
+                        entities_dir = tmppath
+                    else:
+                        raise HTTPException(400, "No entity CSV files found in tarball")
+
+                csv_count = len(list(entities_dir.glob("*.csv")))
+                yield _sse_event("progress", {
+                    "step": "extract",
+                    "detail": f"Found {csv_count} CSV files",
+                    "pct": 10,
+                })
+
+                # Step 2: Find or create Lakehouse
+                yield _sse_event("progress", {
+                    "step": "lakehouse", "detail": "Preparing Lakehouse…", "pct": 12,
+                })
+                lakehouse_id = await _find_or_create_lakehouse(
+                    client, workspace_id, lakehouse_name,
+                )
+                yield _sse_event("progress", {
+                    "step": "lakehouse",
+                    "detail": f"Lakehouse ready: {lakehouse_id}",
+                    "pct": 18,
+                })
+
+                # Step 3: Upload CSVs to OneLake
+                yield _sse_event("progress", {
+                    "step": "upload", "detail": "Uploading CSVs to Lakehouse…", "pct": 20,
+                })
+                uploaded = await _upload_csvs_to_onelake(
+                    workspace_name, lakehouse_name, entities_dir,
+                )
+                yield _sse_event("progress", {
+                    "step": "upload",
+                    "detail": f"Uploaded {len(uploaded)} files to OneLake",
+                    "pct": 40,
+                })
+
+                # Step 4: Load delta tables
+                yield _sse_event("progress", {
+                    "step": "tables", "detail": "Loading delta tables…", "pct": 42,
+                })
+                await _load_delta_tables(client, workspace_id, lakehouse_id, uploaded)
+                yield _sse_event("progress", {
+                    "step": "tables", "detail": "Delta tables loaded", "pct": 50,
+                })
+
+                # Step 5: Create/update Ontology
+                yield _sse_event("progress", {
+                    "step": "ontology", "detail": "Creating ontology…", "pct": 55,
+                })
+                ontology_id = await _find_or_create_ontology(
+                    client, workspace_id, ontology_name,
+                )
+                yield _sse_event("progress", {
+                    "step": "ontology",
+                    "detail": f"Ontology ready: {ontology_id}",
+                    "pct": 60,
+                })
+
+                # Step 6: Build and apply ontology definition
+                yield _sse_event("progress", {
+                    "step": "ontology_def", "detail": "Building ontology definition…", "pct": 65,
+                })
+                parts = _build_ontology_definition(workspace_id, lakehouse_id, ontology_name)
+                await _apply_ontology_definition(client, workspace_id, ontology_id, parts)
+                yield _sse_event("progress", {
+                    "step": "ontology_def",
+                    "detail": "Ontology definition applied",
+                    "pct": 85,
+                })
+
+                # Step 7: Discover Graph Model
+                yield _sse_event("progress", {
+                    "step": "graph_model", "detail": "Discovering graph model…", "pct": 88,
+                })
+                graph_model_id = await _discover_graph_model(
+                    client, workspace_id, ontology_name,
+                )
+                yield _sse_event("progress", {
+                    "step": "graph_model",
+                    "detail": f"Graph Model: {graph_model_id or 'pending'}",
+                    "pct": 95,
+                })
+
+                # Complete
+                yield _sse_event("complete", {
+                    "lakehouse_id": lakehouse_id,
+                    "ontology_id": ontology_id,
+                    "graph_model_id": graph_model_id,
+                    "tables": uploaded,
+                    "message": "Graph data loaded into Fabric successfully.",
+                })
 
     return EventSourceResponse(sse_provision_stream(_work))
 

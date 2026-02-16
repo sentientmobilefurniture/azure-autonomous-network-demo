@@ -42,6 +42,7 @@ from router_scenarios import router as scenarios_router
 from router_interactions import router as interactions_router
 from router_fabric_discovery import router as fabric_discovery_router
 from router_fabric_connections import router as fabric_connections_router
+from router_docs import router as docs_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -167,6 +168,7 @@ app.include_router(scenarios_router)
 app.include_router(interactions_router)
 app.include_router(fabric_discovery_router)
 app.include_router(fabric_connections_router)
+app.include_router(docs_router)
 
 
 # ---------------------------------------------------------------------------
