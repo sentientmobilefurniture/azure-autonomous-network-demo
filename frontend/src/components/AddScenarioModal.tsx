@@ -148,7 +148,10 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
   const nameError = name ? validateName(name) : null;
 
-  const allFilled = SLOT_DEFS.every(d => {\n    if (d.key === 'graph' && selectedBackend === 'fabric-gql') return true;\n    return slots[d.key].file;\n  });
+  const allFilled = SLOT_DEFS.every(d => {
+    if (d.key === 'graph' && selectedBackend === 'fabric-gql') return true;
+    return slots[d.key].file;
+  });
   const canSave = !!name && !nameError && allFilled && modalState === 'idle';
 
   // Handle Save button click

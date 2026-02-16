@@ -937,13 +937,17 @@ async def provision_fabric_resources(req: FabricProvisionRequest):
                 graph_connector = manifest.get("data_sources", {}).get("graph", {}).get("connector", "")
                 telemetry_connector = manifest.get("data_sources", {}).get("telemetry", {}).get("connector", "")
 
-                # Step 1: Workspace (always)
+                # Step 1: Workspace — use existing ID if available, else find/create
                 yield _sse_event("progress", {
                     "step": "workspace", "detail": "Setting up workspace…", "pct": 5,
                 })
-                workspace_id = await _find_or_create_workspace(
-                    client, workspace_name, capacity_id,
-                )
+                if FABRIC_WORKSPACE_ID:
+                    workspace_id = FABRIC_WORKSPACE_ID
+                    logger.info("Using FABRIC_WORKSPACE_ID from env: %s", workspace_id)
+                else:
+                    workspace_id = await _find_or_create_workspace(
+                        client, workspace_name, capacity_id,
+                    )
                 completed_steps.append("workspace")
                 yield _sse_event("progress", {
                     "step": "workspace", "detail": f"Workspace ready: {workspace_id}", "pct": 10,
