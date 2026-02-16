@@ -78,11 +78,7 @@ export function InteractionSidebar({
   activeInteractionId, collapsed, onToggleCollapse,
 }: InteractionSidebarProps) {
   return (
-    <div className={`
-      border-l border-white/10 bg-neutral-bg2 flex flex-col
-      transition-[width] duration-200 ease-out
-      ${collapsed ? 'w-10' : 'w-72'}
-    `}>
+    <div className="h-full border-l border-white/10 bg-neutral-bg2 flex flex-col">
       {/* Header with collapse toggle */}
       <div className="h-10 flex items-center justify-between px-3 border-b border-white/10 shrink-0">
         {!collapsed && (

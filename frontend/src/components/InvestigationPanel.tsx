@@ -34,7 +34,7 @@ export function InvestigationPanel({
   const exampleQuestions = scenario?.example_questions;
 
   return (
-    <div className="w-full lg:w-1/2 border-r border-white/10 overflow-y-auto p-4 flex flex-col">
+    <div className="h-full overflow-y-auto p-4 flex flex-col">
       <AlertInput
         alert={alert}
         onAlertChange={onAlertChange}

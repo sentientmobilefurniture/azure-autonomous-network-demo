@@ -80,64 +80,62 @@ body {
   }
 }
 
-/* Resizable panel handles */
-.metrics-resize-handle {
-  width: 6px;
-  flex-shrink: 0;
+/* ── Resize handle base ───────────────────────────────────────────── */
+.resize-handle {
   position: relative;
-  cursor: col-resize;
-  transition: background-color 150ms ease;
-}
-
-.metrics-resize-handle::after {
-  content: '';
-  position: absolute;
-  top: 25%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 2px;
-  height: 50%;
-  border-radius: 1px;
-  background: hsla(0, 0%, 100%, 0.08);
-  transition: background-color 150ms ease;
-}
-
-.metrics-resize-handle:hover::after,
-.metrics-resize-handle[data-resize-handle-active]::after {
-  background: hsla(0, 0%, 100%, 0.25);
-}
-
-/* Vertical resize handle (between metrics bar and main content) */
-.vertical-resize-handle {
-  height: 12px;
   flex-shrink: 0;
-  position: relative;
-  cursor: row-resize;
-  background: hsla(0, 0%, 100%, 0.03);
   transition: background-color 150ms ease;
   z-index: 10;
 }
 
-.vertical-resize-handle:hover {
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  border-radius: 2px;
+  background: hsla(0, 0%, 100%, 0.12);
+  transition: background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.resize-handle:hover {
   background: hsla(0, 0%, 100%, 0.06);
 }
 
-.vertical-resize-handle::after {
-  content: '';
-  position: absolute;
-  left: 40%;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20%;
-  height: 3px;
-  border-radius: 2px;
-  background: hsla(0, 0%, 100%, 0.15);
-  transition: background-color 150ms ease;
+.resize-handle:hover::after {
+  background: hsla(0, 0%, 100%, 0.30);
+  box-shadow: 0 0 6px hsla(260, 80%, 65%, 0.15);
 }
 
-.vertical-resize-handle:hover::after,
-.vertical-resize-handle[data-resize-handle-active]::after {
+.resize-handle[data-resize-handle-active]::after {
   background: hsla(260, 80%, 65%, 0.6);
+  box-shadow: 0 0 8px hsla(260, 80%, 65%, 0.3);
+}
+
+/* ── Vertical (drag up/down) ──────────────────────────────────────── */
+.resize-handle-vertical {
+  height: 8px;
+  cursor: row-resize;
+}
+
+.resize-handle-vertical::after {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 3px;
+}
+
+/* ── Horizontal (drag left/right) ─────────────────────────────────── */
+.resize-handle-horizontal {
+  width: 8px;
+  cursor: col-resize;
+}
+
+.resize-handle-horizontal::after {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 32px;
 }
 
 /* Animation utilities */

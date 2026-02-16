@@ -15,7 +15,7 @@ export function DiagnosisPanel({
   runMeta,
 }: DiagnosisPanelProps) {
   return (
-    <div className="w-full lg:w-1/2 overflow-y-auto p-4 flex flex-col">
+    <div className="h-full overflow-y-auto p-4 flex flex-col">
       <AnimatePresence mode="wait">
         {/* State 1: Empty — before any investigation */}
         {!finalMessage && !running && (

@@ -340,9 +340,23 @@ class AgentProvisioner:
         emit("orchestrator", f"Created: {orch.id}")
 
         result = {
-            "orchestrator": {"id": orch.id, "name": orch.name},
+            "orchestrator": {
+                "id": orch.id,
+                "name": orch.name,
+                "model": model,
+                "is_orchestrator": True,
+                "tools": [],
+                "connected_agents": [sa["name"] for sa in sub_agents],
+            },
             "sub_agents": {
-                sa["name"]: {"id": sa["id"], "name": sa["name"]}
+                sa["name"]: {
+                    "id": sa["id"],
+                    "name": sa["name"],
+                    "model": model,
+                    "is_orchestrator": False,
+                    "tools": [],
+                    "connected_agents": [],
+                }
                 for sa in sub_agents
             },
         }
@@ -489,14 +503,26 @@ class AgentProvisioner:
             a["name"] for a in agent_defs if a.get("is_orchestrator")
         }
         orch_name = next(iter(orchestrator_names), None)
+        agent_def_map = {a["name"]: a for a in agent_defs}
         result = {
             "orchestrator": {
                 "id": created_agents.get(orch_name, ""),
                 "name": orch_name or "",
+                "model": agent_def_map.get(orch_name, {}).get("model", ""),
+                "is_orchestrator": True,
+                "tools": agent_def_map.get(orch_name, {}).get("tools", []),
+                "connected_agents": agent_def_map.get(orch_name, {}).get("connected_agents", []),
             },
             "sub_agents": {
-                sa["name"]: {"id": sa["id"], "name": sa["name"]}
-                for sa in sub_agents
+                a["name"]: {
+                    "id": created_agents.get(a["name"], ""),
+                    "name": a["name"],
+                    "model": a.get("model", ""),
+                    "is_orchestrator": False,
+                    "tools": a.get("tools", []),
+                    "connected_agents": a.get("connected_agents", []),
+                }
+                for a in agent_defs if not a.get("is_orchestrator")
             },
         }
 
