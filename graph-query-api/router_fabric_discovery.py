@@ -24,6 +24,7 @@ from adapters.fabric_config import (
     FABRIC_API_URL,
     FABRIC_SCOPE,
     FABRIC_WORKSPACE_ID,
+    FABRIC_GRAPH_MODEL_ID,
     FABRIC_CONFIGURED,
     FABRIC_WORKSPACE_CONNECTED,
     FABRIC_QUERY_READY,
@@ -216,5 +217,8 @@ async def fabric_health() -> dict:
     """Check Fabric backend readiness."""
     return {
         "configured": FABRIC_CONFIGURED,
-        "workspace_id": FABRIC_WORKSPACE_ID,
+        "workspace_connected": FABRIC_WORKSPACE_CONNECTED,
+        "query_ready": FABRIC_QUERY_READY,
+        "workspace_id": FABRIC_WORKSPACE_ID or None,
+        "graph_model_id": FABRIC_GRAPH_MODEL_ID or None,
     }

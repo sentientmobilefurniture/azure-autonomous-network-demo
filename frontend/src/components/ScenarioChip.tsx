@@ -139,6 +139,19 @@ export function ScenarioChip() {
                 + New Scenario
               </button>
             </div>
+
+            {/* Manage scenarios */}
+            <div className="border-t border-white/10">
+              <button
+                onClick={() => {
+                  setDropdownOpen(false);
+                  console.log('[ScenarioChip] Manage scenarios — handler not wired yet');
+                }}
+                className="w-full text-left px-3 py-2 text-sm text-text-secondary hover:bg-white/5 transition-colors"
+              >
+                ⊞ Manage scenarios…
+              </button>
+            </div>
           </div>
         )}
       </div>

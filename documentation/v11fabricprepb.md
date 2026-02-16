@@ -2,7 +2,8 @@
 
 > **Created:** 2026-02-16
 > **Audited:** 2026-02-16 (against actual codebase + post-v11d state)
-> **Status:** 🔲 Not started
+> **Implemented:** 2026-02-16
+> **Status:** ✅ Complete
 > **Source:** v11fabricv3.md (Sections 4, 7, 8)
 > **Depends on:** v11fabricprepa.md (✅ complete), v11d.md (✅ complete)
 > **Purpose:** Extract every task from the consolidated plan that is low-risk,

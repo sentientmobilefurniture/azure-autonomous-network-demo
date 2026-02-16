@@ -1,7 +1,7 @@
 # V11 UI Revamp + Fabric Experience — Consolidated Working Plan
 
 > **Created:** 2026-02-16
-> **Status:** 🔶 In progress (v11fabricprepa.md implemented)
+> **Status:** 🔶 In progress (v11fabricprepa.md + v11fabricprepb.md implemented)
 > **Depends on:** V11 Fabric Integration (v11fabricv2.md — Phases 0–3, implemented)
 > **Assumes:** v11refactor.md has been completed (codebase is cleaner/restructured)
 > **Scope:** Fix the broken Fabric UX end-to-end. Backend bug fixes, provision
@@ -217,22 +217,17 @@ GQL query execution (`FabricGQLBackend.execute_query()`) keeps gating on `FABRIC
 > **Refactor note:** `acquire_fabric_token()` lives in `backends/fabric.py` and is
 > imported by `router_fabric_discovery.py`. The shared helper is already in place.
 
-### BE-3: Richer health endpoint
+### BE-3: Richer health endpoint ✅ _(implemented by v11fabricprepb.md)_
 
 **File:** `graph-query-api/router_fabric_discovery.py`
 
-Current: `{"configured": bool, "workspace_id": str}`
+~~Current: `{"configured": bool, "workspace_id": str}`~~
 
-New:
-```json
-{
-  "workspace_connected": true,
-  "query_ready": false,
-  "workspace_id": "abc-123",
-  "graph_model_id": null,
-  "ontology_id": "def-456"
-}
-```
+**Done.** Health endpoint now returns 5 fields: `configured`, `workspace_connected`,
+`query_ready`, `workspace_id`, `graph_model_id`. Added `FABRIC_GRAPH_MODEL_ID` to
+import block. `FABRIC_QUERY_READY` (previously imported but unused) is now wired in.
+`ontology_id` was dropped — `FABRIC_ONTOLOGY_ID` doesn't exist in `fabric_config.py`
+(only `FABRIC_ONTOLOGY_NAME`); can be added when BE-7 (dynamic config) is implemented.
 
 Three UI states derive from this:
 | State | Condition | Display |
@@ -802,9 +797,9 @@ Inline scenario picker + CTA button.
 | FE-2 | ~~Fix B2: provision URL~~ | ✅ **Done (v11fabricprepa)** — `/api/fabric/provision` |
 | FE-3 | ~~Fix B3: stale closure~~ | **Already fixed by refactor** — replaced with `receivedTerminalEvent` flag |
 | FE-4 | ~~Fix B4: discovery parsing~~ | ✅ **Done (v11fabricprepa)** — `Array.isArray(data) ? data : []` in all 3 fetch functions |
-| FE-5 | Add `fetchLakehouses()` | Call `GET /query/fabric/lakehouses` |
-| FE-6 | Add `fetchKqlDatabases()` | Call `GET /query/fabric/kql-databases` |
-| FE-7 | Update `fetchAll()` | Include lakehouses + KQL databases |
+| FE-5 | ~~Add `fetchLakehouses()`~~ | ✅ **Done (v11fabricprepb)** — `lakehouses` state + `fetchLakehouses()` added |
+| FE-6 | ~~Add `fetchKqlDatabases()`~~ | ✅ **Done (v11fabricprepb)** — `kqlDatabases` state + `fetchKqlDatabases()` added |
+| FE-7 | ~~Update `fetchAll()`~~ | ✅ **Done (v11fabricprepb)** — includes lakehouses + KQL databases in `Promise.all` |
 
 ### New components
 
@@ -818,8 +813,8 @@ Inline scenario picker + CTA button.
 
 | Component | Changes |
 |-----------|---------|
-| `Header.tsx` | Remove ⚙ gear, add ServiceHealthSummary + 🔌 button |
-| `ScenarioChip.tsx` | Add "⊞ Manage" action, backend badge, skeleton state. Uses `useClickOutside`. |
+| `Header.tsx` | ~~Remove ⚙ gear~~ ✅ Done (v11d) — add ServiceHealthSummary + 🔌 button. Header is now 43 lines with AgentBar. |
+| `ScenarioChip.tsx` | ~~Add "⊞ Manage" action~~ ✅ Done (v11fabricprepb), ~~backend badge~~ ✅ Done (v11d). Remaining: skeleton state. Uses `useClickOutside`. |
 | `AddScenarioModal.tsx` (514 lines) | Add backend chooser cards, grey out graph upload. Integrates with `useScenarioUpload`. |
 | `EmptyState.tsx` | Replace passive text with interactive checklist |
 | `ScenarioContext.tsx` | Has `savedScenarios`/`scenariosLoading`/`activeScenarioRecord`. Remaining: crossfade support. |
@@ -844,12 +839,11 @@ Inline scenario picker + CTA button.
 | A1: Fix 4 remaining bugs in useFabricDiscovery.ts (B1, B2, B4, B5) | `useFabricDiscovery.ts` | ✅ Done (v11fabricprepa) |
 | A2: Split FABRIC_CONFIGURED (BE-1) + re-add needed env vars | `adapters/fabric_config.py` | ✅ Done (v11fabricprepa) |
 | A3: Discovery gates on workspace-only (BE-2) | `router_fabric_discovery.py` | ✅ Done (v11fabricprepa) |
-| A4: Richer health endpoint (BE-3) | `router_fabric_discovery.py` | Low (1hr) |
+| A4: Richer health endpoint (BE-3) | `router_fabric_discovery.py` | ✅ Done (v11fabricprepb) |
 | A5: Upload guard for Fabric scenarios (BE-4) | `ingest/graph_ingest.py` | ✅ Done (v11fabricprepa) |
 | A6: Add FABRIC_* to env template (BE-6) | `azure_config.env.template` | ✅ Done (v11fabricprepa) |
 
-**After Phase A:** ~~~4 hours total.~~ **5 of 6 tasks done** (v11fabricprepa). Only A4
-(richer health endpoint, BE-3) remains — ~1 hour.
+**After Phase A:** ✅ **All 6 tasks done** (v11fabricprepa + v11fabricprepb).
 
 ### Phase B: Provision pipeline completion
 
@@ -864,7 +858,7 @@ Inline scenario picker + CTA button.
 | B4: Graph Model auto-discovery + config write | `fabric_provision.py` | Low (2hr) |
 | B5: Conditional execution (read scenario config, skip unneeded resources) | `fabric_provision.py` | Medium (3hr) |
 | B6: Add azure-storage-file-datalake + azure-kusto-ingest deps | `api/pyproject.toml` | ✅ Done (v11fabricprepa) |
-| B7: Add provisioning concurrency lock (or reuse refactor #48's pattern) | `fabric_provision.py` | Low (30min) |
+| B7: Add provisioning concurrency lock (or reuse refactor #48's pattern) | `fabric_provision.py` | ✅ Done (v11fabricprepb) — `_fabric_provision_lock` with fast-reject + lock inside `stream()` generator |
 
 **After Phase B:** Provision pipeline creates resources WITH data. Ontology has full
 definition. Graph Model is auto-created and discovered. `FABRIC_GRAPH_MODEL_ID` is
@@ -885,8 +879,8 @@ The `sse_provision_stream()` wrapper handles SSE error/completion boilerplate.
 | C3: Add services health endpoint (BE-5) | New router | Medium (3hr) |
 | C4: Create ConnectionsDrawer | New `ConnectionsDrawer.tsx` | Medium (4hr) — uses `<ModalShell>`, `<ProgressBar>`, `triggerProvisioning()` |
 | C5: Create ServiceHealthSummary | New `ServiceHealthSummary.tsx` | Low (1hr) |
-| C6: Update Header (remove gear, add health + connections) | `Header.tsx` | Low (1hr) |
-| C7: Extend ScenarioChip dropdown (add ⊞ Manage, backend badge) | `ScenarioChip.tsx` | Low (1hr) — uses `useClickOutside` |
+| C6: Update Header (~~remove gear~~ ✅ v11d, add health + connections) | `Header.tsx` | Low (1hr) — Header now 43 lines, gear already gone, AgentBar in place |
+| C7: ~~Extend ScenarioChip dropdown (add ⊞ Manage, backend badge)~~ | `ScenarioChip.tsx` | ✅ Done — "⊞ Manage" added (v11fabricprepb), backend badge added (v11d). Remaining: skeleton state only. |
 
 **After Phase C:** Clean header. Ambient service health. ConnectionsDrawer with
 Fabric 3-state display and all 5 resource types. ~1.5 days total (reduced from 2
@@ -1086,7 +1080,7 @@ var changes still work as fallback defaults but are overridden by config store v
 
 | File | Phase | Change |
 |------|-------|--------|
-| `api/app/routers/fabric_provision.py` (586 lines) | B | +~800 lines (data upload, ontology def, graph model discovery, conditional execution). Uses existing `_find_or_create()` and `sse_provision_stream()`. |
+| `api/app/routers/fabric_provision.py` (597 lines) | B | +~800 lines (data upload, ontology def, graph model discovery, conditional execution). Uses existing `_find_or_create()` and `sse_provision_stream()`. Concurrency lock ✅ Done (v11fabricprepb). |
 | `adapters/fabric_config.py` | ~~A+B~~+F | ~~Split FABRIC_CONFIGURED + re-add env vars~~ ✅ Done (v11fabricprepa) + add dynamic config layer (Phase F) |
 
 ### Medium Edits (5)
@@ -1094,8 +1088,8 @@ var changes still work as fallback defaults but are overridden by config store v
 | File | Phase | Change |
 |------|-------|--------|
 | `AddScenarioModal.tsx` (514 lines) | D | +backend chooser cards, integration with `useScenarioUpload` hook |
-| `Header.tsx` | C | Remove gear, add ServiceHealthSummary + connections button |
-| `ScenarioChip.tsx` | C | Add manage action, badge, skeleton. Uses `useClickOutside`. |
+| `Header.tsx` | C | ~~Remove gear~~ ✅ Done (v11d). Add ServiceHealthSummary + connections button. Header now 43 lines with AgentBar. |
+| `ScenarioChip.tsx` | C | ~~Add manage action~~ ✅ Done (v11fabricprepb), ~~badge~~ ✅ Done (v11d). Remaining: skeleton state only. |
 | `App.tsx` | C | Remove overlay, add crossfade + slim loading banner |
 | `router_telemetry.py` | F | Connector-aware dispatch (cosmosdb-nosql vs fabric-kql) |
 
@@ -1103,8 +1097,8 @@ var changes still work as fallback defaults but are overridden by config store v
 
 | File | Phase | Change |
 |------|-------|--------|
-| `useFabricDiscovery.ts` | ~~A~~ | ~~5 bug fixes~~ ✅ Done (v11fabricprepa) + 2 new fetch methods (FE-5, FE-6 remain) |
-| `router_fabric_discovery.py` | ~~A~~+F | ~~Gate change~~ ✅ Done (v11fabricprepa) + richer health + data agent discovery |
+| `useFabricDiscovery.ts` | ~~A~~ | ~~5 bug fixes~~ ✅ Done (v11fabricprepa) + ~~2 new fetch methods~~ ✅ Done (v11fabricprepb) |
+| `router_fabric_discovery.py` | ~~A~~+F | ~~Gate change~~ ✅ Done (v11fabricprepa) + ~~richer health~~ ✅ Done (v11fabricprepb) + data agent discovery |
 | `ingest/graph_ingest.py` | ~~A~~ | ~~Upload guard for Fabric scenarios~~ ✅ Done (v11fabricprepa) |
 | `azure_config.env.template` | ~~A~~ | ~~Add FABRIC_* vars~~ ✅ Done (v11fabricprepa) |
 | `EmptyState.tsx` | D | Interactive checklist |

@@ -22,6 +22,10 @@ export interface FabricDiscoveryState {
   graphModels: FabricItem[];
   /** Eventhouses in the workspace */
   eventhouses: FabricItem[];
+  /** Lakehouses in the workspace */
+  lakehouses: FabricItem[];
+  /** KQL databases in the workspace */
+  kqlDatabases: FabricItem[];
 
   /** Currently loading section */
   loadingSection: string | null;
@@ -45,6 +49,8 @@ export function useFabricDiscovery() {
   const [ontologies, setOntologies] = useState<FabricItem[]>([]);
   const [graphModels, setGraphModels] = useState<FabricItem[]>([]);
   const [eventhouses, setEventhouses] = useState<FabricItem[]>([]);
+  const [lakehouses, setLakehouses] = useState<FabricItem[]>([]);
+  const [kqlDatabases, setKqlDatabases] = useState<FabricItem[]>([]);
 
   const [loadingSection, setLoadingSection] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +127,38 @@ export function useFabricDiscovery() {
     }
   }, []);
 
+  // -- Fetch lakehouses --
+  const fetchLakehouses = useCallback(async () => {
+    setLoadingSection('lakehouses');
+    setError(null);
+    try {
+      const res = await fetch('/query/fabric/lakehouses');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setLakehouses(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(`Failed to fetch lakehouses: ${e}`);
+    } finally {
+      setLoadingSection(null);
+    }
+  }, []);
+
+  // -- Fetch KQL databases --
+  const fetchKqlDatabases = useCallback(async () => {
+    setLoadingSection('kqlDatabases');
+    setError(null);
+    try {
+      const res = await fetch('/query/fabric/kql-databases');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setKqlDatabases(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(`Failed to fetch KQL databases: ${e}`);
+    } finally {
+      setLoadingSection(null);
+    }
+  }, []);
+
   // -- Run full provision pipeline (SSE) --
   const runProvisionPipeline = useCallback(async (opts?: {
     workspace_name?: string;
@@ -177,8 +215,13 @@ export function useFabricDiscovery() {
   // -- Fetch all discovery data at once --
   const fetchAll = useCallback(async () => {
     await checkHealth();
-    await Promise.all([fetchOntologies(), fetchEventhouses()]);
-  }, [checkHealth, fetchOntologies, fetchEventhouses]);
+    await Promise.all([
+      fetchOntologies(),
+      fetchEventhouses(),
+      fetchLakehouses(),
+      fetchKqlDatabases(),
+    ]);
+  }, [checkHealth, fetchOntologies, fetchEventhouses, fetchLakehouses, fetchKqlDatabases]);
 
   return {
     // State
@@ -187,6 +230,8 @@ export function useFabricDiscovery() {
     ontologies,
     graphModels,
     eventhouses,
+    lakehouses,
+    kqlDatabases,
     loadingSection,
     error,
     provisionPct,
@@ -199,6 +244,8 @@ export function useFabricDiscovery() {
     fetchOntologies,
     fetchGraphModels,
     fetchEventhouses,
+    fetchLakehouses,
+    fetchKqlDatabases,
     runProvisionPipeline,
     fetchAll,
   };

@@ -30,6 +30,9 @@ logger = logging.getLogger("app.fabric-provision")
 
 router = APIRouter(prefix="/api/fabric", tags=["fabric-provisioning"])
 
+# Concurrency guard — prevents duplicate resource creation from parallel requests
+_fabric_provision_lock = asyncio.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -379,6 +382,12 @@ async def provision_fabric_resources(req: FabricProvisionRequest):
 
     Streams SSE progress events.
     """
+    if _fabric_provision_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Fabric provisioning already in progress",
+        )
+
     workspace_name = req.workspace_name or FABRIC_WORKSPACE_NAME
     capacity_id = req.capacity_id or FABRIC_CAPACITY_ID
     lakehouse_name = req.lakehouse_name or FABRIC_LAKEHOUSE_NAME
@@ -386,92 +395,93 @@ async def provision_fabric_resources(req: FabricProvisionRequest):
     ontology_name = req.ontology_name or FABRIC_ONTOLOGY_NAME
 
     async def stream():
-        client = AsyncFabricClient()
-        try:
-            # Step 1: Workspace
-            yield _sse_event("progress", {
-                "step": "workspace",
-                "detail": f"Finding or creating workspace '{workspace_name}'...",
-                "pct": 5,
-            })
-            workspace_id = await _find_or_create_workspace(
-                client, workspace_name, capacity_id,
-            )
-            yield _sse_event("progress", {
-                "step": "workspace",
-                "detail": f"Workspace ready: {workspace_id}",
-                "pct": 15,
-            })
+        async with _fabric_provision_lock:
+            client = AsyncFabricClient()
+            try:
+                # Step 1: Workspace
+                yield _sse_event("progress", {
+                    "step": "workspace",
+                    "detail": f"Finding or creating workspace '{workspace_name}'...",
+                    "pct": 5,
+                })
+                workspace_id = await _find_or_create_workspace(
+                    client, workspace_name, capacity_id,
+                )
+                yield _sse_event("progress", {
+                    "step": "workspace",
+                    "detail": f"Workspace ready: {workspace_id}",
+                    "pct": 15,
+                })
 
-            # Step 2: Lakehouse
-            yield _sse_event("progress", {
-                "step": "lakehouse",
-                "detail": f"Finding or creating lakehouse '{lakehouse_name}'...",
-                "pct": 20,
-            })
-            lakehouse_id = await _find_or_create_lakehouse(
-                client, workspace_id, lakehouse_name,
-            )
-            yield _sse_event("progress", {
-                "step": "lakehouse",
-                "detail": f"Lakehouse ready: {lakehouse_id}",
-                "pct": 35,
-            })
+                # Step 2: Lakehouse
+                yield _sse_event("progress", {
+                    "step": "lakehouse",
+                    "detail": f"Finding or creating lakehouse '{lakehouse_name}'...",
+                    "pct": 20,
+                })
+                lakehouse_id = await _find_or_create_lakehouse(
+                    client, workspace_id, lakehouse_name,
+                )
+                yield _sse_event("progress", {
+                    "step": "lakehouse",
+                    "detail": f"Lakehouse ready: {lakehouse_id}",
+                    "pct": 35,
+                })
 
-            # Step 3: Eventhouse
-            yield _sse_event("progress", {
-                "step": "eventhouse",
-                "detail": f"Finding or creating eventhouse '{eventhouse_name}'...",
-                "pct": 40,
-            })
-            eventhouse_id = await _find_or_create_eventhouse(
-                client, workspace_id, eventhouse_name,
-            )
-            yield _sse_event("progress", {
-                "step": "eventhouse",
-                "detail": f"Eventhouse ready: {eventhouse_id}",
-                "pct": 55,
-            })
+                # Step 3: Eventhouse
+                yield _sse_event("progress", {
+                    "step": "eventhouse",
+                    "detail": f"Finding or creating eventhouse '{eventhouse_name}'...",
+                    "pct": 40,
+                })
+                eventhouse_id = await _find_or_create_eventhouse(
+                    client, workspace_id, eventhouse_name,
+                )
+                yield _sse_event("progress", {
+                    "step": "eventhouse",
+                    "detail": f"Eventhouse ready: {eventhouse_id}",
+                    "pct": 55,
+                })
 
-            # Step 4: Ontology
-            yield _sse_event("progress", {
-                "step": "ontology",
-                "detail": f"Finding or creating ontology '{ontology_name}'...",
-                "pct": 60,
-            })
-            ontology_id = await _find_or_create_ontology(
-                client, workspace_id, ontology_name,
-            )
-            yield _sse_event("progress", {
-                "step": "ontology",
-                "detail": f"Ontology ready: {ontology_id}",
-                "pct": 85,
-            })
+                # Step 4: Ontology
+                yield _sse_event("progress", {
+                    "step": "ontology",
+                    "detail": f"Finding or creating ontology '{ontology_name}'...",
+                    "pct": 60,
+                })
+                ontology_id = await _find_or_create_ontology(
+                    client, workspace_id, ontology_name,
+                )
+                yield _sse_event("progress", {
+                    "step": "ontology",
+                    "detail": f"Ontology ready: {ontology_id}",
+                    "pct": 85,
+                })
 
-            # Complete
-            yield _sse_event("complete", {
-                "workspace_id": workspace_id,
-                "lakehouse_id": lakehouse_id,
-                "eventhouse_id": eventhouse_id,
-                "ontology_id": ontology_id,
-                "message": "Fabric provisioning complete.",
-            })
+                # Complete
+                yield _sse_event("complete", {
+                    "workspace_id": workspace_id,
+                    "lakehouse_id": lakehouse_id,
+                    "eventhouse_id": eventhouse_id,
+                    "ontology_id": ontology_id,
+                    "message": "Fabric provisioning complete.",
+                })
 
-        except HTTPException as exc:
-            yield _sse_event("error", {
-                "step": "error",
-                "detail": str(exc.detail),
-                "pct": -1,
-            })
-        except Exception as exc:
-            logger.exception("Fabric provisioning failed")
-            yield _sse_event("error", {
-                "step": "error",
-                "detail": f"Unexpected error: {exc}",
-                "pct": -1,
-            })
-        finally:
-            await client.close()
+            except HTTPException as exc:
+                yield _sse_event("error", {
+                    "step": "error",
+                    "detail": str(exc.detail),
+                    "pct": -1,
+                })
+            except Exception as exc:
+                logger.exception("Fabric provisioning failed")
+                yield _sse_event("error", {
+                    "step": "error",
+                    "detail": f"Unexpected error: {exc}",
+                    "pct": -1,
+                })
+            finally:
+                await client.close()
 
     return EventSourceResponse(stream())
 
