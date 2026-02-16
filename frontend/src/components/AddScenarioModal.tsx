@@ -75,7 +75,6 @@ interface Props {
 
 export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveScenarioMeta }: Props) {
   const [name, setName] = useState('');
-  const [nameAutoDetected, setNameAutoDetected] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const scenarioMetadataRef = useRef<Record<string, unknown> | null>(null);
@@ -129,7 +128,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   useEffect(() => {
     if (open) {
       setName('');
-      setNameAutoDetected(false);
       setDisplayName('');
       setDescription('');
       setShowAdvanced(false);
@@ -187,28 +185,17 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       }
     }
 
-    // Auto-derive scenario name if name field is empty
-    if (!name && detectedNames.length > 0) {
+    // Auto-derive scenario name from detected filenames (always takes priority)
+    if (detectedNames.length > 0) {
       // Use most common name
       const counts: Record<string, number> = {};
       for (const n of detectedNames) counts[n] = (counts[n] || 0) + 1;
       const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
       setName(sorted[0][0]);
-      setNameAutoDetected(true);
     }
   }, [assignFile, name]);
 
   const nameError = name ? validateName(name) : null;
-
-  // Compute mismatch hint
-  const detectedNamesFromSlots = Object.values(slots)
-    .filter(s => s.file)
-    .map(s => detectSlot(s.file!.name)?.scenarioName)
-    .filter(Boolean) as string[];
-  const mismatchHint = name && detectedNamesFromSlots.length > 0 &&
-    detectedNamesFromSlots.some(n => n !== name)
-    ? `File names suggest "${detectedNamesFromSlots[0]}" but resources will be created as "${name}".`
-    : null;
 
   const allFilled = SLOT_DEFS.every(d => slots[d.key].file);
   const canSave = !!name && !nameError && allFilled && modalState === 'idle';
@@ -262,7 +249,8 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           slot.file,
           {
             onProgress: (data) => {
-              updateSlot(def.key, { progress: data.detail, pct: data.pct });
+              updateSlot(def.key, { progress: data.detail, pct: data.pct, category: data.category });
+              setCurrentUploadStep(data.category ? `${def.label}: ${data.category}` : `Uploading ${def.label}...`);
               const overallBase = (i / SLOT_DEFS.length) * 100;
               const slotContribution = (data.pct / 100) * (100 / SLOT_DEFS.length);
               setOverallPct(Math.round(overallBase + slotContribution));
@@ -403,24 +391,27 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           {/* Scenario Name */}
           <div>
             <label className="text-xs text-text-muted block mb-1">Scenario Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''));
-                setNameAutoDetected(false);
-              }}
-              disabled={modalState !== 'idle'}
-              placeholder="cloud-outage"
-              className="w-full bg-neutral-bg1 border border-white/10 rounded px-3 py-2 text-sm text-text-primary
-                placeholder:text-text-muted/50 focus:outline-none focus:border-brand/50 disabled:opacity-50"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={name}
+                readOnly
+                disabled={modalState !== 'idle'}
+                placeholder="Detected from uploaded files"
+                className="w-full bg-neutral-bg1 border border-white/10 rounded px-3 py-2 text-sm text-text-primary
+                  placeholder:text-text-muted/50 focus:outline-none cursor-not-allowed opacity-75 disabled:opacity-50"
+              />
+              {name && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted text-sm" title="Name read from scenario.yaml">
+                  🔒
+                </span>
+              )}
+            </div>
             {nameError && <p className="text-xs text-status-error mt-1">{nameError}</p>}
-            {nameAutoDetected && !nameError && (
-              <p className="text-xs text-text-muted mt-1 italic">Auto-detected from filename — edit freely</p>
-            )}
-            {mismatchHint && !nameError && (
-              <p className="text-xs text-yellow-400/80 mt-1">ⓘ {mismatchHint}</p>
+            {name && (
+              <p className="text-xs text-text-muted mt-1 italic">
+                Name detected from uploaded files — cannot be overridden
+              </p>
             )}
           </div>
 
@@ -545,8 +536,8 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
 
           {/* Global error */}
           {globalError && (
-            <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3">
-              <p className="text-xs text-status-error">{globalError}</p>
+            <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3 max-h-32 overflow-y-auto">
+              <p className="text-xs text-status-error whitespace-pre-wrap">{globalError}</p>
             </div>
           )}
 
@@ -656,6 +647,9 @@ function FileSlot({ def, slot, disabled, onFile, onClear, onRetry }: {
 
       {slot.status === 'uploading' && (
         <div className="space-y-1">
+          {slot.category && (
+            <p className="text-[10px] font-medium text-brand truncate">{slot.category}</p>
+          )}
           <div className="w-full bg-neutral-bg2 rounded-full h-1">
             <div className="bg-brand h-1 rounded-full transition-all" style={{ width: `${Math.max(slot.pct, 5)}%` }} />
           </div>
@@ -669,7 +663,9 @@ function FileSlot({ def, slot, disabled, onFile, onClear, onRetry }: {
 
       {slot.status === 'error' && (
         <div>
-          <p className="text-[10px] text-status-error truncate">{slot.error}</p>
+          <div className="max-h-16 overflow-y-auto">
+            <p className="text-[10px] text-status-error whitespace-pre-wrap">{slot.error}</p>
+          </div>
           {onRetry && (
             <button onClick={onRetry} className="text-[10px] text-brand hover:text-brand/80 mt-1">
               Retry

@@ -17,7 +17,8 @@ import os
 
 from azure.cosmos import CosmosClient, ContainerProxy
 
-from config import get_credential, COSMOS_NOSQL_ENDPOINT
+from config import get_credential
+from adapters.cosmos_config import COSMOS_NOSQL_ENDPOINT
 
 logger = logging.getLogger("graph-query-api.cosmos")
 

@@ -10,12 +10,15 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.orchestrator import is_configured, run_orchestrator
+
+_AGENT_IDS_PATH = Path(__file__).resolve().parents[2] / "scripts" / "agent_ids.json"
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,16 @@ class AlertRequest(BaseModel):
     )
 
 
+def _load_stub_agent_names() -> list[str]:
+    """Read agent names from agent_ids.json; fall back to generic placeholders."""
+    try:
+        data = json.loads(_AGENT_IDS_PATH.read_text())
+        # agent_ids.json has {role: {id, name}} — extract role names
+        return [role for role in data if role.lower() != "orchestrator"]
+    except (FileNotFoundError, json.JSONDecodeError):
+        return ["Agent1", "Agent2"]
+
+
 async def _stub_event_generator(alert_text: str):
     """Stub SSE generator — simulates orchestrator steps with fake data."""
     yield {
@@ -43,7 +56,7 @@ async def _stub_event_generator(alert_text: str):
         }),
     }
 
-    agents = ["TelemetryAgent", "GraphExplorerAgent", "RunbookKBAgent", "HistoricalTicketAgent"]
+    agents = _load_stub_agent_names()
     for i, agent in enumerate(agents, 1):
         await asyncio.sleep(0.5)
         yield {

@@ -29,17 +29,117 @@ from gremlin_python.driver import client, serializer
 from gremlin_python.driver.protocol import GremlinServerError
 
 from config import (
+    get_credential,
+)
+from adapters.cosmos_config import (
     COSMOS_GREMLIN_ENDPOINT,
     COSMOS_GREMLIN_PRIMARY_KEY,
     COSMOS_GREMLIN_DATABASE,
     COSMOS_GREMLIN_GRAPH,
     COSMOS_NOSQL_ENDPOINT,
-    get_credential,
 )
 
 logger = logging.getLogger("graph-query-api.ingest")
 
 router = APIRouter(prefix="/query", tags=["scenarios"])
+
+
+# ---------------------------------------------------------------------------
+# Manifest normalization (backward compat: v1.0 → v2.0 schema)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_manifest(manifest: dict) -> dict:
+    """Normalize old-format manifest to the v2.0 data_sources format.
+
+    Supports both old (cosmos: / search_indexes:) and new (data_sources:)
+    formats. If data_sources already exists, returns as-is.
+    """
+    if "data_sources" in manifest:
+        return manifest  # already new format
+
+    ds: dict = {}
+    cosmos = manifest.get("cosmos", {})
+    sc_name = manifest.get("name", "")
+
+    if cosmos.get("gremlin"):
+        gremlin_cfg = cosmos["gremlin"]
+        graph_name = gremlin_cfg.get("graph", "topology")
+        # Old format used unprefixed names — add scenario prefix
+        if sc_name and not graph_name.startswith(sc_name):
+            graph_name = f"{sc_name}-{graph_name}"
+        ds["graph"] = {
+            "connector": "cosmosdb-gremlin",
+            "config": {
+                "database": gremlin_cfg.get("database", "networkgraph"),
+                "graph": graph_name,
+                "partition_key": "/partitionKey",
+            },
+            "schema_file": "graph_schema.yaml",
+        }
+
+    if cosmos.get("nosql"):
+        nosql_cfg = cosmos["nosql"]
+        ds["telemetry"] = {
+            "connector": "cosmosdb-nosql",
+            "config": {
+                "database": nosql_cfg.get("database", "telemetry"),
+                "container_prefix": sc_name,
+                "containers": nosql_cfg.get("containers", []),
+            },
+        }
+
+    old_indexes = manifest.get("search_indexes", [])
+    if old_indexes:
+        si: dict = {}
+        for idx in old_indexes:
+            key = idx.get("container", idx["name"].split("-")[0])
+            si[key] = {
+                "index_name": f"{sc_name}-{idx['name']}" if sc_name and not idx["name"].startswith(sc_name) else idx["name"],
+                "source": idx.get("source", ""),
+                "blob_container": idx.get("container", key),
+            }
+        ds["search_indexes"] = si
+
+    manifest["data_sources"] = ds
+    return manifest
+
+
+def _rewrite_manifest_prefix(manifest: dict, new_name: str) -> dict:
+    """Rewrite all resource names in the manifest to use *new_name*.
+
+    Called when the user overrides the scenario name so that graph, telemetry,
+    and search resources all share a consistent prefix. Without this, the
+    graph might be ``telco-noc-topology`` while telemetry containers are
+    ``telco-noc2-AlertStream`` — causing query-time lookup failures.
+    """
+    old_name = manifest.get("name", "")
+    manifest["name"] = new_name
+
+    ds = manifest.get("data_sources", {})
+
+    # ── graph ──
+    graph_cfg = ds.get("graph", {}).get("config", {})
+    old_graph = graph_cfg.get("graph", "")
+    if old_graph:
+        # Replace the old prefix: "telco-noc-topology" → "telco-noc2-topology"
+        if old_name and old_graph.startswith(old_name):
+            graph_cfg["graph"] = f"{new_name}{old_graph[len(old_name):]}"
+        else:
+            graph_cfg["graph"] = f"{new_name}-topology"
+
+    # ── telemetry ──
+    tel_cfg = ds.get("telemetry", {}).get("config", {})
+    if "container_prefix" in tel_cfg:
+        tel_cfg["container_prefix"] = new_name
+
+    # ── search indexes ──
+    for _key, idx_cfg in ds.get("search_indexes", {}).items():
+        old_idx = idx_cfg.get("index_name", "")
+        if old_name and old_idx.startswith(old_name):
+            idx_cfg["index_name"] = f"{new_name}{old_idx[len(old_name):]}"
+
+    return manifest
 
 
 # ---------------------------------------------------------------------------
@@ -114,42 +214,6 @@ def _ensure_nosql_containers(
                 raise
             # Container already exists — fine
 
-
-# ---------------------------------------------------------------------------
-# ARM graph creation
-# ---------------------------------------------------------------------------
-
-
-def _ensure_gremlin_graph(graph_name: str) -> None:
-    """Create the Gremlin graph resource if it doesn't exist (ARM management plane)."""
-    try:
-        from azure.mgmt.cosmosdb import CosmosDBManagementClient
-
-        # Derive account name from endpoint (e.g. "myaccount.gremlin.cosmos.azure.com" → "myaccount")
-        account_name = COSMOS_GREMLIN_ENDPOINT.split(".")[0]
-        sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-        rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-
-        if not sub_id or not rg:
-            logger.warning("AZURE_SUBSCRIPTION_ID or AZURE_RESOURCE_GROUP not set — cannot create graph via ARM. "
-                           "Assuming graph '%s' already exists.", graph_name)
-            return
-
-        mgmt = CosmosDBManagementClient(get_credential(), sub_id)
-        logger.info("Creating Gremlin graph '%s' via ARM (if not exists)...", graph_name)
-        mgmt.gremlin_resources.begin_create_update_gremlin_graph(
-            rg, account_name, COSMOS_GREMLIN_DATABASE, graph_name,
-            {
-                "resource": {
-                    "id": graph_name,
-                    "partition_key": {"paths": ["/partitionKey"], "kind": "Hash"},
-                },
-                "options": {"autoscale_settings": {"max_throughput": 1000}},
-            },
-        ).result()
-        logger.info("Graph '%s' ready.", graph_name)
-    except Exception as e:
-        logger.warning("ARM graph creation failed (may already exist): %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +362,12 @@ def _extract_tar(content: bytes, tmppath: Path) -> Path:
 def _resolve_scenario_name(
     tmppath: Path, override: str | None, fallback: str = "default",
 ) -> str:
-    """Resolve scenario name: override > scenario.yaml > fallback."""
-    if override:
-        return override
+    """Resolve scenario name from scenario.yaml, ignoring override.
+
+    The override parameter is accepted for API compatibility but is ignored.
+    Name always comes from scenario.yaml embedded in the tarball.
+    """
+    # Ignore override — always use scenario.yaml name
     for root, _dirs, files in os.walk(tmppath):
         if "scenario.yaml" in files:
             m = yaml.safe_load(Path(root, "scenario.yaml").read_text())
@@ -309,6 +376,69 @@ def _resolve_scenario_name(
 
 
 # ── graph ─────────────────────────────────────────────────────────────────
+
+
+def _prepare_vertices_from_schema(schema: dict, data_dir: Path) -> list[dict]:
+    """Convert graph_schema.yaml vertex definitions + CSV data → flat dicts."""
+    vertices = []
+    for vdef in schema.get("vertices", []):
+        csv_path = data_dir / vdef["csv_file"]
+        if not csv_path.exists():
+            continue
+        rows = _read_csv(csv_path)
+        for row in rows:
+            props = {}
+            for p in vdef.get("properties", []):
+                if p in row:
+                    props[p] = row[p]
+            vertices.append({
+                "label": vdef["label"],
+                "id": row[vdef["id_column"]],
+                "partition_key": vdef["partition_key"],
+                "properties": props,
+            })
+    return vertices
+
+
+def _prepare_edges_from_schema(schema: dict, data_dir: Path) -> list[dict]:
+    """Convert graph_schema.yaml edge definitions + CSV data → flat dicts."""
+    edges = []
+    for edef in schema.get("edges", []):
+        csv_path = data_dir / edef["csv_file"]
+        if not csv_path.exists():
+            continue
+        rows = _read_csv(csv_path)
+        # Apply optional filter
+        rf = edef.get("filter")
+        if rf:
+            negate = rf.get("negate", False)
+            rows = [
+                r for r in rows
+                if (r.get(rf["column"]) != rf["value"]) == negate
+            ]
+        src, tgt = edef["source"], edef["target"]
+        for row in rows:
+            props = {}
+            for ep in edef.get("properties", []):
+                if "column" in ep:
+                    props[ep["name"]] = row[ep["column"]]
+                elif "value" in ep:
+                    props[ep["name"]] = ep["value"]
+            edges.append({
+                "label": edef["label"],
+                "source": {
+                    "label": src["label"],
+                    "property": src["property"],
+                    "value": row[src["column"]],
+                },
+                "target": {
+                    "label": tgt["label"],
+                    "property": tgt["property"],
+                    "value": row[tgt["column"]],
+                },
+                "properties": props,
+            })
+    return edges
 
 
 @router.post("/upload/graph", summary="Upload graph data only")
@@ -338,8 +468,22 @@ async def upload_graph(
             scenario_dir = _extract_tar(content, tmppath)
 
             manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
+            manifest = _normalize_manifest(manifest)
             schema = yaml.safe_load((scenario_dir / "graph_schema.yaml").read_text())
-            sc_name = scenario_name or manifest["name"]
+            sc_name = manifest["name"]
+
+            # scenario_name parameter is accepted for API compat but ignored
+            if scenario_name and scenario_name != manifest.get("name"):
+                logger.info(
+                    "Ignoring scenario_name override '%s' — using manifest name '%s'",
+                    scenario_name, sc_name,
+                )
+
+            # Persist full config if agents section present (Phase 8)
+            if "agents" in manifest:
+                from config_store import save_scenario_config
+                await save_scenario_config(sc_name, manifest)
+                progress.emit("config", f"Saved scenario config for '{sc_name}'", 12)
 
             # Extract metadata for frontend passthrough
             scenario_metadata = {
@@ -351,105 +495,40 @@ async def upload_graph(
                 "domain": manifest.get("domain"),
             }
 
-            if scenario_name:
-                gremlin_graph = f"{sc_name}-topology"
-            else:
-                cosmos_cfg = manifest.get("cosmos", {})
-                gremlin_graph = (
-                    f"{sc_name}-{cosmos_cfg.get('gremlin', {}).get('graph', 'topology')}"
-                )
+            graph_cfg = manifest.get("data_sources", {}).get("graph", {}).get("config", {})
+            gremlin_graph = graph_cfg.get("graph", f"{sc_name}-topology")
             data_dir = scenario_dir / schema.get("data_dir", "data/entities")
 
-            progress.emit("infra", f"Ensuring graph '{gremlin_graph}' exists...", 10)
-            await asyncio.to_thread(_ensure_gremlin_graph, gremlin_graph)
-            progress.emit("graph", "Loading graph data...", 20)
+            progress.emit("graph", "Preparing graph data from schema...", 15)
 
-            def _load_graph():
-                """Run all Gremlin operations in a single thread."""
-                gremlin_c = _gremlin_client(gremlin_graph)
-                try:
-                    progress.emit("graph", "Clearing existing graph data...", 25)
-                    _gremlin_submit(gremlin_c, "g.V().drop()")
+            # Transform schema + CSV → generic dicts
+            vertices = _prepare_vertices_from_schema(schema, data_dir)
+            edges = _prepare_edges_from_schema(schema, data_dir)
 
-                    total_v, total_e = 0, 0
-                    vertices = schema.get("vertices", [])
-                    for vi, vdef in enumerate(vertices):
-                        csv_path = data_dir / vdef["csv_file"]
-                        if not csv_path.exists():
-                            continue
-                        rows = _read_csv(csv_path)
-                        pct = 30 + int(30 * vi / max(len(vertices), 1))
-                        progress.emit(
-                            "graph",
-                            f"Loading {vdef['label']} ({len(rows)} vertices)...",
-                            pct,
-                        )
-                        for row in rows:
-                            bindings = {
-                                "label_val": vdef["label"],
-                                "id_val": row[vdef["id_column"]],
-                                "pk_val": vdef["partition_key"],
-                            }
-                            props = []
-                            for pi, p in enumerate(vdef.get("properties", [])):
-                                if p in row:
-                                    bindings[f"p{pi}"] = row[p]
-                                    props.append(f".property('{p}', p{pi})")
-                            query = (
-                                "g.addV(label_val).property('id', id_val)"
-                                ".property('partitionKey', pk_val)"
-                                + "".join(props)
-                            )
-                            _gremlin_submit(gremlin_c, query, bindings)
-                            total_v += 1
+            progress.emit(
+                "graph",
+                f"Prepared {len(vertices)} vertices, {len(edges)} edges",
+                20,
+            )
 
-                    edges = schema.get("edges", [])
-                    for ei, edef in enumerate(edges):
-                        csv_path = data_dir / edef["csv_file"]
-                        if not csv_path.exists():
-                            continue
-                        rows = _read_csv(csv_path)
-                        rf = edef.get("filter")
-                        if rf:
-                            negate = rf.get("negate", False)
-                            rows = [
-                                r
-                                for r in rows
-                                if (r.get(rf["column"]) != rf["value"]) == negate
-                            ]
-                        pct = 60 + int(25 * ei / max(len(edges), 1))
-                        progress.emit(
-                            "graph",
-                            f"Loading {edef['label']} edges ({len(rows)} rows)...",
-                            pct,
-                        )
-                        src, tgt = edef["source"], edef["target"]
-                        for row in rows:
-                            bindings = {
-                                "src_val": row[src["column"]],
-                                "tgt_val": row[tgt["column"]],
-                            }
-                            q = (
-                                f"g.V().has('{src['label']}', '{src['property']}', src_val)"
-                                f".addE('{edef['label']}')"
-                                f".to(g.V().has('{tgt['label']}', '{tgt['property']}', tgt_val))"
-                            )
-                            for pi, ep in enumerate(edef.get("properties", [])):
-                                if "column" in ep:
-                                    bindings[f"ep{pi}"] = row[ep["column"]]
-                                elif "value" in ep:
-                                    bindings[f"ep{pi}"] = ep["value"]
-                                else:
-                                    continue
-                                q += f".property('{ep['name']}', ep{pi})"
-                            _gremlin_submit(gremlin_c, q, bindings)
-                            total_e += 1
+            # Use GraphBackend.ingest() instead of raw Gremlin calls
+            from backends import get_backend_for_graph
 
-                    return total_v, total_e
-                finally:
-                    gremlin_c.close()
+            backend = get_backend_for_graph(gremlin_graph)
 
-            total_v, total_e = await asyncio.to_thread(_load_graph)
+            def progress_adapter(message: str, current: int, total: int):
+                pct = 20 + int(current / max(total, 1) * 75)
+                progress.emit("graph", message, pct)
+
+            result = await backend.ingest(
+                vertices, edges,
+                graph_name=gremlin_graph,
+                graph_database=COSMOS_GREMLIN_DATABASE,
+                on_progress=progress_adapter,
+            )
+
+            total_v = result["vertices_loaded"]
+            total_e = result["edges_loaded"]
             progress.emit(
                 "done",
                 f"Graph loaded: {total_v} vertices, {total_e} edges → {gremlin_graph}",
@@ -460,6 +539,7 @@ async def upload_graph(
                 "graph": gremlin_graph,
                 "vertices": total_v,
                 "edges": total_e,
+                "errors": result.get("errors", []),
                 "scenario_metadata": scenario_metadata,
             })
 
@@ -496,11 +576,25 @@ async def upload_telemetry(
             scenario_dir = _extract_tar(content, tmppath)
 
             manifest = yaml.safe_load((scenario_dir / "scenario.yaml").read_text())
-            sc_name = scenario_name or manifest["name"]
-            cosmos_cfg = manifest.get("cosmos", {})
+            manifest = _normalize_manifest(manifest)
+            sc_name = manifest["name"]
 
-            nosql_db = "telemetry"
-            containers_config = cosmos_cfg.get("nosql", {}).get("containers", [])
+            # scenario_name parameter is accepted for API compat but ignored
+            if scenario_name and scenario_name != manifest.get("name"):
+                logger.info(
+                    "Ignoring scenario_name override '%s' — using manifest name '%s'",
+                    scenario_name, sc_name,
+                )
+
+            # Persist full config if agents section present (Phase 8)
+            if "agents" in manifest:
+                from config_store import save_scenario_config
+                await save_scenario_config(sc_name, manifest)
+
+            telemetry_cfg = manifest.get("data_sources", {}).get("telemetry", {}).get("config", {})
+
+            nosql_db = telemetry_cfg.get("database", "telemetry")
+            containers_config = telemetry_cfg.get("containers", [])
             telemetry_dir = scenario_dir / manifest.get(
                 "paths", {},
             ).get("telemetry", "data/telemetry")
@@ -601,25 +695,12 @@ async def _upload_knowledge_files(
         index_name = f"{sc_name}-{type_label}-index"
 
         def _upload_and_index():
-            from azure.storage.blob import BlobServiceClient
+            from services.blob_uploader import upload_files_to_blob
 
-            blob_svc = BlobServiceClient(
-                f"https://{storage_account}.blob.core.windows.net",
-                credential=get_credential(),
-            )
-            try:
-                blob_svc.create_container(container_name)
-            except Exception:
-                logger.debug("Blob container '%s' may already exist", container_name)
-
-            for f in matched_files:
-                bc = blob_svc.get_blob_client(container_name, f.name)
-                with open(f, "rb") as fh:
-                    bc.upload_blob(fh, overwrite=True)
-            progress.emit(
-                type_label,
-                f"Uploaded {len(matched_files)} files to blob '{container_name}'",
-                50,
+            upload_files_to_blob(
+                container_name,
+                matched_files,
+                on_progress=lambda msg: progress.emit(type_label, msg, 50),
             )
 
             if ai_search:
@@ -703,6 +784,8 @@ async def upload_tickets(
 
 # ── prompts ───────────────────────────────────────────────────────────────
 
+# Legacy hardcoded prompt-to-agent mapping (backward compatibility).
+# Config-driven scenarios use the agents[].instructions_file field instead.
 PROMPT_AGENT_MAP = {
     "foundry_orchestrator_agent.md": "orchestrator",
     "orchestrator.md": "orchestrator",
@@ -715,6 +798,66 @@ PROMPT_AGENT_MAP = {
     "alert_storm.md": "default_alert",
     "default_alert.md": "default_alert",
 }
+
+
+def _build_prompt_agent_map_from_config(config: dict) -> dict[str, str]:
+    """Build filename → agent_role mapping from scenario config agents section.
+
+    For each agent in config['agents'], maps its instructions_file basename
+    to the agent's role. Handles both single files and directories
+    (compose_with_connector).
+
+    Returns:
+        Dict mapping prompt filename → agent role string.
+    """
+    mapping: dict[str, str] = {}
+    for agent_def in config.get("agents", []):
+        role = agent_def.get("role", agent_def["name"])
+        instr = agent_def.get("instructions_file", "")
+        if not instr:
+            continue
+        # Directory reference (ends with /) → store directory name as key
+        if instr.endswith("/"):
+            dir_name = instr.rstrip("/").split("/")[-1]
+            mapping[f"__dir__{dir_name}"] = role
+        else:
+            # Single file → map basename
+            fname = instr.split("/")[-1]
+            mapping[fname] = role
+    return mapping
+
+
+def _get_composed_agents_from_config(config: dict) -> dict[str, dict]:
+    """Extract agents that use compose_with_connector from config.
+
+    Returns:
+        Dict mapping directory name → agent config dict.
+    """
+    result: dict[str, dict] = {}
+    for agent_def in config.get("agents", []):
+        if agent_def.get("compose_with_connector"):
+            instr = agent_def.get("instructions_file", "")
+            if instr.endswith("/"):
+                dir_name = instr.rstrip("/").split("/")[-1]
+                result[dir_name] = agent_def
+    return result
+
+
+def _resolve_connector_for_agent(agent_def: dict, config: dict) -> str:
+    """Determine which data source connector an agent uses.
+
+    Looks at the agent's tools to find the first tool that references a
+    data source, then returns that data source's connector type.
+    """
+    ds = config.get("data_sources", {})
+    for tool_def in agent_def.get("tools", []):
+        if tool_def.get("type") == "openapi":
+            template = tool_def.get("spec_template", "")
+            if template == "graph" and "graph" in ds:
+                return ds["graph"].get("connector", "cosmosdb-gremlin")
+            if template == "telemetry" and "telemetry" in ds:
+                return ds["telemetry"].get("connector", "cosmosdb-nosql")
+    return "cosmosdb-gremlin"
 
 
 @router.post("/upload/prompts", summary="Upload prompts to Cosmos DB")
@@ -756,14 +899,32 @@ async def upload_prompts(
                 progress.error("COSMOS_NOSQL_ENDPOINT not configured")
                 return
 
-            def _store():
-                from router_prompts import _get_prompts_container
+            # Try to load scenario config for config-driven prompt mapping
+            scenario_config: dict | None = None
+            try:
+                from config_store import fetch_scenario_config
+                scenario_config = await fetch_scenario_config(sc_name)
+                progress.emit("prompts", "Using config-driven prompt mapping", 12)
+            except Exception:
+                progress.emit("prompts", "No scenario config — using legacy prompt mapping", 12)
 
-                container = _get_prompts_container(sc_name, ensure_created=True)
+            # Build prompt-to-agent mapping
+            if scenario_config and scenario_config.get("agents"):
+                config_prompt_map = _build_prompt_agent_map_from_config(scenario_config)
+                composed_agents = _get_composed_agents_from_config(scenario_config)
+            else:
+                config_prompt_map = {}
+                composed_agents = {}
+
+            def _store():
+                from cosmos_helpers import get_or_create_container
+
+                container = get_or_create_container(
+                    "prompts", sc_name, "/agent", ensure_created=True,
+                )
                 stored = []
 
                 # Derive graph name for placeholder substitution
-                # Same logic as provision_agents.py: {graph_name} → "sc_name-topology"
                 graph_name = f"{sc_name}-topology"
 
                 def _sub(text: str) -> str:
@@ -773,19 +934,26 @@ async def upload_prompts(
                 # Find prompts dir (parent of graph_explorer/ or where prompt .md files live)
                 prompts_dir = None
                 for md in all_md:
-                    if md.name in PROMPT_AGENT_MAP:
+                    if md.name in PROMPT_AGENT_MAP or md.name in config_prompt_map:
                         prompts_dir = md.parent
                         break
                 if not prompts_dir:
                     prompts_dir = all_md[0].parent
 
+                # Determine which directories are composed (from config or legacy)
+                composed_dir_names = set(composed_agents.keys()) if composed_agents else {"graph_explorer"}
+
                 # Store individual prompts
                 for md_file in all_md:
-                    if md_file.parent.name == "graph_explorer":
-                        continue  # handled separately below
-                    agent = PROMPT_AGENT_MAP.get(md_file.name)
+                    # Skip files in composed directories — handled separately
+                    if md_file.parent.name in composed_dir_names:
+                        continue
+
+                    # Resolve agent role: config-driven first, then legacy fallback
+                    agent = config_prompt_map.get(md_file.name) or PROMPT_AGENT_MAP.get(md_file.name)
                     if not agent:
                         continue
+
                     txt = _sub(md_file.read_text())
                     existing = list(container.query_items(
                         query=(
@@ -817,46 +985,66 @@ async def upload_prompts(
                         20 + len(stored) * 8,
                     )
 
-                # Compose GraphExplorer from graph_explorer/ subdirectory
-                ge_dir = prompts_dir / "graph_explorer"
-                if not ge_dir.exists():
-                    for d in tmppath.rglob("graph_explorer"):
-                        if d.is_dir():
-                            ge_dir = d
-                            break
-                if ge_dir.exists():
+                # Compose prompts from subdirectories
+                for dir_name in composed_dir_names:
+                    comp_dir = prompts_dir / dir_name
+                    if not comp_dir.exists():
+                        for d in tmppath.rglob(dir_name):
+                            if d.is_dir():
+                                comp_dir = d
+                                break
+                    if not comp_dir.exists():
+                        continue
+
+                    # Determine agent role for this directory
+                    agent_role = config_prompt_map.get(f"__dir__{dir_name}", dir_name)
+
+                    # Determine which language file to use
+                    if dir_name in composed_agents and scenario_config:
+                        agent_def = composed_agents[dir_name]
+                        connector = _resolve_connector_for_agent(agent_def, scenario_config)
+                        language_suffix = connector.split("-")[-1]  # "gremlin", "nosql", "kusto"
+                        language_file = f"language_{language_suffix}.md"
+                    else:
+                        # Legacy: always use gremlin
+                        language_file = "language_gremlin.md"
+
+                    # Collect all .md files, skip non-matching language files
                     parts = []
-                    for pn in [
-                        "core_instructions.md", "core_schema.md", "language_gremlin.md",
-                    ]:
-                        pf = ge_dir / pn
-                        if pf.exists():
-                            parts.append(pf.read_text())
+                    for pf in sorted(comp_dir.glob("*.md")):
+                        if pf.name.startswith("language_") and pf.name != language_file:
+                            continue
+                        parts.append(pf.read_text())
+
                     if parts:
                         composed = _sub("\n\n---\n\n".join(parts))
                         existing = list(container.query_items(
                             query=(
                                 "SELECT c.version FROM c "
-                                "WHERE c.agent = 'graph_explorer' "
-                                "AND c.scenario = @s AND c.name = 'graph_explorer' "
+                                f"WHERE c.agent = @a "
+                                "AND c.scenario = @s AND c.name = @n "
                                 "ORDER BY c.version DESC"
                             ),
-                            parameters=[{"name": "@s", "value": sc_name}],
+                            parameters=[
+                                {"name": "@a", "value": agent_role},
+                                {"name": "@s", "value": sc_name},
+                                {"name": "@n", "value": dir_name},
+                            ],
                             enable_cross_partition_query=False,
                         ))
                         nv = (existing[0]["version"] + 1) if existing else 1
-                        did = f"{sc_name}__graph_explorer__v{nv}"
+                        did = f"{sc_name}__{dir_name}__v{nv}"
                         container.upsert_item({
-                            "id": did, "agent": "graph_explorer", "scenario": sc_name,
-                            "name": "graph_explorer", "version": nv, "content": composed,
-                            "description": f"Composed from graph_explorer/ ({sc_name})",
-                            "tags": [sc_name, "graph_explorer", "composed"],
+                            "id": did, "agent": agent_role, "scenario": sc_name,
+                            "name": dir_name, "version": nv, "content": composed,
+                            "description": f"Composed from {dir_name}/ ({sc_name})",
+                            "tags": [sc_name, agent_role, "composed"],
                             "is_active": True, "deleted": False,
                             "created_at": datetime.now(timezone.utc).isoformat(),
                             "created_by": "ui-upload",
                         })
                         stored.append(did)
-                        progress.emit("prompts", f"Stored graph_explorer (composed, v{nv})", 90)
+                        progress.emit("prompts", f"Stored {agent_role} (composed from {dir_name}/, v{nv})", 90)
 
                 return stored
 

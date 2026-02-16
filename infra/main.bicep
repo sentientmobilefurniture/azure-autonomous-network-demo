@@ -106,8 +106,6 @@ module cosmosGremlin 'modules/cosmos-gremlin.bicep' = if (deployCosmosGremlin) {
     accountName: 'cosmos-gremlin-${resourceToken}'
     location: location
     databaseName: 'networkgraph'
-    graphName: 'topology'
-    partitionKeyPath: '/partitionKey'
     maxThroughput: 1000
     tags: union(tags, { component: 'graph-backend' })
     devIpAddress: devIpAddress
@@ -125,7 +123,7 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
     aiSearchName: search.outputs.name
     storageAccountId: storage.outputs.id
     storageAccountName: storage.outputs.name
-    storageContainerName: storage.outputs.containerName
+    storageContainerName: 'network-data'
     gptCapacity: gptCapacity
   }
 }
@@ -169,7 +167,6 @@ module app 'modules/container-app.bicep' = {
     ], deployCosmosGremlin ? [
       { name: 'COSMOS_GREMLIN_ENDPOINT', value: cosmosGremlin!.outputs.gremlinEndpoint }
       { name: 'COSMOS_GREMLIN_DATABASE', value: 'networkgraph' }
-      { name: 'COSMOS_GREMLIN_GRAPH', value: 'topology' }
       { name: 'COSMOS_GREMLIN_PRIMARY_KEY', secretRef: 'cosmos-gremlin-key' }
       { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosGremlin!.outputs.cosmosNoSqlEndpoint }
       { name: 'COSMOS_NOSQL_DATABASE', value: cosmosGremlin!.outputs.telemetryDatabaseName }

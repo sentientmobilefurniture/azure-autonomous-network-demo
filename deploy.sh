@@ -5,11 +5,11 @@
 #
 # Deploys the full pipeline:
 #   1. Azure infrastructure (AI Foundry, AI Search, Storage, Cosmos DB, Container Apps)
-#   2. Data uploads (runbooks → blob, tickets → blob — for AI Search indexing)
-#   3. Search indexes (runbooks-index, tickets-index)
-#   4. Unified Container App deployment (nginx + API + graph-query-api)
-#   5. AI Foundry agents (5 agents: orchestrator + 4 specialists)
-#   6. Local services (optional — all services deployed to Azure)
+#   2. Unified Container App deployment (nginx + API + graph-query-api)
+#   3. Local services (optional — all services deployed to Azure)
+#
+# Scenario-specific resources (graphs, containers, indexes, agents) are created
+# at runtime when a scenario is uploaded via the UI Settings page (⚙ → Upload).
 #
 # Graph & telemetry data is loaded via the UI Settings page (⚙ → Upload Scenario)
 # instead of from this script. See documentation/v8datamanagementplane.md.
@@ -417,13 +417,9 @@ GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
 
 # --- Azure AI Search (AUTO: name after azd up) ---
 AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
-RUNBOOKS_INDEX_NAME=${RUNBOOKS_INDEX_NAME:-runbooks-index}
-TICKETS_INDEX_NAME=${TICKETS_INDEX_NAME:-tickets-index}
 
 # --- Azure Storage (AUTO: name after azd up) ---
 STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
-RUNBOOKS_CONTAINER_NAME=${RUNBOOKS_CONTAINER_NAME:-runbooks}
-TICKETS_CONTAINER_NAME=${TICKETS_CONTAINER_NAME:-tickets}
 
 # --- Graph Backend ---
 GRAPH_BACKEND=cosmosdb
@@ -432,7 +428,6 @@ GRAPH_BACKEND=cosmosdb
 COSMOS_GREMLIN_ENDPOINT=${COSMOS_GREMLIN_ENDPOINT:-}
 COSMOS_GREMLIN_PRIMARY_KEY=${COSMOS_GREMLIN_PRIMARY_KEY:-}
 COSMOS_GREMLIN_DATABASE=${COSMOS_GREMLIN_DATABASE:-networkgraph}
-COSMOS_GREMLIN_GRAPH=${COSMOS_GREMLIN_GRAPH:-topology}
 
 # --- Cosmos DB NoSQL / Telemetry (AUTO: populated after azd up) ---
 COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
@@ -464,8 +459,8 @@ else
   echo "   • Resource Group"
   echo "   • AI Foundry (account + project + GPT-4.1 deployment)"
   echo "   • Azure AI Search"
-  echo "   • Storage Account (runbooks + tickets blob containers)"
-  echo "   • Cosmos DB Gremlin (database: networkgraph, graph: topology)"
+  echo "   • Storage Account"
+  echo "   • Cosmos DB Gremlin (database: networkgraph)"
   echo "   • Container Apps Environment (ACR + Log Analytics)"
   echo "   • Unified Container App (nginx + API + graph-query-api)"
   echo ""
@@ -496,6 +491,15 @@ else
     export DEV_IP_ADDRESS
     ok "Using DEV_IP_ADDRESS=$DEV_IP_ADDRESS for Cosmos DB firewall"
   fi
+
+  # Ensure uv.lock files exist for Docker builds (--frozen requires them)
+  for svc_dir in api graph-query-api; do
+    if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
+      info "Generating missing uv.lock for $svc_dir..."
+      (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
+      ok "$svc_dir/uv.lock created"
+    fi
+  done
 
   info "Running azd up (this may take 10-15 minutes)..."
   echo ""

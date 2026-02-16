@@ -13,7 +13,7 @@ hooks:
   postprovision:
     shell: sh
     run: hooks/postprovision.sh
-    description: Upload runbooks and tickets to blob storage
+    description: Populate azure_config.env with deployment outputs
 
 # Single unified service — all 3 services (nginx + API + graph-query-api)
 # run in one container via supervisord

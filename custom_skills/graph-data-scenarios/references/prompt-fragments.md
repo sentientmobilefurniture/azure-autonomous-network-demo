@@ -6,9 +6,10 @@ Every scenario requires a set of prompt fragments in `data/prompts/` that
 connect the generated data to the AI agents. These prompts are uploaded to
 Cosmos DB and composed at runtime by the API provisioner.
 
-**Critical rule: use concrete values, not placeholders.** The provisioner
-does NOT perform `{graph_name}` substitution — bake in the actual graph
-name (e.g. `cloud-outage-topology`).
+**Critical rule: use `{graph_name}` and `{scenario_prefix}` placeholders.**
+The API config router substitutes them at runtime:
+- `{graph_name}` → e.g. `cloud-outage-topology`
+- `{scenario_prefix}` → e.g. `cloud-outage`
 
 ## Required Prompt Files
 
@@ -38,13 +39,14 @@ The main investigation agent that coordinates sub-agents. Must include:
 3. **Sub-agent descriptions**: What each sub-agent can do (graph explorer, telemetry, runbooks, tickets)
 4. **Alert types**: List of domain-specific alert types and their severity mapping
 5. **Telemetry baselines**: Normal vs anomalous ranges for each metric
-6. **Scenario Context section** (X-GRAPH RULE): Must state the active graph name:
+6. **Scenario Context section** (X-GRAPH RULE): Must state the active graph name
+   using placeholders:
 
 ```markdown
 ## Scenario Context
 
-The current active scenario graph is `cloud-outage-topology`.
-The telemetry database is `cloud-outage-telemetry`.
+The current active scenario graph is `{graph_name}`.
+The telemetry database is `{scenario_prefix}-telemetry`.
 ```
 
 ### `foundry_telemetry_agent_v2.md`
@@ -58,7 +60,7 @@ The telemetry/anomaly detection agent. Must include:
 
 ```markdown
 **CRITICAL RULE #7**: Always include the `X-Graph` header with the value
-`cloud-outage-topology` in every API request. Without this header, queries
+`{graph_name}` in every API request. Without this header, queries
 will fail with "Resource Not Found".
 ```
 
@@ -73,7 +75,7 @@ Gremlin traversal instructions. Must include:
 
 ```markdown
 **CRITICAL RULE #6**: Always include the `X-Graph` header with the value
-`cloud-outage-topology` in every API request. Without this header, queries
+`{graph_name}` in every API request. Without this header, queries
 will fail with "Resource Not Found".
 ```
 
@@ -191,22 +193,27 @@ ignores schema constraints, sending empty or wrong values for the `X-Graph` head
 
 ### Defense-in-Depth
 
-Two layers work together:
-1. **OpenAPI `enum` constraint**: `enum: ["cloud-outage-topology"]` in the API spec
+Three layers work together:
+1. **OpenAPI `enum` constraint**: `enum: ["{graph_name}"]` in the API spec template
+   (substituted by the agent provisioner's `_load_openapi_spec()`)
 2. **Prompt CRITICAL RULE**: Natural language instruction in the agent's system prompt
+   (substituted by the config router's `.replace("{graph_name}", ...)`)
+3. **Runtime substitution**: Both the config router (prompts) and agent provisioner
+   (OpenAPI specs) substitute `{graph_name}` → concrete value like `telco-noc-topology`
 
 ### Which Files Need It
 
 | File | Section/Rule | Content |
 |------|-------------|---------|
-| `foundry_orchestrator_agent.md` | Scenario Context | "The current active scenario graph is `<name>-topology`." |
-| `foundry_telemetry_agent_v2.md` | CRITICAL RULE #7 | "Always include the X-Graph header with the value `<name>-topology`." |
-| `graph_explorer/core_instructions.md` | CRITICAL RULE #6 | "Always include the X-Graph header with the value `<name>-topology`." |
+| `foundry_orchestrator_agent.md` | Scenario Context | "The current active scenario graph is `{graph_name}`." |
+| `foundry_telemetry_agent_v2.md` | CRITICAL RULE #7 | "Always include the X-Graph header with the value `{graph_name}`." |
+| `graph_explorer/core_instructions.md` | CRITICAL RULE #6 | "Always include the X-Graph header with the value `{graph_name}`." |
 
 ### Graph Name Convention
 
 - Graph name: `<scenario-name>-topology` (e.g. `telco-noc-topology`)
 - Telemetry DB derived at runtime: `rsplit("-", 1)[0]` + `-telemetry` → `telco-noc-telemetry`
+- In prompt files, use `{graph_name}` and `{scenario_prefix}` — substituted at runtime
 
 ## Optional Custom Instructions
 

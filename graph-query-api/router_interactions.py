@@ -14,16 +14,13 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
-from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
-from config import COSMOS_NOSQL_ENDPOINT
-from cosmos_helpers import get_or_create_container
+from stores import get_document_store, DocumentStore
 from models import InteractionSaveRequest
 
 logger = logging.getLogger("graph-query-api.interactions")
@@ -34,20 +31,15 @@ INTERACTIONS_DATABASE = "interactions"
 INTERACTIONS_CONTAINER = "interactions"
 
 # ---------------------------------------------------------------------------
-# Cosmos helpers (delegated to cosmos_helpers)
+# DocumentStore helper
 # ---------------------------------------------------------------------------
 
 
-def _get_interactions_container(*, ensure_created: bool = True):
-    """Get the Cosmos container for interaction records.
-
-    Database: interactions (pre-created by Bicep)
-    Container: interactions
-    Partition key: /scenario
-    """
-    return get_or_create_container(
+def _get_store() -> DocumentStore:
+    """Get the DocumentStore for interaction records."""
+    return get_document_store(
         INTERACTIONS_DATABASE, INTERACTIONS_CONTAINER, "/scenario",
-        ensure_created=ensure_created,
+        ensure_created=True,
     )
 
 
@@ -64,42 +56,28 @@ async def list_interactions(
     """List interactions, optionally filtered by scenario.
     Returns newest first (ORDER BY c.created_at DESC).
     """
-    container = _get_interactions_container(ensure_created=False)
+    store = _get_store()
 
-    def _list():
-        query = "SELECT * FROM c"
-        params: list[dict] = []
-        if scenario:
-            query += " WHERE c.scenario = @scenario"
-            params.append({"name": "@scenario", "value": scenario})
-        query += " ORDER BY c.created_at DESC OFFSET 0 LIMIT @limit"
-        params.append({"name": "@limit", "value": limit})
+    query = "SELECT * FROM c"
+    params: list[dict] = []
+    if scenario:
+        query += " WHERE c.scenario = @scenario"
+        params.append({"name": "@scenario", "value": scenario})
+    query += " ORDER BY c.created_at DESC OFFSET 0 LIMIT @limit"
+    params.append({"name": "@limit", "value": limit})
 
-        if scenario:
-            return list(
-                container.query_items(
-                    query=query,
-                    parameters=params,
-                    partition_key=scenario,
-                )
-            )
-        else:
-            return list(
-                container.query_items(
-                    query=query,
-                    parameters=params,
-                    enable_cross_partition_query=True,
-                )
-            )
-
-    items = await asyncio.to_thread(_list)
+    items = await store.list(
+        query=query,
+        parameters=params,
+        partition_key=scenario,  # scoped when filtering, None → cross-partition
+    )
     return {"interactions": items}
 
 
 @router.post("/interactions", summary="Save an interaction")
 async def save_interaction(req: InteractionSaveRequest):
     """Save a completed investigation as an interaction record."""
-    container = _get_interactions_container()
+    store = _get_store()
     doc = {
         "id": str(uuid.uuid4()),
         "scenario": req.scenario,
@@ -109,38 +87,26 @@ async def save_interaction(req: InteractionSaveRequest):
         "run_meta": req.run_meta.model_dump() if req.run_meta else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-
-    def _save():
-        return container.upsert_item(doc)
-
-    await asyncio.to_thread(_save)
+    await store.upsert(doc)
     return doc
 
 
 @router.get("/interactions/{interaction_id}", summary="Get a specific interaction")
 async def get_interaction(interaction_id: str, scenario: str = Query(...)):
     """Get a specific interaction by ID. Requires scenario for partition key routing."""
-    container = _get_interactions_container(ensure_created=False)
-
-    def _get():
-        try:
-            return container.read_item(item=interaction_id, partition_key=scenario)
-        except CosmosResourceNotFoundError:
-            raise HTTPException(status_code=404, detail="Interaction not found")
-
-    return await asyncio.to_thread(_get)
+    store = _get_store()
+    try:
+        return await store.get(interaction_id, partition_key=scenario)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Interaction not found")
 
 
 @router.delete("/interactions/{interaction_id}", summary="Delete an interaction")
 async def delete_interaction(interaction_id: str, scenario: str = Query(...)):
     """Delete a specific interaction."""
-    container = _get_interactions_container(ensure_created=False)
-
-    def _delete():
-        try:
-            container.delete_item(item=interaction_id, partition_key=scenario)
-        except CosmosResourceNotFoundError:
-            raise HTTPException(status_code=404, detail="Interaction not found")
-
-    await asyncio.to_thread(_delete)
+    store = _get_store()
+    try:
+        await store.delete(interaction_id, partition_key=scenario)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Interaction not found")
     return {"deleted": interaction_id}

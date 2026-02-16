@@ -9,10 +9,11 @@
 #   ./data/generate_all.sh              # Generate + tarball all scenarios
 #   ./data/generate_all.sh telco-noc    # Generate + tarball one scenario
 #
-# Output:
-#   data/scenarios/telco-noc.tar.gz
-#   data/scenarios/cloud-outage.tar.gz
-#   data/scenarios/customer-recommendation.tar.gz
+# Output (nested under scenario dir):
+#   data/scenarios/telco-noc/telco-noc-graph.tar.gz
+#   data/scenarios/telco-noc/telco-noc-telemetry.tar.gz
+#   data/scenarios/cloud-outage/cloud-outage-graph.tar.gz
+#   ...
 # ============================================================================
 set -euo pipefail
 
@@ -58,34 +59,34 @@ for SCENARIO in "${TARGETS[@]}"; do
   echo "  Packaging per-type tarballs..."
 
   # Graph: scenario.yaml + graph_schema.yaml + data/entities/
-  tar czf "$SCENARIOS_DIR/$SCENARIO-graph.tar.gz" -C "$SCENARIOS_DIR" \
+  tar czf "$SCENARIO_DIR/$SCENARIO-graph.tar.gz" -C "$SCENARIOS_DIR" \
     "$SCENARIO/scenario.yaml" "$SCENARIO/graph_schema.yaml" "$SCENARIO/data/entities" 2>/dev/null
-  echo -e "  ${GREEN}✓${NC} $SCENARIO-graph.tar.gz ($(du -h "$SCENARIOS_DIR/$SCENARIO-graph.tar.gz" | cut -f1))"
+  echo -e "  ${GREEN}✓${NC} $SCENARIO-graph.tar.gz ($(du -h "$SCENARIO_DIR/$SCENARIO-graph.tar.gz" | cut -f1))"
 
   # Telemetry: scenario.yaml + data/telemetry/
-  tar czf "$SCENARIOS_DIR/$SCENARIO-telemetry.tar.gz" -C "$SCENARIOS_DIR" \
+  tar czf "$SCENARIO_DIR/$SCENARIO-telemetry.tar.gz" -C "$SCENARIOS_DIR" \
     "$SCENARIO/scenario.yaml" "$SCENARIO/data/telemetry" 2>/dev/null
-  echo -e "  ${GREEN}✓${NC} $SCENARIO-telemetry.tar.gz ($(du -h "$SCENARIOS_DIR/$SCENARIO-telemetry.tar.gz" | cut -f1))"
+  echo -e "  ${GREEN}✓${NC} $SCENARIO-telemetry.tar.gz ($(du -h "$SCENARIO_DIR/$SCENARIO-telemetry.tar.gz" | cut -f1))"
 
   # Runbooks: scenario.yaml + knowledge/runbooks/
   if [ -d "$SCENARIO_DIR/data/knowledge/runbooks" ]; then
-    tar czf "$SCENARIOS_DIR/$SCENARIO-runbooks.tar.gz" -C "$SCENARIOS_DIR" \
+    tar czf "$SCENARIO_DIR/$SCENARIO-runbooks.tar.gz" -C "$SCENARIOS_DIR" \
       "$SCENARIO/scenario.yaml" "$SCENARIO/data/knowledge/runbooks" 2>/dev/null
-    echo -e "  ${GREEN}✓${NC} $SCENARIO-runbooks.tar.gz ($(du -h "$SCENARIOS_DIR/$SCENARIO-runbooks.tar.gz" | cut -f1))"
+    echo -e "  ${GREEN}✓${NC} $SCENARIO-runbooks.tar.gz ($(du -h "$SCENARIO_DIR/$SCENARIO-runbooks.tar.gz" | cut -f1))"
   fi
 
   # Tickets: scenario.yaml + knowledge/tickets/
   if [ -d "$SCENARIO_DIR/data/knowledge/tickets" ]; then
-    tar czf "$SCENARIOS_DIR/$SCENARIO-tickets.tar.gz" -C "$SCENARIOS_DIR" \
+    tar czf "$SCENARIO_DIR/$SCENARIO-tickets.tar.gz" -C "$SCENARIOS_DIR" \
       "$SCENARIO/scenario.yaml" "$SCENARIO/data/knowledge/tickets" 2>/dev/null
-    echo -e "  ${GREEN}✓${NC} $SCENARIO-tickets.tar.gz ($(du -h "$SCENARIOS_DIR/$SCENARIO-tickets.tar.gz" | cut -f1))"
+    echo -e "  ${GREEN}✓${NC} $SCENARIO-tickets.tar.gz ($(du -h "$SCENARIO_DIR/$SCENARIO-tickets.tar.gz" | cut -f1))"
   fi
 
   # Prompts: scenario.yaml + data/prompts/
   if [ -d "$SCENARIO_DIR/data/prompts" ]; then
-    tar czf "$SCENARIOS_DIR/$SCENARIO-prompts.tar.gz" -C "$SCENARIOS_DIR" \
+    tar czf "$SCENARIO_DIR/$SCENARIO-prompts.tar.gz" -C "$SCENARIOS_DIR" \
       "$SCENARIO/scenario.yaml" "$SCENARIO/data/prompts" 2>/dev/null
-    echo -e "  ${GREEN}✓${NC} $SCENARIO-prompts.tar.gz ($(du -h "$SCENARIOS_DIR/$SCENARIO-prompts.tar.gz" | cut -f1))"
+    echo -e "  ${GREEN}✓${NC} $SCENARIO-prompts.tar.gz ($(du -h "$SCENARIO_DIR/$SCENARIO-prompts.tar.gz" | cut -f1))"
   fi
 
   echo ""
@@ -97,7 +98,7 @@ echo "Upload tarballs via the UI Settings page (⚙ → Upload tab):"
 for SCENARIO in "${TARGETS[@]}"; do
   echo "  $SCENARIO:"
   for TYPE in graph telemetry runbooks tickets prompts; do
-    T="$SCENARIOS_DIR/$SCENARIO-$TYPE.tar.gz"
+    T="$SCENARIOS_DIR/$SCENARIO/$SCENARIO-$TYPE.tar.gz"
     [ -f "$T" ] && echo "    $(basename "$T")"
   done
 done

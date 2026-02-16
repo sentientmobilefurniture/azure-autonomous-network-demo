@@ -1,8 +1,8 @@
 """
 Router: Prompts CRUD — store and manage agent prompts in Cosmos DB.
 
-Prompts are stored in per-scenario Cosmos databases: {scenario}-prompts / prompts.
-Each document represents a versioned prompt for a specific agent.
+Prompts are stored in per-scenario Cosmos containers within the shared "prompts"
+database. Each document represents a versioned prompt for a specific agent.
 
 Endpoints:
   GET    /query/prompts              — list prompts (filter by agent, scenario)
@@ -14,17 +14,16 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from datetime import datetime, timezone
 
-from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from config import COSMOS_NOSQL_ENDPOINT
-from cosmos_helpers import get_or_create_container, get_mgmt_client
+from adapters.cosmos_config import COSMOS_NOSQL_ENDPOINT
+from cosmos_helpers import get_mgmt_client
+from stores import get_document_store, DocumentStore
 
 logger = logging.getLogger("graph-query-api.prompts")
 
@@ -33,18 +32,18 @@ router = APIRouter(prefix="/query", tags=["prompts"])
 PROMPTS_DATABASE = "prompts"  # shared DB — pre-created by Bicep
 
 # ---------------------------------------------------------------------------
-# Cosmos helpers (delegated to cosmos_helpers)
+# DocumentStore helper
 # ---------------------------------------------------------------------------
 
 
-def _get_prompts_container(scenario: str, *, ensure_created: bool = False):
-    """Get the Cosmos container for a scenario's prompts.
+def _get_prompts_store(scenario: str, *, ensure_created: bool = False) -> DocumentStore:
+    """Get the DocumentStore for a scenario's prompts.
 
     Database: prompts (shared, pre-created by Bicep)
     Container: {scenario} (per-scenario, created on demand)
     Partition key: /agent
     """
-    return get_or_create_container(
+    return get_document_store(
         PROMPTS_DATABASE, scenario, "/agent", ensure_created=ensure_created,
     )
 
@@ -53,6 +52,7 @@ def _list_prompt_scenarios() -> list[str]:
     """List all per-scenario containers in the shared 'prompts' database.
 
     Returns list of scenario names (each container name IS the scenario name).
+    This is infrastructure introspection via ARM — not a DocumentStore operation.
     """
     if not COSMOS_NOSQL_ENDPOINT:
         return []
@@ -119,14 +119,12 @@ async def list_prompts(
     if include_content:
         fields += ", c.content"
     where = " AND ".join(conditions)
-    # NOTE: No ORDER BY — Cosmos NoSQL requires a composite index for multi-field
-    # ORDER BY, and the container is created without one. Sorting is done in Python.
     query = f"SELECT {fields} FROM c WHERE {where}"
 
-    def _query_scenario(sc: str) -> list:
+    async def _query_scenario(sc: str) -> list:
         try:
-            c = _get_prompts_container(sc)  # read-only, no ARM
-            results = list(c.query_items(query=query, parameters=params, enable_cross_partition_query=True))
+            store = _get_prompts_store(sc)
+            results = await store.list(query=query, parameters=params or None)
             # Sort in Python: by agent, then scenario, then version descending
             results.sort(key=lambda x: (x.get("agent", ""), x.get("scenario", ""), -(x.get("version", 0))))
             return results
@@ -135,14 +133,13 @@ async def list_prompts(
             return []
 
     if scenario:
-        items = await asyncio.to_thread(_query_scenario, scenario)
+        items = await _query_scenario(scenario)
     else:
-        def _scan_all():
-            all_items = []
-            for sc in _list_prompt_scenarios():
-                all_items.extend(_query_scenario(sc))
-            return all_items
-        items = await asyncio.to_thread(_scan_all)
+        import asyncio
+        all_items = []
+        for sc in _list_prompt_scenarios():
+            all_items.extend(await _query_scenario(sc))
+        items = all_items
 
     return {"prompts": items}
 
@@ -151,22 +148,18 @@ async def list_prompts(
 async def list_prompt_scenarios():
     """List distinct scenario names that have prompts stored in Cosmos."""
     try:
-        def _list():
-            scenarios = _list_prompt_scenarios()
-            result = []
-            for sc in scenarios:
-                try:
-                    container = _get_prompts_container(sc)
-                    count_q = "SELECT VALUE COUNT(1) FROM c WHERE c.is_active = true AND c.deleted != true"
-                    counts = list(container.query_items(query=count_q, enable_cross_partition_query=True))
-                    result.append({"scenario": sc, "prompt_count": counts[0] if counts else 0})
-                except Exception as e:
-                    logger.warning("Failed to count prompts for %s: %s", sc, e)
-                    result.append({"scenario": sc, "prompt_count": 0})
-            return result
-
-        scenarios = await asyncio.to_thread(_list)
-        return {"prompt_scenarios": scenarios}
+        scenarios = _list_prompt_scenarios()
+        result = []
+        for sc in scenarios:
+            try:
+                store = _get_prompts_store(sc)
+                count_q = "SELECT VALUE COUNT(1) FROM c WHERE c.is_active = true AND c.deleted != true"
+                counts = await store.list(query=count_q)
+                result.append({"scenario": sc, "prompt_count": counts[0] if counts else 0})
+            except Exception as e:
+                logger.warning("Failed to count prompts for %s: %s", sc, e)
+                result.append({"scenario": sc, "prompt_count": 0})
+        return {"prompt_scenarios": result}
     except Exception as e:
         logger.warning("Failed to list prompt scenarios: %s", e)
         return {"prompt_scenarios": [], "error": str(e)}
@@ -176,11 +169,10 @@ async def list_prompt_scenarios():
 async def get_prompt(prompt_id: str, agent: str = Query(description="Agent name (partition key)")):
     """Get a specific prompt by ID (includes content)."""
     scenario = _parse_scenario_from_id(prompt_id)
-    container = _get_prompts_container(scenario)
+    store = _get_prompts_store(scenario)
     try:
-        item = container.read_item(item=prompt_id, partition_key=agent)
-        return item
-    except CosmosResourceNotFoundError:
+        return await store.get(prompt_id, partition_key=agent)
+    except Exception:
         raise HTTPException(404, f"Prompt not found: {prompt_id}")
 
 
@@ -191,7 +183,7 @@ async def create_prompt(prompt: PromptCreate):
     Auto-increments version number if a prompt with the same
     (scenario, name, agent) already exists.
     """
-    container = _get_prompts_container(prompt.scenario, ensure_created=True)
+    store = _get_prompts_store(prompt.scenario, ensure_created=True)
 
     # Find existing versions to determine next version number
     query = (
@@ -199,15 +191,15 @@ async def create_prompt(prompt: PromptCreate):
         "WHERE c.agent = @agent AND c.scenario = @scenario AND c.name = @name "
         "ORDER BY c.version DESC"
     )
-    existing = list(container.query_items(
+    existing = await store.list(
         query=query,
         parameters=[
             {"name": "@agent", "value": prompt.agent},
             {"name": "@scenario", "value": prompt.scenario},
             {"name": "@name", "value": prompt.name},
         ],
-        enable_cross_partition_query=False,
-    ))
+        partition_key=prompt.agent,
+    )
     next_version = (existing[0]["version"] + 1) if existing else 1
 
     doc_id = f"{prompt.scenario}__{prompt.name}__v{next_version}"
@@ -230,16 +222,16 @@ async def create_prompt(prompt: PromptCreate):
     for prev in existing:
         if prev.get("is_active"):
             try:
-                existing_doc = container.read_item(
-                    item=f"{prompt.scenario}__{prompt.name}__v{prev['version']}",
+                existing_doc = await store.get(
+                    f"{prompt.scenario}__{prompt.name}__v{prev['version']}",
                     partition_key=prompt.agent,
                 )
                 existing_doc["is_active"] = False
-                container.upsert_item(existing_doc)
+                await store.upsert(existing_doc)
             except Exception:
                 pass
 
-    container.upsert_item(doc)
+    await store.upsert(doc)
     logger.info("Created prompt: %s (v%d)", doc_id, next_version)
     return {"id": doc_id, "version": next_version, "status": "created"}
 
@@ -252,10 +244,10 @@ async def update_prompt(
 ):
     """Update prompt metadata (description, tags, is_active). Content is immutable per version."""
     scenario = _parse_scenario_from_id(prompt_id)
-    container = _get_prompts_container(scenario)
+    store = _get_prompts_store(scenario)
     try:
-        doc = container.read_item(item=prompt_id, partition_key=agent)
-    except CosmosResourceNotFoundError:
+        doc = await store.get(prompt_id, partition_key=agent)
+    except Exception:
         raise HTTPException(404, f"Prompt not found: {prompt_id}")
 
     if update.description is not None:
@@ -265,7 +257,7 @@ async def update_prompt(
     if update.is_active is not None:
         doc["is_active"] = update.is_active
 
-    container.upsert_item(doc)
+    await store.upsert(doc)
     return {"id": prompt_id, "status": "updated"}
 
 
@@ -276,13 +268,13 @@ async def delete_prompt(
 ):
     """Soft-delete a prompt version (marks deleted=true, not actually removed)."""
     scenario = _parse_scenario_from_id(prompt_id)
-    container = _get_prompts_container(scenario)
+    store = _get_prompts_store(scenario)
     try:
-        doc = container.read_item(item=prompt_id, partition_key=agent)
-    except CosmosResourceNotFoundError:
+        doc = await store.get(prompt_id, partition_key=agent)
+    except Exception:
         raise HTTPException(404, f"Prompt not found: {prompt_id}")
 
     doc["deleted"] = True
     doc["is_active"] = False
-    container.upsert_item(doc)
+    await store.upsert(doc)
     return {"id": prompt_id, "status": "deleted"}

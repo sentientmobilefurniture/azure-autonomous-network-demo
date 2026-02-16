@@ -18,7 +18,7 @@ interface ScenarioState {
   /** Scenario-driven node sizes from graph_styles */
   scenarioNodeSizes: Record<string, number>;
   /** Set active scenario (auto-derives all bindings when non-null) */
-  setActiveScenario: (name: string | null) => void;
+  setActiveScenario: (name: string | null, scenario?: { resources?: { graph?: string; runbooks_index?: string; tickets_index?: string; prompts_container?: string } }) => void;
   /** Set active graph */
   setActiveGraph: (graph: string) => void;
   /** Set active runbooks index */
@@ -31,12 +31,15 @@ interface ScenarioState {
   setProvisioningStatus: (status: ProvisioningStatus) => void;
   /** Set scenario-driven graph styles (colors + sizes) */
   setScenarioStyles: (styles: { node_types?: Record<string, { color: string; size: number }> } | null) => void;
+  /** Whether the initial scenario validation has completed */
+  scenarioReady: boolean;
   /** Get headers to include in /query/* requests */
   getQueryHeaders: () => Record<string, string>;
 }
 
 export type ProvisioningStatus =
   | { state: 'idle' }
+  | { state: 'needs-provisioning'; scenarioName: string }
   | { state: 'provisioning'; step: string; scenarioName: string }
   | { state: 'done'; scenarioName: string }
   | { state: 'error'; error: string; scenarioName: string };
@@ -60,6 +63,11 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
   const [activeTicketsIndex, setActiveTicketsIndex] = useState(() => deriveTickets(activeScenario));
   const [activePromptSet, setActivePromptSet] = useState(() => derivePrompts(activeScenario));
   const [provisioningStatus, setProvisioningStatus] = useState<ProvisioningStatus>({ state: 'idle' });
+
+  // Whether we've finished validating the persisted scenario against Cosmos
+  const [scenarioReady, setScenarioReady] = useState<boolean>(
+    () => localStorage.getItem('activeScenario') === null,
+  );
 
   // Scenario-driven graph styles (from graph_styles.node_types in scenario.yaml)
   const [scenarioNodeColors, setScenarioNodeColors] = useState<Record<string, string>>({});
@@ -92,9 +100,13 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
 
   // Validate persisted scenario still exists in the backend on mount.
   // Clears the ghost if the Cosmos record was deleted (e.g. after azd up).
+  // Sets scenarioReady=true when done (or after 5s timeout).
   useEffect(() => {
     if (!activeScenario) return;
     let cancelled = false;
+    const timeout = setTimeout(() => {
+      if (!cancelled) setScenarioReady(true);
+    }, 5000);
     fetch('/query/scenarios/saved')
       .then((r) => r.json())
       .then((data) => {
@@ -106,14 +118,26 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
           localStorage.removeItem('activeScenario');
         }
       })
-      .catch(() => {}); // silent — don't clear on network error
-    return () => { cancelled = true; };
+      .catch(() => {}) // silent — don't clear on network error
+      .finally(() => {
+        if (!cancelled) setScenarioReady(true);
+      });
+    return () => { cancelled = true; clearTimeout(timeout); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set active scenario and auto-derive all bindings
-  const setActiveScenario = useCallback((name: string | null) => {
+  // If a SavedScenario with resources is provided, use exact resource names.
+  // Otherwise derive from naming conventions (backward compatibility).
+  const setActiveScenario = useCallback((name: string | null, scenario?: { resources?: { graph?: string; runbooks_index?: string; tickets_index?: string; prompts_container?: string } }) => {
     setActiveScenarioRaw(name);
-    if (name) {
+    if (scenario?.resources) {
+      // Use exact resource names from saved scenario config
+      setActiveGraph(scenario.resources.graph ?? (name ? `${name}-topology` : 'topology'));
+      setActiveRunbooksIndex(scenario.resources.runbooks_index ?? (name ? `${name}-runbooks-index` : 'runbooks-index'));
+      setActiveTicketsIndex(scenario.resources.tickets_index ?? (name ? `${name}-tickets-index` : 'tickets-index'));
+      setActivePromptSet(scenario.resources.prompts_container ?? name ?? '');
+    } else if (name) {
+      // Fallback: derive from conventions (backward compatibility)
       setActiveGraph(`${name}-topology`);
       setActiveRunbooksIndex(`${name}-runbooks-index`);
       setActiveTicketsIndex(`${name}-tickets-index`);
@@ -145,6 +169,7 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
       setActivePromptSet,
       setProvisioningStatus,
       setScenarioStyles,
+      scenarioReady,
       getQueryHeaders,
     }}>
       {children}

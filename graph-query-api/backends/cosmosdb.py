@@ -17,14 +17,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
+from typing import Callable
 
 from gremlin_python.driver import client, serializer
 from gremlin_python.driver.protocol import GremlinServerError
 from aiohttp import WSServerHandshakeError
 
-from config import (
+from config import GRAPH_BACKEND
+from adapters.cosmos_config import (
     COSMOS_GREMLIN_ENDPOINT,
     COSMOS_GREMLIN_PRIMARY_KEY,
     COSMOS_GREMLIN_DATABASE,
@@ -290,6 +293,183 @@ class CosmosDBGremlinBackend:
             })
 
         return {"nodes": nodes, "edges": edges}
+
+    # ----- ingest (graph loading) -----------------------------------------
+
+    @staticmethod
+    def _ensure_gremlin_graph(graph_name: str, graph_database: str) -> None:
+        """Create a Gremlin graph resource if it doesn't exist (ARM)."""
+        try:
+            from azure.mgmt.cosmosdb import CosmosDBManagementClient
+            from config import get_credential
+
+            account_name = COSMOS_GREMLIN_ENDPOINT.split(".")[0]
+            sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
+            rg = os.getenv("AZURE_RESOURCE_GROUP", "")
+            if not sub_id or not rg:
+                logger.warning(
+                    "AZURE_SUBSCRIPTION_ID or AZURE_RESOURCE_GROUP not set — "
+                    "cannot create graph via ARM. Assuming '%s' exists.", graph_name,
+                )
+                return
+
+            mgmt = CosmosDBManagementClient(get_credential(), sub_id)
+            logger.info("Creating Gremlin graph '%s' via ARM (if not exists)...", graph_name)
+            mgmt.gremlin_resources.begin_create_update_gremlin_graph(
+                rg, account_name, graph_database, graph_name,
+                {
+                    "resource": {
+                        "id": graph_name,
+                        "partition_key": {"paths": ["/partitionKey"], "kind": "Hash"},
+                    },
+                    "options": {"autoscale_settings": {"max_throughput": 1000}},
+                },
+            ).result()
+            logger.info("Graph '%s' ready.", graph_name)
+        except Exception as e:
+            logger.warning("ARM graph creation failed (may already exist): %s", e)
+
+    def _submit_with_retry(
+        self,
+        gremlin_c: client.Client,
+        query: str,
+        bindings: dict | None = None,
+        retries: int = 3,
+    ) -> list:
+        """Submit a Gremlin query on a provided client with retry on 429/408."""
+        for attempt in range(1, retries + 1):
+            try:
+                return gremlin_c.submit(message=query, bindings=bindings or {}).all().result()
+            except GremlinServerError as e:
+                status = getattr(e, "status_code", 0)
+                if status in (429, 408) and attempt < retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+
+    async def ingest(
+        self,
+        vertices: list[dict],
+        edges: list[dict],
+        *,
+        graph_name: str,
+        graph_database: str,
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> dict:
+        """Load vertices and edges into Cosmos Gremlin.
+
+        Creates the graph via ARM if needed, clears existing data,
+        then loads vertices and edges.
+
+        Args:
+            vertices: List of {label, id, partition_key, properties} dicts
+            edges: List of {label, source, target, properties} dicts where
+                   source/target are {label, property, value} dicts
+            graph_name: Target Gremlin graph name
+            graph_database: Target Gremlin database name
+            on_progress: Callback(message, current, total) for progress
+
+        Returns:
+            {vertices_loaded: int, edges_loaded: int, errors: list[str]}
+        """
+        def _progress(msg: str, current: int, total: int) -> None:
+            if on_progress:
+                on_progress(msg, current, total)
+
+        # Ensure graph exists via ARM
+        await asyncio.to_thread(self._ensure_gremlin_graph, graph_name, graph_database)
+        _progress(f"Graph '{graph_name}' ensured", 0, len(vertices) + len(edges))
+
+        def _load() -> dict:
+            # Create a dedicated client for the target graph
+            gremlin_c = client.Client(
+                url=f"wss://{COSMOS_GREMLIN_ENDPOINT}:443/",
+                traversal_source="g",
+                username=f"/dbs/{graph_database}/colls/{graph_name}",
+                password=COSMOS_GREMLIN_PRIMARY_KEY,
+                message_serializer=serializer.GraphSONSerializersV2d0(),
+            )
+            errors: list[str] = []
+            total_v = 0
+            total_e = 0
+            total = len(vertices) + len(edges)
+
+            try:
+                # Clear existing data
+                _progress("Clearing existing graph data...", 0, total)
+                self._submit_with_retry(gremlin_c, "g.V().drop()")
+
+                # Load vertices
+                for i, v in enumerate(vertices):
+                    try:
+                        bindings = {
+                            "label_val": v["label"],
+                            "id_val": v["id"],
+                            "pk_val": v.get("partition_key", v["id"]),
+                        }
+                        props = []
+                        for pi, (pname, pval) in enumerate(v.get("properties", {}).items()):
+                            bindings[f"p{pi}"] = pval
+                            props.append(f".property('{pname}', p{pi})")
+
+                        query = (
+                            "g.addV(label_val).property('id', id_val)"
+                            ".property('partitionKey', pk_val)"
+                            + "".join(props)
+                        )
+                        self._submit_with_retry(gremlin_c, query, bindings)
+                        total_v += 1
+                    except Exception as e:
+                        errors.append(f"Vertex {v.get('id', '?')}: {e}")
+
+                    if i % 10 == 0:
+                        _progress(
+                            f"Loading vertices ({i+1}/{len(vertices)})...",
+                            i + 1, total,
+                        )
+
+                _progress(f"Loaded {total_v} vertices", len(vertices), total)
+
+                # Load edges
+                for i, e in enumerate(edges):
+                    try:
+                        src = e["source"]
+                        tgt = e["target"]
+                        bindings = {
+                            "src_val": src["value"],
+                            "tgt_val": tgt["value"],
+                        }
+                        q = (
+                            f"g.V().has('{src['label']}', '{src['property']}', src_val)"
+                            f".addE('{e['label']}')"
+                            f".to(g.V().has('{tgt['label']}', '{tgt['property']}', tgt_val))"
+                        )
+                        for pi, (pname, pval) in enumerate(e.get("properties", {}).items()):
+                            bindings[f"ep{pi}"] = pval
+                            q += f".property('{pname}', ep{pi})"
+
+                        self._submit_with_retry(gremlin_c, q, bindings)
+                        total_e += 1
+                    except Exception as ex:
+                        errors.append(f"Edge {e.get('label', '?')}: {ex}")
+
+                    if i % 10 == 0:
+                        _progress(
+                            f"Loading edges ({i+1}/{len(edges)})...",
+                            len(vertices) + i + 1, total,
+                        )
+
+                _progress(f"Loaded {total_e} edges", total, total)
+            finally:
+                gremlin_c.close()
+
+            return {
+                "vertices_loaded": total_v,
+                "edges_loaded": total_e,
+                "errors": errors,
+            }
+
+        return await asyncio.to_thread(_load)
 
     def close(self) -> None:
         """Close this backend's Gremlin client (thread-safe)."""

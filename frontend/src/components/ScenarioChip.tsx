@@ -67,7 +67,7 @@ export function ScenarioChip() {
           {isProvisioning && (
             <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand border-t-transparent" />
           )}
-          <span className="max-w-[140px] truncate">
+          <span className="max-w-[280px] truncate">
             {activeScenario ? activeScenario : '(No scenario)'}
           </span>
           <svg className="h-3 w-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -77,7 +77,7 @@ export function ScenarioChip() {
 
         {/* Flyout dropdown */}
         {dropdownOpen && (
-          <div className="absolute top-full left-0 mt-1 w-56 bg-neutral-bg2 border border-white/10 rounded-lg shadow-xl z-50 overflow-hidden">
+          <div className="absolute top-full left-0 mt-1 w-80 bg-neutral-bg2 border border-white/10 rounded-lg shadow-xl z-50 overflow-hidden">
             {/* Saved scenarios */}
             <div className="max-h-48 overflow-y-auto">
               {savedScenarios.length === 0 ? (
@@ -103,7 +103,7 @@ export function ScenarioChip() {
                     {s.id === activeScenario && (
                       <span className="h-1.5 w-1.5 rounded-full bg-brand flex-shrink-0" />
                     )}
-                    <span className="truncate">{s.display_name || s.id}</span>
+                    <span>{s.display_name || s.id}</span>
                   </button>
                 ))
               )}

@@ -200,5 +200,9 @@ class MockGraphBackend:
 
         return {"nodes": nodes, "edges": edges}
 
+    async def ingest(self, vertices, edges, **kwargs):
+        """Mock ingest — just return counts without storing."""
+        return {"vertices_loaded": len(vertices), "edges_loaded": len(edges), "errors": []}
+
     def close(self) -> None:
         pass

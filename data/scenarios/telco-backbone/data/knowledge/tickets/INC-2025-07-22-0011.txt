@@ -1,0 +1,30 @@
+Incident: INC-2025-07-22-0011
+Title: Power surge DC-MEL-01 — lightning strike
+Severity: P2
+Root Cause: DC-MEL-01
+Root Cause Type: POWER_SURGE
+Created: 2025-07-22T14:18:00Z
+Resolved: 2025-07-22T14:22:00Z
+SLA Breached: No
+
+Description:
+Lightning strike on power distribution equipment at DC-MEL-01. UPS absorbed the surge but triggered a protective shutdown of one power bus. AGG-MEL-WEST-01 lost power for 4 minutes.
+
+Detection Method:
+BMS (Building Management System) alarm integration
+
+Resolution:
+UPS reset after surge protection verification. AGG-MEL-WEST-01 recovered automatically. Surge arresters replaced.
+
+Customer Impact:
+- BB-BUNDLE-MEL-EAST
+
+Services Affected: 1
+Alerts Generated: 567
+Alerts Suppressed: 566
+Time to Detect: 3 seconds
+Time to Reroute: 0 seconds
+Time to Resolve: 4 minutes
+
+Lessons Learned:
+Tier 4 2N power redundancy at DC-MEL-01 prevented customer impact. Adelaide DC (Tier 3, N+1) would not have survived the same event. Recommend upgrading DC-ADL-01 surge protection.

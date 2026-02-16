@@ -3,7 +3,7 @@ Router: Scenario CRUD — save, list, and delete scenario metadata in Cosmos DB.
 
 Scenarios are stored in a dedicated Cosmos NoSQL database: scenarios / scenarios.
 Each document tracks the name, display name, description, and resource bindings
-for a complete scenario (graph + telemetry + runbooks + tickets + prompts).
+for a complete scenario (graph + telemetry + search indexes + prompts).
 
 Endpoints:
   GET    /query/scenarios/saved       — list all saved scenario records
@@ -13,7 +13,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -21,8 +20,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
-from config import COSMOS_NOSQL_ENDPOINT
-from cosmos_helpers import get_or_create_container
+from stores import get_document_store, DocumentStore
 
 logger = logging.getLogger("graph-query-api.scenarios")
 
@@ -55,21 +53,37 @@ def _validate_scenario_name(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Cosmos helpers (delegated to cosmos_helpers)
+# DocumentStore helper
 # ---------------------------------------------------------------------------
 
 
-def _get_scenarios_container(*, ensure_created: bool = True):
-    """Get the Cosmos container for scenario metadata.
-
-    Database: scenarios (pre-created by Bicep)
-    Container: scenarios
-    Partition key: /id
-    """
-    return get_or_create_container(
+def _get_store() -> DocumentStore:
+    """Get the DocumentStore for scenario metadata."""
+    return get_document_store(
         SCENARIOS_DATABASE, SCENARIOS_CONTAINER, "/id",
-        ensure_created=ensure_created,
+        ensure_created=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Resource derivation (config-driven with convention fallback)
+# ---------------------------------------------------------------------------
+
+
+def _derive_resources(name: str, config: dict | None = None) -> dict:
+    """Build resource bindings from config, falling back to conventions."""
+    ds = (config or {}).get("data_sources", {})
+    graph_cfg = ds.get("graph", {}).get("config", {})
+    search_cfg = ds.get("search_indexes", {})
+    return {
+        "graph": graph_cfg.get("graph", f"{name}-topology"),
+        "telemetry_database": ds.get("telemetry", {}).get("config", {}).get("database", "telemetry"),
+        "telemetry_container_prefix": name,
+        "runbooks_index": search_cfg.get("runbooks", {}).get("index_name", f"{name}-runbooks-index"),
+        "tickets_index": search_cfg.get("tickets", {}).get("index_name", f"{name}-tickets-index"),
+        "prompts_database": "prompts",
+        "prompts_container": name,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +100,7 @@ class ScenarioSaveRequest(BaseModel):
     graph_styles: dict | None = None
     domain: str | None = None
     upload_results: dict = {}
+    config: dict | None = None  # full scenario config (data_sources, agents, etc.)
 
     @field_validator("name")
     @classmethod
@@ -111,19 +126,11 @@ class ScenarioSaveRequest(BaseModel):
 async def list_saved_scenarios():
     """Return all saved scenario documents from the scenarios database."""
     try:
-        container = _get_scenarios_container()
-
-        def _list():
-            items = list(
-                container.query_items(
-                    query="SELECT * FROM c ORDER BY c.updated_at DESC",
-                    enable_cross_partition_query=True,
-                )
-            )
-            return items
-
-        scenarios = await asyncio.to_thread(_list)
-        return {"scenarios": scenarios}
+        store = _get_store()
+        items = await store.list(
+            query="SELECT * FROM c ORDER BY c.updated_at DESC",
+        )
+        return {"scenarios": items}
     except HTTPException:
         raise
     except Exception as e:
@@ -137,14 +144,16 @@ async def save_scenario(req: ScenarioSaveRequest):
     name = req.name
     _validate_scenario_name(name)
 
-    container = _get_scenarios_container(ensure_created=True)
+    store = _get_store()
 
     now = datetime.now(timezone.utc).isoformat()
 
     # Auto-derive display name if not provided
     display_name = req.display_name or name.replace("-", " ").title()
 
-    # Build resource bindings from the scenario name
+    # Build resource bindings from config (or convention fallback)
+    resources = _derive_resources(name, req.config)
+
     doc = {
         "id": name,
         "display_name": display_name,
@@ -152,15 +161,7 @@ async def save_scenario(req: ScenarioSaveRequest):
         "created_at": now,
         "updated_at": now,
         "created_by": "ui",
-        "resources": {
-            "graph": f"{name}-topology",
-            "telemetry_database": "telemetry",
-            "telemetry_container_prefix": name,
-            "runbooks_index": f"{name}-runbooks-index",
-            "tickets_index": f"{name}-tickets-index",
-            "prompts_database": "prompts",
-            "prompts_container": name,
-        },
+        "resources": resources,
         "upload_status": req.upload_results,
         "use_cases": req.use_cases or [],
         "example_questions": req.example_questions or [],
@@ -170,25 +171,13 @@ async def save_scenario(req: ScenarioSaveRequest):
 
     # Check if existing document has a created_at we should preserve
     try:
-
-        def _read_existing():
-            try:
-                existing = container.read_item(item=name, partition_key=name)
-                return existing
-            except Exception:
-                return None
-
-        existing = await asyncio.to_thread(_read_existing)
+        existing = await store.get(name, partition_key=name)
         if existing:
             doc["created_at"] = existing.get("created_at", now)
     except Exception:
         pass
 
-    def _upsert():
-        container.upsert_item(doc)
-        return doc
-
-    result = await asyncio.to_thread(_upsert)
+    result = await store.upsert(doc)
     logger.info("Saved scenario: %s", name)
     return {"scenario": result, "status": "saved"}
 
@@ -201,20 +190,36 @@ async def delete_saved_scenario(name: str):
     (graph data, search indexes, telemetry databases). Those are left intact.
     """
     _validate_scenario_name(name)
-    container = _get_scenarios_container()
+    store = _get_store()
 
-    def _delete():
-        try:
-            container.delete_item(item=name, partition_key=name)
-            return True
-        except Exception as e:
-            if "NotFound" in str(e):
-                return False
-            raise
-
-    deleted = await asyncio.to_thread(_delete)
-    if not deleted:
-        raise HTTPException(404, f"Scenario '{name}' not found")
+    try:
+        await store.delete(name, partition_key=name)
+    except Exception as e:
+        if "NotFound" in str(e):
+            raise HTTPException(404, f"Scenario '{name}' not found")
+        raise
 
     logger.info("Deleted scenario record: %s", name)
     return {"name": name, "status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Scenario Config (Phase 8 — config-driven provisioning support)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/scenario/config", summary="Get scenario config for provisioning")
+async def get_scenario_config(
+    scenario: str = Query(..., description="Scenario name"),
+):
+    """Return the full scenario config (parsed scenario.yaml) stored during upload.
+
+    Used by POST /api/config/apply to drive config-driven agent provisioning.
+    Returns {"config": {...}} or {"config": {}, "error": "..."} if not found.
+    """
+    try:
+        from config_store import fetch_scenario_config
+        config = await fetch_scenario_config(scenario)
+        return {"config": config, "scenario": scenario}
+    except ValueError as e:
+        return {"config": {}, "scenario": scenario, "error": str(e)}

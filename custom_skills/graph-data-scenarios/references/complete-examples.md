@@ -1,29 +1,24 @@
 # Complete Examples
 
-Full annotated code from the reference scenarios. Use these as templates
-when creating a new scenario.
+Full annotated code from the **telco-noc** canonical reference scenario. Use
+these as templates when creating a new scenario. Each script is production-tested
+and lives in `data/scenarios/telco-noc/scripts/`.
 
-## Topology Generator — Cloud-Outage
+## Topology Generator — `generate_topology.py`
 
-Complete `generate_topology.py` showing all 8 entity types:
+Complete script showing all 8 entity types with inline hardcoded data:
 
 ```python
 """
-Generate static topology CSV files for cloud datacenter entity tables.
-
-Domain: Cloud infrastructure — multi-region datacenter with availability zones,
-racks, hosts, VMs, load balancers, services, and SLA policies.
-
-Incident scenario: Cooling failure in AZ-US-EAST-A causes cascading host
-thermal shutdowns, VM unreachability, and service degradation.
+Generate static topology CSV files for network entity tables.
 
 Outputs 8 CSV files:
-  - DimRegion.csv
-  - DimAvailabilityZone.csv
-  - DimRack.csv
-  - DimHost.csv
-  - DimVirtualMachine.csv
-  - DimLoadBalancer.csv
+  - DimCoreRouter.csv
+  - DimTransportLink.csv
+  - DimAggSwitch.csv
+  - DimBaseStation.csv
+  - DimBGPSession.csv
+  - DimMPLSPath.csv
   - DimService.csv
   - DimSLAPolicy.csv
 """
@@ -44,132 +39,120 @@ def write_csv(filename: str, headers: list[str], rows: list[list]) -> None:
     print(f"  ✓ {filename} ({len(rows)} rows)")
 
 
-def generate_regions() -> None:
-    headers = ["RegionId", "RegionName", "Country", "Provider"]
+def generate_core_routers() -> None:
+    headers = ["RouterId", "City", "Region", "Vendor", "Model"]
     rows = [
-        ["REGION-US-EAST", "US East", "United States", "CloudCorp"],
-        ["REGION-US-WEST", "US West", "United States", "CloudCorp"],
-        ["REGION-EU-WEST", "EU West", "Ireland", "CloudCorp"],
+        ["CORE-SYD-01", "Sydney", "NSW", "Cisco", "ASR-9922"],
+        ["CORE-MEL-01", "Melbourne", "VIC", "Cisco", "ASR-9922"],
+        ["CORE-BNE-01", "Brisbane", "QLD", "Juniper", "MX10008"],
     ]
-    write_csv("DimRegion.csv", headers, rows)
+    write_csv("DimCoreRouter.csv", headers, rows)
 
 
-def generate_availability_zones() -> None:
-    headers = ["AZId", "AZName", "RegionId", "CoolingSystem", "PowerFeedCount"]
+def generate_transport_links() -> None:
+    headers = ["LinkId", "LinkType", "CapacityGbps", "SourceRouterId", "TargetRouterId"]
     rows = [
-        ["AZ-US-EAST-A", "US-East-AZ-A", "REGION-US-EAST", "CRAC-UNIT-A1", 2],
-        ["AZ-US-EAST-B", "US-East-AZ-B", "REGION-US-EAST", "CRAC-UNIT-B1", 2],
-        ["AZ-US-WEST-A", "US-West-AZ-A", "REGION-US-WEST", "CRAC-UNIT-A1", 2],
-        ["AZ-EU-WEST-A", "EU-West-AZ-A", "REGION-EU-WEST", "CRAC-UNIT-A1", 2],
+        ["LINK-SYD-MEL-FIBRE-01", "DWDM_100G", 100, "CORE-SYD-01", "CORE-MEL-01"],
+        ["LINK-SYD-MEL-FIBRE-02", "DWDM_100G", 100, "CORE-SYD-01", "CORE-MEL-01"],
+        ["LINK-SYD-BNE-FIBRE-01", "DWDM_100G", 100, "CORE-SYD-01", "CORE-BNE-01"],
+        ["LINK-MEL-BNE-FIBRE-01", "DWDM_100G", 100, "CORE-MEL-01", "CORE-BNE-01"],
+        ["LINK-SYD-AGG-NORTH-01", "100GE", 100, "CORE-SYD-01", "CORE-SYD-01"],
+        ["LINK-SYD-AGG-SOUTH-01", "100GE", 100, "CORE-SYD-01", "CORE-SYD-01"],
+        ["LINK-MEL-AGG-EAST-01", "100GE", 100, "CORE-MEL-01", "CORE-MEL-01"],
+        ["LINK-MEL-AGG-WEST-01", "100GE", 100, "CORE-MEL-01", "CORE-MEL-01"],
+        ["LINK-BNE-AGG-CENTRAL-01", "100GE", 100, "CORE-BNE-01", "CORE-BNE-01"],
+        ["LINK-BNE-AGG-SOUTH-01", "100GE", 100, "CORE-BNE-01", "CORE-BNE-01"],
     ]
-    write_csv("DimAvailabilityZone.csv", headers, rows)
+    write_csv("DimTransportLink.csv", headers, rows)
 
 
-def generate_racks() -> None:
-    headers = ["RackId", "RackPosition", "AZId", "MaxPowerKW", "CoolingZone"]
+def generate_agg_switches() -> None:
+    headers = ["SwitchId", "City", "UplinkRouterId"]
     rows = [
-        # US-East AZ-A (incident zone — 3 racks)
-        ["RACK-US-EAST-A-01", "Row-1-Pos-1", "AZ-US-EAST-A", 20, "Zone-North"],
-        ["RACK-US-EAST-A-02", "Row-1-Pos-2", "AZ-US-EAST-A", 20, "Zone-North"],
-        ["RACK-US-EAST-A-03", "Row-2-Pos-1", "AZ-US-EAST-A", 20, "Zone-South"],
-        # US-East AZ-B (failover zone — 2 racks)
-        ["RACK-US-EAST-B-01", "Row-1-Pos-1", "AZ-US-EAST-B", 20, "Zone-North"],
-        ["RACK-US-EAST-B-02", "Row-1-Pos-2", "AZ-US-EAST-B", 20, "Zone-South"],
-        # US-West AZ-A (1 rack)
-        ["RACK-US-WEST-A-01", "Row-1-Pos-1", "AZ-US-WEST-A", 20, "Zone-North"],
-        # EU-West AZ-A (1 rack)
-        ["RACK-EU-WEST-A-01", "Row-1-Pos-1", "AZ-EU-WEST-A", 20, "Zone-North"],
+        ["AGG-SYD-NORTH-01", "Sydney", "CORE-SYD-01"],
+        ["AGG-SYD-SOUTH-01", "Sydney", "CORE-SYD-01"],
+        ["AGG-MEL-EAST-01", "Melbourne", "CORE-MEL-01"],
+        ["AGG-MEL-WEST-01", "Melbourne", "CORE-MEL-01"],
+        ["AGG-BNE-CENTRAL-01", "Brisbane", "CORE-BNE-01"],
+        ["AGG-BNE-SOUTH-01", "Brisbane", "CORE-BNE-01"],
     ]
-    write_csv("DimRack.csv", headers, rows)
+    write_csv("DimAggSwitch.csv", headers, rows)
 
 
-def generate_hosts() -> None:
-    headers = ["HostId", "Hostname", "RackId", "CPUCores", "MemoryGB", "Vendor"]
+def generate_base_stations() -> None:
+    headers = ["StationId", "StationType", "AggSwitchId", "City"]
     rows = [
-        # AZ-A hosts (impacted by cooling failure)
-        ["HOST-USE-A-01-01", "nyc-host-01", "RACK-US-EAST-A-01", 64, 256, "Dell"],
-        ["HOST-USE-A-01-02", "nyc-host-02", "RACK-US-EAST-A-01", 64, 256, "Dell"],
-        ["HOST-USE-A-02-01", "nyc-host-03", "RACK-US-EAST-A-02", 128, 512, "HPE"],
-        ["HOST-USE-A-02-02", "nyc-host-04", "RACK-US-EAST-A-02", 128, 512, "HPE"],
-        ["HOST-USE-A-03-01", "nyc-host-05", "RACK-US-EAST-A-03", 64, 256, "Dell"],
-        # AZ-B hosts (failover targets)
-        ["HOST-USE-B-01-01", "nyc-host-06", "RACK-US-EAST-B-01", 64, 256, "Dell"],
-        ["HOST-USE-B-01-02", "nyc-host-07", "RACK-US-EAST-B-01", 128, 512, "HPE"],
-        ["HOST-USE-B-02-01", "nyc-host-08", "RACK-US-EAST-B-02", 64, 256, "Dell"],
-        # US-West host
-        ["HOST-USW-A-01-01", "lax-host-01", "RACK-US-WEST-A-01", 64, 256, "Dell"],
-        # EU-West host
-        ["HOST-EUW-A-01-01", "dub-host-01", "RACK-EU-WEST-A-01", 64, 256, "Dell"],
+        ["GNB-SYD-2041", "5G_NR", "AGG-SYD-NORTH-01", "Sydney"],
+        ["GNB-SYD-2042", "5G_NR", "AGG-SYD-NORTH-01", "Sydney"],
+        ["GNB-SYD-2043", "5G_NR", "AGG-SYD-SOUTH-01", "Sydney"],
+        ["GNB-MEL-3011", "5G_NR", "AGG-MEL-EAST-01", "Melbourne"],
+        ["GNB-MEL-3012", "5G_NR", "AGG-MEL-EAST-01", "Melbourne"],
+        ["GNB-MEL-3021", "5G_NR", "AGG-MEL-WEST-01", "Melbourne"],
+        ["GNB-BNE-4011", "5G_NR", "AGG-BNE-CENTRAL-01", "Brisbane"],
+        ["GNB-BNE-4012", "5G_NR", "AGG-BNE-SOUTH-01", "Brisbane"],
     ]
-    write_csv("DimHost.csv", headers, rows)
+    write_csv("DimBaseStation.csv", headers, rows)
 
 
-def generate_virtual_machines() -> None:
-    headers = ["VMId", "VMName", "HostId", "ServiceId", "vCPUs", "MemoryGB", "OSType"]
+def generate_bgp_sessions() -> None:
+    headers = ["SessionId", "PeerARouterId", "PeerBRouterId", "ASNumberA", "ASNumberB"]
     rows = [
-        # AZ-A VMs (impacted) — 2 VMs per host
-        ["VM-USE-A-01-01-0001", "web-prod-01", "HOST-USE-A-01-01", "SVC-WEB-FRONTEND", 4, 16, "Linux"],
-        ["VM-USE-A-01-01-0002", "web-prod-02", "HOST-USE-A-01-01", "SVC-WEB-FRONTEND", 4, 16, "Linux"],
-        ["VM-USE-A-01-02-0001", "api-prod-01", "HOST-USE-A-01-02", "SVC-PAYMENT-API", 8, 32, "Linux"],
-        ["VM-USE-A-02-01-0001", "db-prod-01", "HOST-USE-A-02-01", "SVC-ORDER-DB", 16, 128, "Linux"],
-        ["VM-USE-A-02-01-0002", "db-prod-02", "HOST-USE-A-02-01", "SVC-ORDER-DB", 16, 128, "Linux"],
-        ["VM-USE-A-02-02-0001", "cache-prod-01", "HOST-USE-A-02-02", "SVC-CACHE-LAYER", 8, 64, "Linux"],
-        ["VM-USE-A-03-01-0001", "search-prod-01", "HOST-USE-A-03-01", "SVC-SEARCH", 8, 32, "Linux"],
-        # AZ-B VMs (failover replicas)
-        ["VM-USE-B-01-01-0001", "web-dr-01", "HOST-USE-B-01-01", "SVC-WEB-FRONTEND", 4, 16, "Linux"],
-        ["VM-USE-B-01-02-0001", "api-dr-01", "HOST-USE-B-01-02", "SVC-PAYMENT-API", 8, 32, "Linux"],
-        ["VM-USE-B-02-01-0001", "db-dr-01", "HOST-USE-B-02-01", "SVC-ORDER-DB", 16, 128, "Linux"],
-        # US-West VM
-        ["VM-USW-A-01-01-0001", "cdn-west-01", "HOST-USW-A-01-01", "SVC-CDN-EDGE", 4, 16, "Linux"],
-        # EU-West VM
-        ["VM-EUW-A-01-01-0001", "cdn-eu-01", "HOST-EUW-A-01-01", "SVC-CDN-EDGE", 4, 16, "Linux"],
+        ["BGP-SYD-MEL-01", "CORE-SYD-01", "CORE-MEL-01", 64512, 64513],
+        ["BGP-SYD-BNE-01", "CORE-SYD-01", "CORE-BNE-01", 64512, 64514],
+        ["BGP-MEL-BNE-01", "CORE-MEL-01", "CORE-BNE-01", 64513, 64514],
     ]
-    write_csv("DimVirtualMachine.csv", headers, rows)
+    write_csv("DimBGPSession.csv", headers, rows)
 
 
-def generate_load_balancers() -> None:
-    headers = ["LBId", "LBName", "LBType", "RegionId", "Algorithm", "HealthCheckPath"]
+def generate_mpls_paths() -> None:
+    headers = ["PathId", "PathType"]
     rows = [
-        ["LB-US-EAST-WEB-01", "web-lb-east", "Application", "REGION-US-EAST", "RoundRobin", "/health"],
-        ["LB-US-EAST-API-01", "api-lb-east", "Application", "REGION-US-EAST", "LeastConnections", "/api/health"],
-        ["LB-GLOBAL-CDN-01", "cdn-global-lb", "Network", "REGION-US-EAST", "GeoDNS", "/"],
+        ["MPLS-PATH-SYD-MEL-PRIMARY", "PRIMARY"],
+        ["MPLS-PATH-SYD-MEL-SECONDARY", "SECONDARY"],
+        ["MPLS-PATH-SYD-BNE-PRIMARY", "PRIMARY"],
+        ["MPLS-PATH-MEL-BNE-PRIMARY", "PRIMARY"],
+        ["MPLS-PATH-SYD-MEL-VIA-BNE", "TERTIARY"],
     ]
-    write_csv("DimLoadBalancer.csv", headers, rows)
+    write_csv("DimMPLSPath.csv", headers, rows)
 
 
 def generate_services() -> None:
-    headers = ["ServiceId", "ServiceName", "ServiceType", "Tier", "Owner"]
+    headers = ["ServiceId", "ServiceType", "CustomerName", "CustomerCount", "ActiveUsers"]
     rows = [
-        ["SVC-WEB-FRONTEND", "Web Frontend", "WebApp", "Tier-1", "Platform Team"],
-        ["SVC-PAYMENT-API", "Payment API", "API", "Tier-1", "Payments Team"],
-        ["SVC-ORDER-DB", "Order Database", "Database", "Tier-1", "Data Team"],
-        ["SVC-CACHE-LAYER", "Cache Layer", "Cache", "Tier-2", "Platform Team"],
-        ["SVC-SEARCH", "Search Service", "Search", "Tier-2", "Search Team"],
-        ["SVC-CDN-EDGE", "CDN Edge", "CDN", "Tier-2", "Platform Team"],
+        ["VPN-ACME-CORP", "EnterpriseVPN", "ACME Corporation", 1, 450],
+        ["VPN-BIGBANK", "EnterpriseVPN", "BigBank Financial", 1, 1200],
+        ["VPN-OZMINE", "EnterpriseVPN", "OzMine Resources", 1, 680],
+        ["BB-BUNDLE-SYD-NORTH", "Broadband", "Residential - Sydney North", 3200, 3200],
+        ["BB-BUNDLE-MEL-EAST", "Broadband", "Residential - Melbourne East", 2800, 2800],
+        ["BB-BUNDLE-BNE-CENTRAL", "Broadband", "Residential - Brisbane Central", 2400, 2400],
+        ["MOB-5G-SYD-2041", "Mobile5G", "Mobile Subscribers - SYD 2041", 4200, 4200],
+        ["MOB-5G-SYD-2042", "Mobile5G", "Mobile Subscribers - SYD 2042", 4300, 4300],
+        ["MOB-5G-MEL-3011", "Mobile5G", "Mobile Subscribers - MEL 3011", 3800, 3800],
+        ["MOB-5G-BNE-4011", "Mobile5G", "Mobile Subscribers - BNE 4011", 3600, 3600],
     ]
     write_csv("DimService.csv", headers, rows)
 
 
 def generate_sla_policies() -> None:
-    headers = ["SLAId", "SLAName", "ServiceId", "UptimePct", "MaxLatencyMs", "RPOMinutes"]
+    headers = ["SLAPolicyId", "ServiceId", "AvailabilityPct", "MaxLatencyMs", "PenaltyPerHourUSD", "Tier"]
     rows = [
-        ["SLA-WEB-FRONTEND-GOLD", "Web Frontend SLA", "SVC-WEB-FRONTEND", 99.99, 200, 5],
-        ["SLA-PAYMENT-API-GOLD", "Payment API SLA", "SVC-PAYMENT-API", 99.99, 100, 1],
-        ["SLA-ORDER-DB-GOLD", "Order DB SLA", "SVC-ORDER-DB", 99.999, 50, 0],
-        ["SLA-CACHE-LAYER-SILVER", "Cache Layer SLA", "SVC-CACHE-LAYER", 99.9, 500, 15],
-        ["SLA-SEARCH-SILVER", "Search SLA", "SVC-SEARCH", 99.9, 300, 30],
+        ["SLA-ACME-GOLD", "VPN-ACME-CORP", 99.99, 15, 50000, "GOLD"],
+        ["SLA-BIGBANK-SILVER", "VPN-BIGBANK", 99.95, 20, 25000, "SILVER"],
+        ["SLA-OZMINE-GOLD", "VPN-OZMINE", 99.99, 18, 40000, "GOLD"],
+        ["SLA-BB-SYD-STANDARD", "BB-BUNDLE-SYD-NORTH", 99.5, 50, 0, "STANDARD"],
+        ["SLA-BB-BNE-STANDARD", "BB-BUNDLE-BNE-CENTRAL", 99.5, 50, 0, "STANDARD"],
     ]
     write_csv("DimSLAPolicy.csv", headers, rows)
 
 
 def main() -> None:
-    print("Generating cloud topology data (datacenter entity tables)...")
-    generate_regions()
-    generate_availability_zones()
-    generate_racks()
-    generate_hosts()
-    generate_virtual_machines()
-    generate_load_balancers()
+    print("Generating topology data (network entity tables)...")
+    generate_core_routers()
+    generate_transport_links()
+    generate_agg_switches()
+    generate_base_stations()
+    generate_bgp_sessions()
+    generate_mpls_paths()
     generate_services()
     generate_sla_policies()
     print(f"\nAll files written to {os.path.abspath(OUTPUT_DIR)}")
@@ -179,119 +162,24 @@ if __name__ == "__main__":
     main()
 ```
 
-## Telemetry Generator — Telco-NOC Alert Cascade
+**Key patterns to note:**
+- `write_csv()` helper is reused across all generators
+- `OUTPUT_DIR` resolves relative to the script location
+- Entity IDs encode hierarchy: `CORE-SYD-01`, `AGG-SYD-NORTH-01`, `GNB-SYD-2041`
+- FK columns reference parent IDs: `UplinkRouterId → RouterId`, `AggSwitchId → SwitchId`
+- Functions called in dependency order (parents before children)
 
-The core cascade pattern from `generate_telemetry.py`. This shows the
-most important sections — the full implementation is ~300 lines.
+## Routing Generator — `generate_routing.py`
 
-```python
-"""
-Generate alert stream and link telemetry CSV files for Cosmos DB NoSQL.
-Outputs: AlertStream.csv (~5,000 rows), LinkTelemetry.csv (~8,600 rows)
-"""
-
-import csv
-import os
-import random
-from datetime import datetime, timedelta, timezone
-
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "telemetry")
-INCIDENT_START = datetime(2026, 2, 6, 14, 30, 0, tzinfo=timezone.utc)
-random.seed(42)
-
-# ── Topology references (must match entity CSVs exactly) ──────────────────
-CORE_ROUTERS = ["CORE-SYD-01", "CORE-MEL-01", "CORE-BNE-01"]
-AGG_SWITCHES = ["AGG-SYD-NORTH-01", "AGG-SYD-SOUTH-01", "AGG-MEL-EAST-01", ...]
-BASE_STATIONS = ["GNB-SYD-2041", "GNB-SYD-2042", ...]
-TRANSPORT_LINKS = ["LINK-SYD-MEL-FIBRE-01", "LINK-SYD-MEL-FIBRE-02", ...]
-SERVICES = ["VPN-ACME-CORP", "VPN-BIGBANK", ...]
-
-# Nodes impacted by the SYD-MEL fibre-01 cut (downstream tiers)
-IMPACTED_ROUTERS = ["CORE-SYD-01", "CORE-MEL-01"]
-IMPACTED_AGG = ["AGG-SYD-NORTH-01", "AGG-SYD-SOUTH-01", "AGG-MEL-EAST-01", "AGG-MEL-WEST-01"]
-IMPACTED_GNB = ["GNB-SYD-2041", "GNB-SYD-2042", "GNB-SYD-2043", ...]
-IMPACTED_SERVICES = ["VPN-ACME-CORP", "VPN-BIGBANK", "BB-BUNDLE-SYD-NORTH", ...]
-
-def write_csv(filename, headers, rows):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(os.path.join(OUTPUT_DIR, filename), "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(headers)
-        writer.writerows(rows)
-
-def ts(offset_seconds):
-    return (INCIDENT_START + timedelta(seconds=offset_seconds)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-def jitter(base, spread=2.0):
-    return base + random.uniform(-spread, spread)
-
-def generate_alert_stream():
-    headers = ["AlertId", "Timestamp", "SourceNodeId", "SourceNodeType",
-               "AlertType", "Severity", "Description",
-               "OpticalPowerDbm", "BitErrorRate", "CPUUtilPct", "PacketLossPct"]
-    alerts = []
-    counter = 0
-
-    # Normal-range generators (ensure no nulls)
-    def normal_optical(): return round(random.uniform(-3.5, -2.5), 1)
-    def normal_ber(): return round(random.uniform(1e-14, 1e-11), 15)
-    def normal_cpu(): return round(random.uniform(15, 45), 1)
-    def normal_pkt_loss(): return round(random.uniform(0.0, 0.05), 3)
-    def baseline_snapshot():
-        return {"optical": normal_optical(), "ber": normal_ber(),
-                "cpu": normal_cpu(), "pkt_loss": normal_pkt_loss()}
-
-    def add(offset, node_id, node_type, alert_type, severity, desc,
-            optical=None, ber=None, cpu=None, pkt_loss=None):
-        nonlocal counter
-        counter += 1
-        snap = baseline_snapshot()
-        alerts.append([
-            f"ALT-20260206-{counter:06d}", ts(offset), node_id, node_type,
-            alert_type, severity, desc,
-            optical if optical is not None else snap["optical"],
-            ber if ber is not None else snap["ber"],
-            cpu if cpu is not None else snap["cpu"],
-            pkt_loss if pkt_loss is not None else snap["pkt_loss"],
-        ])
-
-    # ── Baseline: 54h of normal noise (~3000 alerts) ──────────────────
-    for _ in range(random.randint(2800, 3400)):
-        offset = random.uniform(-54 * 3600, -60)
-        node, ntype = random.choice(all_nodes)
-        add(offset, node, ntype, "HIGH_CPU", "WARNING", "CPU spike — routine", 
-            cpu=round(random.uniform(55, 75), 1))
-
-    # ── T+0s: Root cause — fibre cut ─────────────────────────────────
-    add(0.0, "LINK-SYD-MEL-FIBRE-01", "TransportLink", "LINK_DOWN",
-        "CRITICAL", "Physical link loss of light detected",
-        optical=-40.0, ber=1.0, pkt_loss=100.0)
-
-    # ── T+2s: BGP peer loss ──────────────────────────────────────────
-    add(2.1, "CORE-SYD-01", "CoreRouter", "BGP_PEER_LOSS",
-        "CRITICAL", "BGP peer CORE-MEL-01 unreachable",
-        cpu=round(random.uniform(78, 88), 1), pkt_loss=round(random.uniform(2, 8), 2))
-
-    # ── T+5s: OSPF adjacency drops ──────────────────────────────────
-    # ── T+10s: Route withdrawals (~20 alerts) ────────────────────────
-    # ── T+15s: HIGH_CPU reconvergence (~50 alerts) ───────────────────
-    # ── T+30s: Packet loss downstream (~200 alerts) ──────────────────
-    # ── T+60s: Service degradation (~500 alerts) ─────────────────────
-    # ── T+70-90s: Flapping/duplicates (fill to ~2000) ────────────────
-
-    alerts.sort(key=lambda r: r[1])  # Sort by timestamp
-    write_csv("AlertStream.csv", headers, alerts)
-```
-
-## Routing Generator — Telco-NOC
-
-Complete `generate_routing.py` showing both junction table patterns:
+Complete script showing both junction table patterns:
 
 ```python
 """
-Generate junction table CSV files for network relationships.
-Outputs: FactMPLSPathHops.csv, FactServiceDependency.csv
+Generate relationship / junction table CSV files for network data.
+
+Outputs 2 CSV files:
+  - FactMPLSPathHops.csv   (MPLSPath --ROUTES_VIA--> nodes)
+  - FactServiceDependency.csv  (Service --DEPENDS_ON--> resources)
 """
 
 import csv
@@ -299,15 +187,19 @@ import os
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "entities")
 
-def write_csv(filename, headers, rows):
+
+def write_csv(filename: str, headers: list[str], rows: list[list]) -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(os.path.join(OUTPUT_DIR, filename), "w", newline="") as f:
+    path = os.path.join(OUTPUT_DIR, filename)
+    with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
         writer.writerows(rows)
+    print(f"  ✓ {filename} ({len(rows)} rows)")
 
-def generate_mpls_path_hops():
-    """Ordered traversal: each MPLS path traverses routers and links."""
+
+def generate_mpls_path_hops() -> None:
+    """Each MPLS path traverses a sequence of routers and transport links."""
     headers = ["PathId", "HopOrder", "NodeId", "NodeType"]
     rows = [
         # SYD-MEL Primary: SYD router → fibre 01 → MEL router
@@ -318,7 +210,15 @@ def generate_mpls_path_hops():
         ["MPLS-PATH-SYD-MEL-SECONDARY", 1, "CORE-SYD-01", "CoreRouter"],
         ["MPLS-PATH-SYD-MEL-SECONDARY", 2, "LINK-SYD-MEL-FIBRE-02", "TransportLink"],
         ["MPLS-PATH-SYD-MEL-SECONDARY", 3, "CORE-MEL-01", "CoreRouter"],
-        # SYD-MEL via BNE (indirect failover path)
+        # SYD-BNE Primary: SYD router → fibre → BNE router
+        ["MPLS-PATH-SYD-BNE-PRIMARY", 1, "CORE-SYD-01", "CoreRouter"],
+        ["MPLS-PATH-SYD-BNE-PRIMARY", 2, "LINK-SYD-BNE-FIBRE-01", "TransportLink"],
+        ["MPLS-PATH-SYD-BNE-PRIMARY", 3, "CORE-BNE-01", "CoreRouter"],
+        # MEL-BNE Primary: MEL router → fibre → BNE router
+        ["MPLS-PATH-MEL-BNE-PRIMARY", 1, "CORE-MEL-01", "CoreRouter"],
+        ["MPLS-PATH-MEL-BNE-PRIMARY", 2, "LINK-MEL-BNE-FIBRE-01", "TransportLink"],
+        ["MPLS-PATH-MEL-BNE-PRIMARY", 3, "CORE-BNE-01", "CoreRouter"],
+        # SYD-MEL via BNE (indirect): SYD → SYD-BNE fibre → BNE → MEL-BNE fibre → MEL
         ["MPLS-PATH-SYD-MEL-VIA-BNE", 1, "CORE-SYD-01", "CoreRouter"],
         ["MPLS-PATH-SYD-MEL-VIA-BNE", 2, "LINK-SYD-BNE-FIBRE-01", "TransportLink"],
         ["MPLS-PATH-SYD-MEL-VIA-BNE", 3, "CORE-BNE-01", "CoreRouter"],
@@ -327,55 +227,263 @@ def generate_mpls_path_hops():
     ]
     write_csv("FactMPLSPathHops.csv", headers, rows)
 
-def generate_service_dependencies():
-    """Typed dependencies: services depend on different resource types."""
+
+def generate_service_dependencies() -> None:
+    """Service-to-resource dependency mappings."""
     headers = ["ServiceId", "DependsOnId", "DependsOnType", "DependencyStrength"]
     rows = [
-        # Enterprise VPNs depend on MPLS paths (primary + backup)
+        # Enterprise VPNs depend on MPLS paths
         ["VPN-ACME-CORP", "MPLS-PATH-SYD-MEL-PRIMARY", "MPLSPath", "PRIMARY"],
         ["VPN-ACME-CORP", "MPLS-PATH-SYD-MEL-SECONDARY", "MPLSPath", "SECONDARY"],
         ["VPN-ACME-CORP", "MPLS-PATH-SYD-MEL-VIA-BNE", "MPLSPath", "TERTIARY"],
         ["VPN-BIGBANK", "MPLS-PATH-SYD-MEL-PRIMARY", "MPLSPath", "PRIMARY"],
         ["VPN-BIGBANK", "MPLS-PATH-SYD-MEL-SECONDARY", "MPLSPath", "SECONDARY"],
-        # Broadband depends on aggregation switches
+        ["VPN-BIGBANK", "MPLS-PATH-SYD-MEL-VIA-BNE", "MPLSPath", "TERTIARY"],
+        # OzMine VPN depends on SYD-BNE MPLS path
+        ["VPN-OZMINE", "MPLS-PATH-SYD-BNE-PRIMARY", "MPLSPath", "PRIMARY"],
+        ["VPN-OZMINE", "MPLS-PATH-SYD-MEL-VIA-BNE", "MPLSPath", "SECONDARY"],
+        # Broadband bundles depend on aggregation switches
         ["BB-BUNDLE-SYD-NORTH", "AGG-SYD-NORTH-01", "AggSwitch", "PRIMARY"],
         ["BB-BUNDLE-MEL-EAST", "AGG-MEL-EAST-01", "AggSwitch", "PRIMARY"],
-        # Mobile depends on base stations
+        ["BB-BUNDLE-BNE-CENTRAL", "AGG-BNE-CENTRAL-01", "AggSwitch", "PRIMARY"],
+        # Mobile services depend on base stations
         ["MOB-5G-SYD-2041", "GNB-SYD-2041", "BaseStation", "PRIMARY"],
+        ["MOB-5G-SYD-2042", "GNB-SYD-2042", "BaseStation", "PRIMARY"],
         ["MOB-5G-MEL-3011", "GNB-MEL-3011", "BaseStation", "PRIMARY"],
+        ["MOB-5G-BNE-4011", "GNB-BNE-4011", "BaseStation", "PRIMARY"],
     ]
     write_csv("FactServiceDependency.csv", headers, rows)
 
-def main():
-    print("Generating routing data...")
+
+def main() -> None:
+    print("Generating routing data (network junction tables)...")
     generate_mpls_path_hops()
     generate_service_dependencies()
+    print(f"\nAll files written to {os.path.abspath(OUTPUT_DIR)}")
+
 
 if __name__ == "__main__":
     main()
 ```
 
-## Ticket Generator — Pattern
+**Key patterns to note:**
+- **Path hops**: `NodeType` column enables `filter` clauses in `graph_schema.yaml`
+  (only `TransportLink` hops create `routes_via` edges)
+- **Dependencies**: `DependsOnType` column creates different edge targets via filter
+  (`MPLSPath`, `AggSwitch`, `BaseStation`)
+- Every ID references an existing entity from topology CSVs
 
-The ticket generator pattern is identical across all scenarios — only the
-ticket content changes. See `ticket-format.md` for the complete formatter code.
+## Telemetry Generator — `generate_telemetry.py` (Key Sections)
 
-Key structural elements:
-1. A `generate_tickets()` function returning a list of dicts
-2. A `_format_ticket()` function converting dict → structured text
-3. A `main()` function writing one `.txt` file per ticket
+The telemetry generator is the most complex script (~410 lines). Here are the
+critical structural sections annotated:
 
-## generate_all.sh — Runner Script
+### Header & Constants
+
+```python
+"""
+Generate alert stream and link telemetry CSV files for Cosmos DB NoSQL.
+Outputs 2 CSV files:
+  - AlertStream.csv     (~5,000 rows) — 54h baseline + cascading alert storm
+  - LinkTelemetry.csv   (~8,600 rows) — 72h baseline + incident link metrics
+"""
+import csv, os, random
+from datetime import datetime, timedelta, timezone
+
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "telemetry")
+INCIDENT_START = datetime(2026, 2, 6, 14, 30, 0, tzinfo=timezone.utc)
+random.seed(42)
+
+# ── Topology references (MUST match entity CSVs exactly) ──────────────────
+CORE_ROUTERS = ["CORE-SYD-01", "CORE-MEL-01", "CORE-BNE-01"]
+AGG_SWITCHES = ["AGG-SYD-NORTH-01", "AGG-SYD-SOUTH-01", ...]
+BASE_STATIONS = ["GNB-SYD-2041", "GNB-SYD-2042", ...]
+TRANSPORT_LINKS = ["LINK-SYD-MEL-FIBRE-01", "LINK-SYD-MEL-FIBRE-02", ...]
+SERVICES = ["VPN-ACME-CORP", "VPN-BIGBANK", ...]
+
+# Impacted nodes (downstream of the fibre cut)
+IMPACTED_SYD_ROUTERS = ["CORE-SYD-01", "CORE-MEL-01"]
+IMPACTED_AGG = ["AGG-SYD-NORTH-01", "AGG-SYD-SOUTH-01", "AGG-MEL-EAST-01", "AGG-MEL-WEST-01"]
+IMPACTED_GNB = ["GNB-SYD-2041", "GNB-SYD-2042", ...]
+IMPACTED_SERVICES = ["VPN-ACME-CORP", "VPN-BIGBANK", ...]
+REROUTE_LINKS = ["LINK-SYD-BNE-FIBRE-01", "LINK-MEL-BNE-FIBRE-01"]
+```
+
+### The No-Null Pattern
+
+```python
+def normal_optical() -> float: return round(random.uniform(-3.5, -2.5), 1)
+def normal_ber() -> float: return round(random.uniform(1e-14, 1e-11), 15)
+def normal_cpu() -> float: return round(random.uniform(15, 45), 1)
+def normal_pkt_loss() -> float: return round(random.uniform(0.0, 0.05), 3)
+
+def baseline_snapshot() -> dict:
+    return {"optical": normal_optical(), "ber": normal_ber(),
+            "cpu": normal_cpu(), "pkt_loss": normal_pkt_loss()}
+
+def add(offset, node_id, node_type, alert_type, severity, desc,
+        optical=None, ber=None, cpu=None, pkt_loss=None):
+    snap = baseline_snapshot()
+    alerts.append([
+        f"ALT-20260206-{counter:06d}", ts(offset), node_id, node_type,
+        alert_type, severity, desc,
+        optical if optical is not None else snap["optical"],  # ← NEVER null
+        ber if ber is not None else snap["ber"],
+        cpu if cpu is not None else snap["cpu"],
+        pkt_loss if pkt_loss is not None else snap["pkt_loss"],
+    ])
+```
+
+### Baseline Generation
+
+```python
+# 54h of low-severity background noise (~3000 alerts, ~1/min)
+baseline_alerts_by_type = {
+    "CoreRouter": [
+        ("HIGH_CPU", "WARNING", "CPU utilization {cpu}% — routine process spike"),
+        ("PACKET_LOSS_THRESHOLD", "MINOR", "Packet loss {pkt}% — transient microloop"),
+    ],
+    "AggSwitch": [...],
+    "BaseStation": [...],
+    "TransportLink": [...],
+}
+for _ in range(random.randint(2800, 3400)):
+    offset = random.uniform(-54 * 3600, -60)
+    node, node_type = random.choice(baseline_nodes)
+    add(offset, node, node_type, ...)
+```
+
+### Cascade Timeline
+
+```python
+# T+0s:  Root cause — fibre cut (1 alert)
+add(0.0, "LINK-SYD-MEL-FIBRE-01", "TransportLink", "LINK_DOWN",
+    "CRITICAL", "Physical link loss of light detected",
+    optical=-40.0, ber=1.0, pkt_loss=100.0)
+
+# T+2s:  BGP peer loss (2 alerts)
+# T+5s:  OSPF adjacency drops (4 alerts)
+# T+10s: Route withdrawals (~20 alerts)
+# T+15s: HIGH_CPU reconvergence (~50 alerts)
+# T+30s: Packet loss downstream (~200 alerts)
+# T+60s: Service degradation (~500 alerts)
+# T+70-90s: Duplicate/flapping (fills to ~2000)
+
+alerts.sort(key=lambda r: r[1])  # Sort by timestamp
+```
+
+### Per-Component Telemetry (LinkTelemetry.csv)
+
+```python
+def generate_link_telemetry():
+    # 72h of 5-min samples (60h before + 12h after incident)
+    baseline_profiles = {
+        "LINK-SYD-MEL-FIBRE-01": {"util": 55.0, "latency": (4, 8)},   # Primary
+        "LINK-SYD-MEL-FIBRE-02": {"util": 38.0, "latency": (4, 8)},   # Backup
+        ...
+    }
+    for link in ALL_LINKS:
+        for sample in range(864):  # 72h / 5min
+            if is_cut_link and after_incident:
+                # Dead: 0% util, -40dBm, BER=1, 9999ms latency
+            elif is_backup_link and after_incident:
+                # Elevated: 68-82% util (absorbing redirected traffic)
+            elif is_reroute_link and after_incident:
+                # Moderate increase: +12-22% util
+            else:
+                # Normal baseline ±5% variation
+```
+
+## Graph Schema — `graph_schema.yaml`
+
+See the full file at `data/scenarios/telco-noc/graph_schema.yaml`. Key structure:
+
+```yaml
+data_dir: data/entities
+
+vertices:
+  - label: CoreRouter
+    csv_file: DimCoreRouter.csv
+    id_column: RouterId
+    partition_key: router
+    properties: [RouterId, City, Region, Vendor, Model]
+  # ... 7 more vertex definitions
+
+edges:
+  # Bidirectional: TransportLink connects_to CoreRouter (2 entries)
+  - label: connects_to
+    csv_file: DimTransportLink.csv
+    source: { label: TransportLink, property: LinkId, column: LinkId }
+    target: { label: CoreRouter, property: RouterId, column: SourceRouterId }
+    properties: [{ name: direction, value: source }]
+  - label: connects_to
+    csv_file: DimTransportLink.csv
+    source: { label: TransportLink, property: LinkId, column: LinkId }
+    target: { label: CoreRouter, property: RouterId, column: TargetRouterId }
+    properties: [{ name: direction, value: target }]
+
+  # FK-based: AggSwitch aggregates_to CoreRouter
+  - label: aggregates_to
+    csv_file: DimAggSwitch.csv
+    source: { label: AggSwitch, property: SwitchId, column: SwitchId }
+    target: { label: CoreRouter, property: RouterId, column: UplinkRouterId }
+
+  # Filtered: MPLSPath routes_via TransportLink (junction table)
+  - label: routes_via
+    csv_file: FactMPLSPathHops.csv
+    filter: { column: NodeType, value: TransportLink }
+    source: { label: MPLSPath, property: PathId, column: PathId }
+    target: { label: TransportLink, property: LinkId, column: NodeId }
+    properties: [{ name: HopOrder, column: HopOrder }]
+
+  # Filtered: Service depends_on MPLSPath|AggSwitch|BaseStation (3 entries)
+  - label: depends_on
+    csv_file: FactServiceDependency.csv
+    filter: { column: DependsOnType, value: MPLSPath }
+    source: { label: Service, property: ServiceId, column: ServiceId }
+    target: { label: MPLSPath, property: PathId, column: DependsOnId }
+    properties: [{ name: DependencyStrength, column: DependencyStrength }]
+  # ... 2 more depends_on entries for AggSwitch and BaseStation
+
+  # Bidirectional: BGPSession peers_over CoreRouter (2 entries)
+  # FK-based: SLAPolicy governed_by Service
+```
+
+Total: 8 vertex definitions, 11 edge definitions.
+
+## `generate_all.sh`
 
 ```bash
 #!/usr/bin/env bash
-# Generate all data for the <scenario> scenario
+# Generate all data for the telco-noc scenario
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "=== Generating <scenario-name> scenario data ==="
+echo "=== Generating telco-noc scenario data ==="
 python3 "$SCRIPT_DIR/generate_topology.py"
 python3 "$SCRIPT_DIR/generate_routing.py"
 python3 "$SCRIPT_DIR/generate_telemetry.py"
 python3 "$SCRIPT_DIR/generate_tickets.py"
 echo "=== Done ==="
 ```
+
+## Adapting for a New Domain
+
+When creating a new scenario, follow this mapping from telco-noc to your domain:
+
+| Telco-NOC | Cloud-Outage (example) | Your Domain |
+|-----------|----------------------|-------------|
+| CoreRouter | Region | Top-level infrastructure |
+| TransportLink | AvailabilityZone | Connection/zone entities |
+| AggSwitch | Rack | Mid-tier aggregation |
+| BaseStation | Host | Compute/endpoint entities |
+| BGPSession | (edge only) | Protocol/session entities |
+| MPLSPath | (edge only) | Path/route entities |
+| Service | Service | Business services |
+| SLAPolicy | SLAPolicy | Policy/governance |
+| `LINK_DOWN` | `COOLING_FAILURE` | Root cause alert type |
+| `BGP_PEER_LOSS` | `THERMAL_SHUTDOWN` | Second-order failure |
+| `SERVICE_DEGRADATION` | `VM_UNREACHABLE` | Customer impact |
+| OpticalPowerDbm | TemperatureCelsius | Domain-specific metric |
+| BitErrorRate | MemoryUtilPct | Domain-specific metric |
+| FactMPLSPathHops | FactLBBackend | Path/routing junction |
+| FactServiceDependency | FactServiceDependency | Dependency junction |

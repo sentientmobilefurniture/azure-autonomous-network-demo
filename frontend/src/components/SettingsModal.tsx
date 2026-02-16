@@ -338,30 +338,30 @@ export function SettingsModal({ open, onClose }: Props) {
                     </div>
                     <div className="space-y-1.5 text-xs">
                       <div className="flex justify-between">
-                        <span className="text-text-muted">GraphExplorer</span>
+                        <span className="text-text-muted">Graph database</span>
                         <span className="text-text-secondary">{activeGraph}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-text-muted">Telemetry</span>
+                        <span className="text-text-muted">Telemetry store</span>
                         <span className="text-text-secondary">
                           {activeGraph.includes('-') ? `${activeGraph.substring(0, activeGraph.lastIndexOf('-'))}-telemetry` : 'telemetry'}
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-text-muted">RunbookKB</span>
+                        <span className="text-text-muted">Runbooks index</span>
                         <span className="text-text-secondary">{activeRunbooksIndex}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-text-muted">Tickets</span>
+                        <span className="text-text-muted">Tickets index</span>
                         <span className="text-text-secondary">{activeTicketsIndex}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-text-muted">Prompts</span>
+                        <span className="text-text-muted">Prompt set</span>
                         <span className="text-text-secondary">{activePromptSet || '(none)'}</span>
                       </div>
                     </div>
                     <p className="text-[10px] text-text-muted">
-                      All bindings auto-derived from scenario name.
+                      Bindings derived from scenario configuration. Switch to Custom mode for manual control.
                     </p>
                   </div>
 

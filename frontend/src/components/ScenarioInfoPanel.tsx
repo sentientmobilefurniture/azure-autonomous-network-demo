@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useScenarioContext } from '../context/ScenarioContext';
 import { useScenarios } from '../hooks/useScenarios';
 
@@ -7,7 +8,12 @@ interface ScenarioInfoPanelProps {
 
 export function ScenarioInfoPanel({ onSelectQuestion }: ScenarioInfoPanelProps) {
   const { activeScenario } = useScenarioContext();
-  const { savedScenarios } = useScenarios();
+  const { savedScenarios, fetchSavedScenarios } = useScenarios();
+
+  // Fetch saved scenarios on mount so the panel can look up the active one
+  useEffect(() => {
+    fetchSavedScenarios();
+  }, [fetchSavedScenarios]);
 
   const scenario = savedScenarios.find(s => s.id === activeScenario);
 

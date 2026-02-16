@@ -1,0 +1,30 @@
+Incident: INC-2025-12-20-0014
+Title: Defence VPN latency breach — SYD-CBR path congestion
+Severity: P1
+Root Cause: LINK-SYD-CBR-FIBRE-01
+Root Cause Type: CAPACITY_CONGESTION
+Created: 2025-12-20T16:45:00Z
+Resolved: 2025-12-20T17:07:00Z
+SLA Breached: Yes
+
+Description:
+Holiday traffic surge combined with Defence data transfer saturated LINK-SYD-CBR-FIBRE-01. VPN-GOVDEFENCE latency exceeded PLATINUM SLA threshold (10ms) for 22 minutes.
+
+Detection Method:
+Real-time SLA monitoring — latency threshold breach
+
+Resolution:
+Traffic engineering prioritized Defence traffic via QoS reclassification. Capacity upgrade planned for Q1 2026.
+
+Customer Impact:
+- VPN-GOVDEFENCE
+
+Services Affected: 1
+Alerts Generated: 67
+Alerts Suppressed: 66
+Time to Detect: 15 seconds
+Time to Reroute: 0 seconds
+Time to Resolve: 22 minutes
+
+Lessons Learned:
+PLATINUM SLA (99.999%, 10ms) requires dedicated bandwidth reservation, not just QoS priority. The SYD-CBR corridor needs a dedicated wavelength for government traffic.

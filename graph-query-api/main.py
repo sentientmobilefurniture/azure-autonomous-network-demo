@@ -34,7 +34,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 
-from config import GRAPH_BACKEND, GraphBackendType, BACKEND_REQUIRED_VARS, TELEMETRY_REQUIRED_VARS
+from config import GRAPH_BACKEND, BACKEND_REQUIRED_VARS, TELEMETRY_REQUIRED_VARS
 from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router, close_telemetry_backend
 from backends import close_all_backends
@@ -64,7 +64,7 @@ async def _lifespan(app: FastAPI):
     if missing:
         logger.warning(
             "Missing env vars for %s backend (will rely on request body values): %s",
-            GRAPH_BACKEND.value, ", ".join(missing),
+            GRAPH_BACKEND, ", ".join(missing),
         )
     # Check optional telemetry vars separately
     missing_telemetry = [v for v in TELEMETRY_REQUIRED_VARS if not os.getenv(v)]
@@ -73,7 +73,7 @@ async def _lifespan(app: FastAPI):
             "Missing telemetry env vars — /query/telemetry will not work: %s",
             ", ".join(missing_telemetry),
         )
-    logger.info("Starting with GRAPH_BACKEND=%s", GRAPH_BACKEND.value)
+    logger.info("Starting with GRAPH_BACKEND=%s", GRAPH_BACKEND)
     yield
     await close_graph_backend()
     close_telemetry_backend()
@@ -82,7 +82,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(
     title="Graph Query API",
     version="0.5.0",
-    description=f"Graph ({GRAPH_BACKEND.value}) and telemetry queries for Foundry agents.",
+    description=f"Graph ({GRAPH_BACKEND}) and telemetry queries for Foundry agents.",
     lifespan=_lifespan,
 )
 
@@ -230,7 +230,7 @@ async def health():
         "status": "ok",
         "service": "graph-query-api",
         "version": app.version,
-        "graph_backend": GRAPH_BACKEND.value,
+        "graph_backend": GRAPH_BACKEND,
     }
 
 

@@ -103,18 +103,20 @@ calling graph or telemetry API tools:
 
 | File | Section | Example text |
 |------|---------|--------------|
-| `foundry_orchestrator_agent.md` | Scenario Context | "The current active scenario graph is `cloud-outage-topology`." |
-| `foundry_telemetry_agent_v2.md` | CRITICAL RULE #7 | "Always include the X-Graph header with the value `cloud-outage-topology`." |
-| `graph_explorer/core_instructions.md` | CRITICAL RULE #6 | "Always include the X-Graph header with the value `cloud-outage-topology`." |
+| `foundry_orchestrator_agent.md` | Scenario Context | "The current active scenario graph is `{graph_name}`." |
+| `foundry_telemetry_agent_v2.md` | CRITICAL RULE #7 | "Always include the X-Graph header with the value `{graph_name}`." |
+| `graph_explorer/core_instructions.md` | CRITICAL RULE #6 | "Always include the X-Graph header with the value `{graph_name}`." |
 
 **Graph name convention:** `<scenario-name>-topology` (e.g., `telco-noc-topology`,
-`cloud-outage-topology`, `customer-recommendation-topology`).
+`cloud-outage-topology`).
 
 **Telemetry DB derivation:** At runtime, `rsplit("-", 1)[0]` + `-telemetry`
 (e.g., `cloud-outage-topology` → `cloud-outage-telemetry`).
 
-**Use concrete values, not placeholders.** Prompts are uploaded to Cosmos DB and
-the API provisioner does NOT perform `{graph_name}` substitution.
+**Use `{graph_name}` and `{scenario_prefix}` placeholders** in prompt files.
+The API config router substitutes them at runtime:
+- `{graph_name}` → e.g. `telco-noc-topology`
+- `{scenario_prefix}` → e.g. `telco-noc`
 
 ### Optional custom instructions (appended if present, silently skipped if absent)
 
@@ -128,14 +130,19 @@ the API provisioner does NOT perform `{graph_name}` substitution.
 
 ## 5. Scenario Manifest (`scenario.yaml`)
 
-Declares all external resource mappings. See `scenario-yaml-format.md` for complete spec.
+Declares all external resource mappings, agent definitions, and UI metadata.
+See `scenario-yaml-format.md` for complete spec.
 
 Required sections:
 - `name`, `display_name`, `description`, `version`, `domain`
+- `use_cases` — what the scenario demonstrates (shown in UI)
+- `example_questions` — starting points for investigation (shown in UI)
 - `paths` — relative paths to entities, graph_schema, telemetry, runbooks, tickets, prompts
-- `cosmos.gremlin` — database + graph name
-- `cosmos.nosql` — database + containers (name, partition_key, csv_file, id_field, numeric_fields)
-- `search_indexes` — AI Search index definitions
+- `data_sources.graph` — Cosmos Gremlin connector config (database, graph name)
+- `data_sources.telemetry` — Cosmos NoSQL connector config (database, containers with
+  name, partition_key, csv_file, id_field, numeric_fields)
+- `data_sources.search_indexes` — AI Search index definitions (runbooks, tickets)
+- `agents` — 5-agent topology (GraphExplorer, Telemetry, Runbook, Ticket, Orchestrator)
 - `graph_styles` — per-vertex-type color, size, icon
 - `telemetry_baselines` — normal/degraded/down ranges per metric
 

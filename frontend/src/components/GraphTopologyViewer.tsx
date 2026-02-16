@@ -158,6 +158,9 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
         isPaused={isPaused}
         onTogglePause={handleTogglePause}
         nodeColorOverride={nodeColorOverride}
+        onSetColor={(label, color) =>
+          setNodeColorOverride((prev) => ({ ...prev, [label]: color }))
+        }
       />
 
       {error && (
@@ -204,9 +207,6 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
         onClose={() => setContextMenu(null)}
         onSetDisplayField={(label, field) =>
           setNodeDisplayField((prev) => ({ ...prev, [label]: field }))
-        }
-        onSetColor={(label, color) =>
-          setNodeColorOverride((prev) => ({ ...prev, [label]: color }))
         }
       />
     </div>
