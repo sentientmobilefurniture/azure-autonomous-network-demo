@@ -141,9 +141,26 @@ Every `/query/*` request can target a different graph via the `X-Graph` header:
 
 ```
 Frontend → X-Graph: telco-noc-topology → graph-query-api reads header
+  → get_scenario_context() (async, V11)
+    → Derives scenario prefix: "telco-noc"
+    → Looks up config_store for "telco-noc" config
+    → Reads data_sources.graph.connector → maps via CONNECTOR_TO_BACKEND
+    → Falls back to GRAPH_BACKEND env var if no stored config
   → ScenarioContext(graph_name="telco-noc-topology",
-                    telemetry_database="telco-noc-telemetry")
+                    telemetry_database="telemetry",
+                    telemetry_container_prefix="telco-noc",
+                    backend_type="cosmosdb")
   → get_backend_for_context(ctx) → cached CosmosDBGremlinBackend per graph
+```
+
+**Fabric path** (V11): For a Fabric-backed scenario:
+```
+Frontend → X-Graph: telco-noc-fabric-topology → graph-query-api
+  → get_scenario_context()
+    → config_store lookup → connector="fabric-gql" → backend_type="fabric-gql"
+  → ScenarioContext(backend_type="fabric-gql")
+  → get_backend_for_context(ctx) → cached FabricGQLBackend
+    → POST to Fabric REST API (executeQuery with GQL)
 ```
 
 Telemetry database: shared `telemetry` database. Container prefix derived from graph name:
@@ -155,9 +172,18 @@ Falls back to `COSMOS_NOSQL_DATABASE` env var if graph name has no hyphens.
 The GraphExplorer agent prompt is special — it's **composed from 3 files**:
 - `graph_explorer/core_instructions.md`
 - `graph_explorer/core_schema.md`
-- `graph_explorer/language_gremlin.md`
+- `graph_explorer/language_{connector}.md` (connector-specific)
 
 Joined with `\n\n---\n\n` separator.
+
+The language file is selected based on the graph connector type from `scenario.yaml`:
+- `connector: "cosmosdb-gremlin"` → `language_gremlin.md` (via `connector.split("-")[-1]`)
+- `connector: "fabric-gql"` → `language_gql.md` (via `connector.split("-")[-1]`)
+- `connector: "mock"` → `language_mock.md`
+
+**V11 addition**: `language_gql.md` provides ISO GQL query examples (MATCH/RETURN
+syntax, relationship traversals, multi-hop patterns) and critical rules
+(e.g., "Never use LOWER()" — GQL is case-sensitive).
 
 Other agent prompts map 1:1 via `PROMPT_AGENT_MAP` (legacy hardcoded lookup) or
 via `_build_prompt_agent_map_from_config()` (config-driven — maps `agents[].instructions_file`

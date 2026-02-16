@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { SavedScenario } from '../types';
-import { consumeSSE } from '../utils/sseStream';
 import { useScenarioContext } from '../context/ScenarioContext';
+import { triggerProvisioning } from '../utils/triggerProvisioning';
 
 export interface ScenarioInfo {
   graph_name: string;
@@ -83,6 +83,7 @@ export function useScenarios() {
     example_questions?: string[];
     graph_styles?: Record<string, unknown>;
     domain?: string;
+    graph_connector?: string;
     upload_results: Record<string, unknown>;
   }) => {
     const res = await fetch('/query/scenarios/save', {
@@ -132,49 +133,11 @@ export function useScenarios() {
     const tickets_index = saved?.resources?.tickets_index ?? `${name}-tickets-index`;
 
     // 4. Auto-provision agents with SSE progress tracking
-    setProvisioningStatus({ state: 'provisioning', step: 'Starting...', scenarioName: name });
-
-    try {
-      const res = await fetch('/api/config/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          graph,
-          runbooks_index,
-          tickets_index,
-          prompt_scenario: name,
-        }),
-      });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      await consumeSSE(res, {
-        onProgress: (data) => {
-          setProvisioningStatus({
-            state: 'provisioning',
-            step: data.detail || data.step,
-            scenarioName: name,
-          });
-        },
-        onComplete: () => {
-          setProvisioningStatus({ state: 'done', scenarioName: name });
-        },
-        onError: (data) => {
-          setProvisioningStatus({ state: 'error', error: data.error, scenarioName: name });
-        },
-      });
-
-      // Auto-clear "done" state after 3 seconds
-      setTimeout(() => {
-        setProvisioningStatus({ state: 'idle' });
-      }, 3000);
-    } catch (e) {
-      setProvisioningStatus({
-        state: 'error',
-        error: String(e),
-        scenarioName: name,
-      });
-    }
+    await triggerProvisioning(
+      { graph, runbooks_index, tickets_index, prompt_scenario: name },
+      name,
+      setProvisioningStatus,
+    );
   }, [savedScenarios, setActiveScenario, setScenarioStyles, setProvisioningStatus]);
 
   return {

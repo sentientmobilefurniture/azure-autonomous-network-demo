@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useScenarioContext, ProvisioningStatus } from '../context/ScenarioContext';
-import { consumeSSE } from '../utils/sseStream';
+import { triggerProvisioning } from '../utils/triggerProvisioning';
 
 /**
  * Non-blocking slim banner below header during agent provisioning.
@@ -53,33 +53,11 @@ export function ProvisioningBanner() {
 
   const handleProvisionNow = useCallback(async () => {
     if (!activeScenario) return;
-    setProvisioningStatus({ state: 'provisioning', step: 'Starting...', scenarioName: activeScenario });
-    try {
-      const res = await fetch('/api/config/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt_scenario: activeScenario }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await consumeSSE(res, {
-        onProgress: (data) => {
-          setProvisioningStatus({
-            state: 'provisioning',
-            step: data.detail || data.step,
-            scenarioName: activeScenario,
-          });
-        },
-        onComplete: () => {
-          setProvisioningStatus({ state: 'done', scenarioName: activeScenario });
-        },
-        onError: (data) => {
-          setProvisioningStatus({ state: 'error', error: data.error, scenarioName: activeScenario });
-        },
-      });
-      setTimeout(() => setProvisioningStatus({ state: 'idle' }), 3000);
-    } catch (e) {
-      setProvisioningStatus({ state: 'error', error: String(e), scenarioName: activeScenario });
-    }
+    await triggerProvisioning(
+      { prompt_scenario: activeScenario },
+      activeScenario,
+      setProvisioningStatus,
+    );
   }, [activeScenario, setProvisioningStatus]);
 
   if (!visible || dismissed) return null;

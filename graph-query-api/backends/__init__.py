@@ -158,3 +158,12 @@ except ImportError:
 
 from .mock import MockGraphBackend  # noqa: E402
 register_backend("mock", MockGraphBackend)
+
+try:
+    from .fabric import FabricGQLBackend
+    register_backend("fabric-gql", FabricGQLBackend)
+except ImportError:
+    import logging
+    logging.getLogger("graph-query-api").warning(
+        "FabricGQLBackend not available (missing httpx?)"
+    )

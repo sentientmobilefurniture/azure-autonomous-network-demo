@@ -20,6 +20,8 @@ export function useInvestigation() {
   const abortRef = useRef<AbortController | null>(null);
   const startTimeRef = useRef<number>(0);
   const stepCountRef = useRef<number>(0);
+  const alertRef = useRef(alert);
+  alertRef.current = alert;
 
   const submitAlert = useCallback(async () => {
     abortRef.current?.abort();
@@ -46,7 +48,7 @@ export function useInvestigation() {
       await fetchEventSource('/api/alert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getQueryHeaders() },
-        body: JSON.stringify({ text: alert }),
+        body: JSON.stringify({ text: alertRef.current }),
         signal: ctrl.signal,
 
         onopen: async (res) => {
@@ -116,7 +118,18 @@ export function useInvestigation() {
         time: m?.time ?? `${((Date.now() - startTimeRef.current) / 1000).toFixed(0)}s`,
       }));
     }
-  }, [alert]);
+  }, [getQueryHeaders]);
+
+  const resetInvestigation = useCallback(() => {
+    abortRef.current?.abort();
+    setSteps([]);
+    setThinking(null);
+    setFinalMessage('');
+    setErrorMessage('');
+    setRunning(false);
+    setRunStarted(false);
+    setRunMeta(null);
+  }, []);
 
   return {
     alert,
@@ -129,5 +142,6 @@ export function useInvestigation() {
     runStarted,
     runMeta,
     submitAlert,
+    resetInvestigation,
   };
 }

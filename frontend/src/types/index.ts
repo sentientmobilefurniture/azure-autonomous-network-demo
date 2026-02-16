@@ -48,6 +48,8 @@ export interface SavedScenario {
   use_cases?: string[];
   example_questions?: string[];
   domain?: string;
+  /** Graph backend connector type — "cosmosdb-gremlin" | "fabric-gql" | "mock" */
+  graph_connector?: string;
 }
 
 export type SlotKey = 'graph' | 'telemetry' | 'runbooks' | 'tickets' | 'prompts';
@@ -121,4 +123,45 @@ export interface ResourceEdge {
   target: string;
   type: ResourceEdgeType;
   label: string;
+}
+
+// ---------------------------------------------------------------------------
+// Graph topology types (used by GraphTopologyViewer and graph subcomponents)
+// ---------------------------------------------------------------------------
+
+export interface TopologyNode {
+  id: string;
+  label: string;     // vertex label (CoreRouter, AggSwitch, etc.)
+  properties: Record<string, unknown>;
+  // Force-graph internal fields (added by the library)
+  x?: number;
+  y?: number;
+  fx?: number;
+  fy?: number;
+}
+
+export interface TopologyEdge {
+  id: string;
+  source: string | TopologyNode;
+  target: string | TopologyNode;
+  label: string;     // edge label (connects_to, etc.)
+  properties: Record<string, unknown>;
+}
+
+export interface TopologyMeta {
+  node_count: number;
+  edge_count: number;
+  query_time_ms: number;
+  labels: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Fabric discovery types (V11)
+// ---------------------------------------------------------------------------
+
+export interface FabricItem {
+  id: string;
+  display_name: string;
+  type: string;
+  description: string;
 }

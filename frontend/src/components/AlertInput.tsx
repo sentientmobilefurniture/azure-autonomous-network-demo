@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
+import { useClickOutside } from '../hooks/useClickOutside';
 
 interface AlertInputProps {
   alert: string;
@@ -14,17 +15,7 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
   const [examplesOpen, setExamplesOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    if (!examplesOpen) return;
-    function handleClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setExamplesOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [examplesOpen]);
+  useClickOutside(dropdownRef, () => setExamplesOpen(false), examplesOpen);
 
   const hasExamples = exampleQuestions && exampleQuestions.length > 0;
 

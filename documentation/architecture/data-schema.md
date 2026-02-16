@@ -27,8 +27,9 @@ scenarios/{scenario-name}/
         └── graph_explorer/         # Composed into single prompt
             ├── core_instructions.md
             ├── core_schema.md
-            ├── language_gremlin.md
-            └── language_mock.md
+            ├── language_gremlin.md  # Gremlin traversals (cosmosdb-gremlin)
+            ├── language_gql.md      # ISO GQL MATCH/RETURN (fabric-gql) — V11
+            └── language_mock.md     # Mock backend queries
 ```
 
 ## `scenario.yaml` Schema (v2.0)
@@ -171,6 +172,36 @@ telemetry_baselines:
       anomalous: "> 2%"
 ```
 
+### Fabric Scenario Manifest (V11)
+
+Fabric scenarios use `connector: "fabric-gql"` on the graph data source and omit
+Gremlin-specific fields (`schema_file`, `partition_key`). The graph config instead
+specifies Fabric workspace and graph model identifiers:
+
+```yaml
+data_sources:
+  graph:
+    connector: "fabric-gql"             # Uses FabricGQLBackend
+    config:
+      workspace_id: "${FABRIC_WORKSPACE_ID}"   # From env or UI
+      graph_model_id: "${FABRIC_GRAPH_MODEL_ID}"
+    # No schema_file — Fabric Ontology manages schema
+
+  telemetry:
+    connector: "cosmosdb-nosql"          # Telemetry can still use Cosmos
+    config:
+      database: "telemetry"
+      container_prefix: "telco-noc-fabric"
+      containers:
+        - name: AlertStream
+          # ... same structure as Cosmos scenarios
+```
+
+The connector string drives backend selection via `CONNECTOR_TO_BACKEND` in `config.py`:
+`"fabric-gql"` → `"fabric-gql"` registry key → `FabricGQLBackend`. The language file
+for `GraphExplorerAgent` is selected by `connector.split("-")[-1]` → `"gql"` →
+`language_gql.md` — no code changes to `router_ingest.py` prompt composition.
+
 ### Key Differences: v1.0 → v2.0
 
 | Aspect | v1.0 (legacy) | v2.0 (current) |
@@ -184,6 +215,11 @@ telemetry_baselines:
 | Prompts DB | Per-scenario DB (`{name}-prompts`) | Shared `prompts` DB with per-scenario container |
 
 ## `graph_schema.yaml` Format
+
+> **NOTE:** `graph_schema.yaml` is specific to the CosmosDB-Gremlin backend. Fabric scenarios
+> do NOT use this file — graph data is managed via Fabric Ontology (created through the
+> Fabric provision pipeline or Fabric Studio). The `data_sources.graph.schema_file` field
+> is omitted in Fabric scenario manifests.
 
 Declarative Gremlin ingestion manifest — fully generic, no code changes for new datasets.
 

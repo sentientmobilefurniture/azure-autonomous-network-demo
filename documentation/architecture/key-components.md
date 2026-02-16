@@ -24,22 +24,38 @@ class ScenarioContext:
     prompts_container: str           # "telco-noc" (per-scenario container name)
     backend_type: str
 
-def get_scenario_context(
+async def get_scenario_context(
     x_graph: str | None = Header(default=None, alias="X-Graph")
 ) -> ScenarioContext:
+    # V11: Now async — looks up scenario config in config_store to resolve
+    # the correct backend_type per scenario (e.g., "cosmosdb" vs "fabric-gql")
     # Falls back to COSMOS_GREMLIN_GRAPH env var if no header
     # Derivation: "cloud-outage-topology" → rsplit("-", 1)[0] → "cloud-outage"
     # Uses "cloud-outage" as telemetry container prefix and prompts container name
     # "topology" (no hyphens) → uses full graph_name as prefix
+    #
+    # Per-scenario backend resolution:
+    #   1. Derive scenario prefix from graph_name
+    #   2. Call config_store.fetch_scenario_config(prefix) to get saved config
+    #   3. Read data_sources.graph.connector → map via CONNECTOR_TO_BACKEND
+    #   4. Fall back to GRAPH_BACKEND env var if no saved config
     #
     # IMPORTANT: This derivation assumes the graph name prefix matches the
     # telemetry container prefix. The _rewrite_manifest_prefix() function in
     # router_ingest.py guarantees this by rewriting all resource names when
     # the user overrides the scenario name at upload time.
 
+# --- Connector-to-backend mapping (V11) ---
+CONNECTOR_TO_BACKEND: dict[str, str] = {
+    "cosmosdb-gremlin": "cosmosdb",
+    "fabric-gql": "fabric-gql",
+    "mock": "mock",
+}
+
 # --- Startup validation ---
 BACKEND_REQUIRED_VARS: dict[str, tuple[str, ...]] = {
     "cosmosdb": ("COSMOS_GREMLIN_ENDPOINT", "COSMOS_GREMLIN_PRIMARY_KEY"),
+    "fabric-gql": ("FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID"),
     "mock": (),
 }
 TELEMETRY_REQUIRED_VARS = ("COSMOS_NOSQL_ENDPOINT", "COSMOS_NOSQL_DATABASE")
@@ -120,8 +136,27 @@ COSMOS_GREMLIN_DATABASE = os.getenv("COSMOS_GREMLIN_DATABASE", "networkgraph")
 COSMOS_GREMLIN_GRAPH = os.getenv("COSMOS_GREMLIN_GRAPH", "topology")
 ```
 
-This adapter pattern allows future backends (e.g., Fabric) to have their own
-config adapters without polluting the shared `config.py`.
+This adapter pattern allows each backend to have its own config adapter without
+polluting the shared `config.py`.
+
+## `graph-query-api/adapters/fabric_config.py` — Fabric-Specific Config (V11)
+
+All Fabric-specific environment variable reads are isolated here:
+```python
+FABRIC_API_URL = os.getenv("FABRIC_API_URL", "https://api.fabric.microsoft.com/v1")
+FABRIC_SCOPE = os.getenv("FABRIC_SCOPE", "https://api.fabric.microsoft.com/.default")
+FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
+FABRIC_GRAPH_MODEL_ID = os.getenv("FABRIC_GRAPH_MODEL_ID", "")
+FABRIC_CONFIGURED: bool  # True if both WORKSPACE_ID and GRAPH_MODEL_ID are set
+
+# Future KQL/Eventhouse vars (defined but not yet consumed):
+FABRIC_EVENTHOUSE_ID = os.getenv("FABRIC_EVENTHOUSE_ID", "")
+EVENTHOUSE_QUERY_URI = os.getenv("EVENTHOUSE_QUERY_URI", "")
+EVENTHOUSE_DATABASE = os.getenv("EVENTHOUSE_DATABASE", "")
+```
+
+Same adapter pattern as `cosmos_config.py` — imported by `backends/fabric.py`
+and `router_fabric_discovery.py`.
 
 ## `graph-query-api/stores/` — DocumentStore Protocol + Registry
 
@@ -211,8 +246,47 @@ async def close_all_backends():
     # Called during app lifespan shutdown
 ```
 
-**Auto-registration**: `"cosmosdb"` → `CosmosDBGremlinBackend`, `"mock"` → `MockGraphBackend`
-are registered at module import time.
+**Auto-registration**: `"cosmosdb"` → `CosmosDBGremlinBackend`, `"mock"` → `MockGraphBackend`,
+`"fabric-gql"` → `FabricGQLBackend` are registered at module import time.
+`FabricGQLBackend` uses a `try/except ImportError` guard so the backend silently
+skips registration if `httpx` is not installed.
+
+## `graph-query-api/backends/fabric.py` — FabricGQLBackend (V11)
+
+Queries Microsoft Fabric Graph Models via REST API using ISO Graph Query Language
+(GQL — NOT GraphQL). Uses `httpx.AsyncClient` for HTTP calls.
+
+```python
+class FabricGQLBackend:
+    def __init__(self, graph_name: str | None = None):
+        # Uses FABRIC_WORKSPACE_ID, FABRIC_GRAPH_MODEL_ID from fabric_config
+        # Token acquired via DefaultAzureCredential(scope=FABRIC_SCOPE)
+
+    async def execute_query(self, query: str, **kwargs) -> dict:
+        # POST to /workspaces/{ws}/GraphModels/{gm}/executeQuery?beta=True
+        # Body: {"commands": query}
+        # Retry: 429 → 15s × attempt backoff, up to 5 retries
+        # Token re-acquired between retries
+        # Returns {columns, data} from tabular GQL results
+
+    async def get_topology(self, query=None, vertex_labels=None) -> dict:
+        # Default query: MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m
+        # Parses GQL tabular results into {nodes, edges}
+        # Detection: _type, _id, _label, _source, _target markers
+
+    async def ingest(self, graph_name, vertices, edges, on_progress=None) -> dict:
+        # Raises NotImplementedError — Fabric uses Lakehouse+Ontology provisioning
+
+    def close(self) / async def aclose(self):
+        # Proper httpx client cleanup, compatible with close_all_backends()
+```
+
+**Key differences from CosmosDBGremlinBackend:**
+- REST API (HTTPS) instead of WebSocket (WSS)
+- AAD/Managed Identity auth (no key auth)
+- GQL syntax (`MATCH/RETURN`) instead of Gremlin (`g.V().has()`)
+- No direct ingestion — data flows through Lakehouse → Ontology pipeline
+- Tabular result parsing (rows with `_type`/`_id` markers) instead of GraphSON
 
 **graph-query-api has its own SSE log system** (separate from the API's `logs.py`):
 - Custom `_SSELogHandler` installed in `main.py`, filters only `graph-query-api.*` loggers
@@ -461,6 +535,46 @@ database `interactions`, container `interactions`, partition key `/scenario`.
 (detects `running` transitioning from `true` → `false` with a non-empty `finalMessage`).
 `InteractionSidebar` renders a collapsible right sidebar showing saved interactions as
 cards with relative timestamps, scenario badges, and query previews.
+
+## `graph-query-api/router_fabric_discovery.py` — Fabric Discovery Endpoints (V11)
+
+Provides workspace-scoped discovery for Fabric items. All endpoints are mounted
+at `/query/fabric/*` (routed through nginx's `/query/*` → :8100 mapping).
+
+**Endpoints:**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/query/fabric/ontologies` | List ontologies in the Fabric workspace |
+| GET | `/query/fabric/ontologies/{id}/models` | List graph models under an ontology |
+| GET | `/query/fabric/eventhouses` | List Fabric Eventhouses |
+| GET | `/query/fabric/kql-databases` | List KQL databases |
+| GET | `/query/fabric/lakehouses` | List Lakehouses |
+| GET | `/query/fabric/health` | Check Fabric API connectivity |
+
+Uses `FabricItem` Pydantic model (`id`, `display_name`, `type`, `description`).
+Shared `_fabric_get()` helper acquires token via `DefaultAzureCredential(scope=FABRIC_SCOPE)`,
+tries type-filtered listing first (`?type=Ontology`), falls back to listing all items
+and filtering client-side.
+
+## `api/app/routers/fabric_provision.py` — Fabric Provisioning (V11)
+
+SSE-streaming provisioning endpoints for Fabric workspace resources. Mounted at
+`/api/fabric/*`.
+
+**Endpoints:**
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/fabric/provision` | Full pipeline: Lakehouse + Eventhouse + Ontology |
+| POST | `/api/fabric/provision/lakehouse` | Create/find Lakehouse only |
+| POST | `/api/fabric/provision/eventhouse` | Create/find Eventhouse only |
+| POST | `/api/fabric/provision/ontology` | Create/find Ontology only |
+| GET | `/api/fabric/status` | Check provisioned resource status |
+
+**`AsyncFabricClient`** class wraps the Fabric REST API:
+- `wait_for_lro()`: Polls long-running operations via `x-ms-operation-id` header
+- `_find_or_create_*()` helpers: Check for existing items by name before creating
+- Auth: `DefaultAzureCredential(scope=FABRIC_SCOPE)`
+- SSE progress via raw `EventSourceResponse`
 
 ## `api/app/orchestrator.py` — Agent Bridge
 

@@ -1,18 +1,17 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
+import { ThinkingDots } from './ThinkingDots';
 import type { RunMeta } from '../types';
 
 interface DiagnosisPanelProps {
   finalMessage: string;
   running: boolean;
-  runStarted: boolean;
   runMeta: RunMeta | null;
 }
 
 export function DiagnosisPanel({
   finalMessage,
   running,
-  runStarted: _runStarted,
   runMeta,
 }: DiagnosisPanelProps) {
   return (
@@ -53,18 +52,7 @@ export function DiagnosisPanel({
               Diagnosis
             </span>
             <div className="flex gap-1 mb-3">
-              <div
-                className="animate-bounce h-1.5 w-1.5 rounded-full bg-brand"
-                style={{ animationDelay: '0ms' }}
-              />
-              <div
-                className="animate-bounce h-1.5 w-1.5 rounded-full bg-brand"
-                style={{ animationDelay: '150ms' }}
-              />
-              <div
-                className="animate-bounce h-1.5 w-1.5 rounded-full bg-brand"
-                style={{ animationDelay: '300ms' }}
-              />
+              <ThinkingDots />
             </div>
             <p className="text-xs text-text-muted">
               Agents are investigating...

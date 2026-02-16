@@ -13,6 +13,7 @@ import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { EmptyState } from './components/EmptyState';
 import { useScenarioContext } from './context/ScenarioContext';
+import { formatTimeAgo } from './utils/formatTime';
 import type { Interaction } from './types';
 
 type AppTab = 'investigate' | 'info' | 'resources';
@@ -29,6 +30,7 @@ export default function App() {
     runStarted,
     runMeta,
     submitAlert,
+    resetInvestigation,
   } = useInvestigation();
 
   const { interactions, loading: interactionsLoading, fetchInteractions,
@@ -42,7 +44,10 @@ export default function App() {
   // Fetch interactions on mount and when scenario changes
   useEffect(() => {
     fetchInteractions(activeScenario ?? undefined);
-  }, [activeScenario, fetchInteractions]);
+    // Clear stale investigation state from previous scenario
+    resetInvestigation();
+    setViewingInteraction(null);
+  }, [activeScenario, fetchInteractions, resetInvestigation]);
 
   // Auto-save interaction when investigation completes.
   const prevRunningRef = useRef(running);
@@ -170,7 +175,6 @@ export default function App() {
                       <DiagnosisPanel
                         finalMessage={displayDiagnosis}
                         running={running}
-                        runStarted={runStarted}
                         runMeta={displayRunMeta}
                       />
                     </div>
@@ -204,14 +208,4 @@ export default function App() {
   );
 }
 
-/** Format ISO timestamp to relative time */
-function formatTimeAgo(isoString: string): string {
-  const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
+

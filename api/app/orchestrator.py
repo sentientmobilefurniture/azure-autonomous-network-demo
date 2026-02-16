@@ -24,18 +24,12 @@ from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 
+from app.paths import PROJECT_ROOT, CONFIG_FILE, AGENT_IDS_FILE
+from app.agent_ids import load_agent_ids, get_agent_names, get_agent_list
+
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Paths & config
-# ---------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
-
-load_dotenv(CONFIG_FILE)
-
-# Evaluate AFTER load_dotenv so AGENT_IDS_PATH from azure_config.env is visible
-AGENT_IDS_FILE = Path(os.getenv("AGENT_IDS_PATH", str(PROJECT_ROOT / "scripts" / "agent_ids.json")))
+# load_dotenv already called by app.paths import
 
 # Cached credential singleton — avoids re-probing credential sources on every request
 _credential = None
@@ -61,7 +55,7 @@ def is_configured() -> bool:
     if not os.environ.get("AI_FOUNDRY_PROJECT_NAME"):
         return False
     try:
-        data = json.loads(AGENT_IDS_FILE.read_text())
+        data = load_agent_ids()
         if not data.get("orchestrator", {}).get("id"):
             return False
     except (json.JSONDecodeError, KeyError):
@@ -70,41 +64,12 @@ def is_configured() -> bool:
 
 
 def _load_orchestrator_id() -> str:
-    return _cached_agent_data()["orchestrator"]["id"]
-
-
-# ---------------------------------------------------------------------------
-# mtime-based cache for agent_ids.json
-# ---------------------------------------------------------------------------
-
-_agent_ids_mtime: float = 0.0
-_agent_ids_data: dict = {}
-
-
-def _cached_agent_data() -> dict:
-    """Read agent_ids.json, reloading only when the file changes on disk."""
-    global _agent_ids_mtime, _agent_ids_data
-    try:
-        mtime = AGENT_IDS_FILE.stat().st_mtime
-    except OSError:
-        mtime = 0.0
-    if mtime != _agent_ids_mtime or not _agent_ids_data:
-        _agent_ids_data = json.loads(AGENT_IDS_FILE.read_text())
-        _agent_ids_mtime = mtime
-    return _agent_ids_data
+    return load_agent_ids()["orchestrator"]["id"]
 
 
 def _load_agent_names() -> dict[str, str]:
     """Map of agent_id → display name for resolving connected-agent calls."""
-    data = _cached_agent_data()
-    names: dict[str, str] = {}
-    orch = data.get("orchestrator", {})
-    if orch.get("id"):
-        names[orch["id"]] = orch.get("name", "Orchestrator")
-    for sa in data.get("sub_agents", {}).values():
-        if sa.get("id"):
-            names[sa["id"]] = sa.get("name", sa["id"])
-    return names
+    return get_agent_names()
 
 
 def _get_project_client():
@@ -119,21 +84,8 @@ def _get_project_client():
 
 def load_agents_from_file() -> list[dict] | None:
     """Load agent list from agent_ids.json. Returns None if unavailable."""
-    if not AGENT_IDS_FILE.exists():
-        return None
-    try:
-        data = json.loads(AGENT_IDS_FILE.read_text())
-        agents = []
-        orch = data.get("orchestrator", {})
-        if orch.get("id"):
-            agents.append({"name": orch.get("name", "Orchestrator"), "id": orch["id"], "status": "active"})
-        for sa in data.get("sub_agents", {}).values():
-            if sa.get("id"):
-                agents.append({"name": sa.get("name", "Unknown"), "id": sa["id"], "status": "active"})
-        return agents if agents else None
-    except Exception as e:
-        logger.warning("Failed to load agent_ids.json: %s", e)
-        return None
+    agents = get_agent_list()
+    return agents if agents else None
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +156,39 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     self._elapsed(),
                 )
 
+        # -- Helpers for tool call resolution --------------------------------
+
+        def _resolve_agent_name(self, tc) -> str:
+            """Resolve agent name from a tool call object."""
+            tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
+            tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
+            if tc_type == "connected_agent":
+                ca = tc.connected_agent if hasattr(tc, "connected_agent") else tc.get("connected_agent", {})
+                name = getattr(ca, "name", None) or ca.get("name", None)
+                if not name:
+                    aid = getattr(ca, "agent_id", None) or ca.get("agent_id", "?")
+                    name = agent_names.get(aid, aid)
+                return name
+            elif tc_type == "azure_ai_search":
+                return "AzureAISearch"
+            return tc_type
+
+        def _extract_arguments(self, tc) -> str:
+            """Parse and extract arguments from a tool call."""
+            tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
+            tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
+            if tc_type != "connected_agent":
+                return ""
+            ca = tc.connected_agent if hasattr(tc, "connected_agent") else tc.get("connected_agent", {})
+            args_raw = getattr(ca, "arguments", None) or ca.get("arguments", None)
+            if not args_raw:
+                return ""
+            try:
+                obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                return obj if isinstance(obj, str) else json.dumps(obj)
+            except Exception:
+                return str(args_raw)
+
         # -- Step lifecycle --------------------------------------------------
 
         def on_run_step(self, step):
@@ -234,21 +219,8 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 failed_query = ""
                 if hasattr(step, "step_details") and hasattr(step.step_details, "tool_calls"):
                     for tc in step.step_details.tool_calls:
-                        tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
-                        tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
-                        if tc_type == "connected_agent":
-                            ca = tc.connected_agent if hasattr(tc, "connected_agent") else tc.get("connected_agent", {})
-                            agent_id = getattr(ca, "agent_id", None) or ca.get("agent_id", "?")
-                            failed_agent = agent_names.get(agent_id, getattr(ca, "name", None) or ca.get("name", agent_id))
-                            args_raw = getattr(ca, "arguments", None) or ca.get("arguments", None)
-                            if args_raw:
-                                try:
-                                    obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-                                    failed_query = obj if isinstance(obj, str) else json.dumps(obj)
-                                except Exception:
-                                    failed_query = str(args_raw)
-                        elif tc_type == "azure_ai_search":
-                            failed_agent = "AzureAISearch"
+                        failed_agent = self._resolve_agent_name(tc)
+                        failed_query = self._extract_arguments(tc)
 
                 logger.error(
                     "Step FAILED: agent=%s  duration=%s  code=%s  error=%s\n  query=%s",
@@ -275,40 +247,22 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 for tc in step.step_details.tool_calls:
                     self.ui_step += 1
 
-                    tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
-                    tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
-
-                    agent_name = tc_type
-                    query = ""
+                    agent_name = self._resolve_agent_name(tc)
+                    query = self._extract_arguments(tc)
                     response = ""
 
+                    # Extract response (sub-agent output for connected_agent)
+                    tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
+                    tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
                     if tc_type == "connected_agent":
                         ca = (
                             tc.connected_agent
                             if hasattr(tc, "connected_agent")
                             else tc.get("connected_agent", {})
                         )
-                        agent_name = getattr(ca, "name", None) or ca.get("name", None)
-                        if not agent_name:
-                            aid = getattr(ca, "agent_id", None) or ca.get("agent_id", "?")
-                            agent_name = agent_names.get(aid, aid)
-
-                        # Extract query (arguments sent to sub-agent)
-                        args_raw = getattr(ca, "arguments", None) or ca.get("arguments", None)
-                        if args_raw:
-                            try:
-                                obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-                                query = obj if isinstance(obj, str) else json.dumps(obj)
-                            except (json.JSONDecodeError, TypeError):
-                                query = str(args_raw)
-
-                        # Extract response (sub-agent output)
                         out = getattr(ca, "output", None) or ca.get("output", None)
                         if out:
                             response = str(out)
-
-                    elif tc_type == "azure_ai_search":
-                        agent_name = "AzureAISearch"
 
                     # Truncate for the frontend
                     if len(query) > 500:

@@ -326,3 +326,44 @@ through nginx.
 Neither the API nor graph-query-api implements authentication or authorization.
 All endpoints are publicly accessible when exposed via Container App with external
 ingress. Security relies on the Container App's network configuration.
+
+## 24. Fabric GQL Is NOT GraphQL (V11)
+
+Microsoft Fabric Graph Models use **ISO GQL** (Graph Query Language) — `MATCH`/`RETURN` syntax — NOT Facebook's GraphQL. They are completely different languages:
+
+| Feature | ISO GQL (Fabric) | GraphQL (Facebook) |
+|---------|------|---------|
+| Purpose | Graph pattern matching | API query language |
+| Syntax | `MATCH (n:Router) RETURN n.name` | `{ router { name } }` |
+| Standard | ISO/IEC 39075 | graphql.org |
+| Used by | Fabric, Neo4j (Cypher-related) | APIs, Hasura, Apollo |
+
+**Rule:** Never use GraphQL terminology or syntax in Fabric prompts or agent descriptions. The `language_gql.md` prompt file contains correct ISO GQL examples with MATCH/RETURN patterns.
+
+## 25. Fabric REST API — AAD Token Auth & 429 Retry (V11)
+
+The Fabric REST API (`https://api.fabric.microsoft.com/v1`) uses AAD tokens with scope `https://api.fabric.microsoft.com/.default`. Key patterns in `FabricGQLBackend`:
+
+1. **Token acquisition:** `DefaultAzureCredential().get_token(FABRIC_SCOPE)` — tokens cached but re-acquired between retries
+2. **429 Rate limiting:** Fabric returns HTTP 429 with `Retry-After` header. Backend implements exponential backoff: `15s × attempt` (up to 5 retries), with fresh token acquisition before each retry
+3. **No key auth:** Unlike Cosmos Gremlin, Fabric has no primary-key fallback. All auth is via AAD/Managed Identity
+
+```python
+# Retry pattern in FabricGQLBackend.execute_query()
+for attempt in range(1, max_retries + 1):
+    token = credential.get_token(FABRIC_SCOPE)  # Fresh token each retry
+    resp = await client.post(url, headers={"Authorization": f"Bearer {token.token}"}, ...)
+    if resp.status_code == 429:
+        wait = max(float(resp.headers.get("Retry-After", 15)), 15 * attempt)
+        await asyncio.sleep(wait)
+        continue
+```
+
+## 26. Fabric Backend `ingest()` Not Supported (V11)
+
+`FabricGQLBackend.ingest()` raises `NotImplementedError`. Fabric graph data is not uploaded through the `/upload/graph` pipeline — it's created via:
+- The `/api/fabric/provision/pipeline` SSE endpoint (automated)
+- Fabric Studio UI (manual)
+- Fabric REST API directly
+
+This means the `AddScenarioModal` graph upload slot is not applicable for Fabric scenarios. Phase 3 (frontend) will handle this by detecting the connector type and adjusting the upload UI.

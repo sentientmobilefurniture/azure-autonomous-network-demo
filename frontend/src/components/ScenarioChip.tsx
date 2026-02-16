@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useScenarioContext } from '../context/ScenarioContext';
 import { useScenarios } from '../hooks/useScenarios';
 import { AddScenarioModal } from './AddScenarioModal';
+import { useClickOutside } from '../hooks/useClickOutside';
 
 /**
  * Header bar scenario selector chip with flyout dropdown.
@@ -34,19 +35,19 @@ export function ScenarioChip() {
     }
   }, [dropdownOpen, hasFetched, fetchSavedScenarios]);
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    if (!dropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (chipRef.current && !chipRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [dropdownOpen]);
+  useClickOutside(chipRef, () => setDropdownOpen(false), dropdownOpen);
 
   const isProvisioning = provisioningStatus.state === 'provisioning';
+
+  // Resolve backend badge for a scenario
+  const backendBadge = (connector?: string) => {
+    if (connector === 'fabric-gql') return { label: 'Fabric', color: 'text-cyan-400 bg-cyan-400/10 border-cyan-400/30' };
+    if (connector === 'mock') return { label: 'Mock', color: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30' };
+    return { label: 'Cosmos', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' };
+  };
+
+  const activeRecord = savedScenarios.find(s => s.id === activeScenario);
+  const activeBadge = activeRecord ? backendBadge(activeRecord.graph_connector) : null;
 
   return (
     <>
@@ -70,6 +71,11 @@ export function ScenarioChip() {
           <span className="max-w-[280px] truncate">
             {activeScenario ? activeScenario : '(No scenario)'}
           </span>
+          {activeBadge && (
+            <span className={`text-[9px] px-1 py-0.5 rounded border font-medium ${activeBadge.color}`}>
+              {activeBadge.label}
+            </span>
+          )}
           <svg className="h-3 w-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
@@ -103,7 +109,15 @@ export function ScenarioChip() {
                     {s.id === activeScenario && (
                       <span className="h-1.5 w-1.5 rounded-full bg-brand flex-shrink-0" />
                     )}
-                    <span>{s.display_name || s.id}</span>
+                    <span className="flex-1 truncate">{s.display_name || s.id}</span>
+                    {(() => {
+                      const badge = backendBadge(s.graph_connector);
+                      return (
+                        <span className={`text-[9px] px-1 py-0.5 rounded border font-medium flex-shrink-0 ${badge.color}`}>
+                          {badge.label}
+                        </span>
+                      );
+                    })()}
                   </button>
                 ))
               )}

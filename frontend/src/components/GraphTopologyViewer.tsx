@@ -4,6 +4,9 @@ import { GraphCanvas, GraphCanvasHandle } from './graph/GraphCanvas';
 import { GraphToolbar } from './graph/GraphToolbar';
 import { GraphTooltip } from './graph/GraphTooltip';
 import { GraphContextMenu } from './graph/GraphContextMenu';
+import { usePausableSimulation } from '../hooks/usePausableSimulation';
+import { useTooltipTracking } from '../hooks/useTooltipTracking';
+import { useScenarioContext } from '../context/ScenarioContext';
 
 interface GraphTopologyViewerProps {
   width: number;
@@ -12,87 +15,22 @@ interface GraphTopologyViewerProps {
 
 export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps) {
   const { data, loading, error, refetch } = useTopology();
+  const { activeScenario } = useScenarioContext();
   const canvasRef = useRef<GraphCanvasHandle>(null);
+  const storagePrefix = activeScenario ?? '__custom__';
 
   // ── Graph pause/freeze state ──
 
-  const [isPaused, setIsPaused] = useState(false);
-  const [manualPause, setManualPause] = useState(false);
-  const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleMouseEnter = useCallback(() => {
-    if (resumeTimeoutRef.current) {
-      clearTimeout(resumeTimeoutRef.current);
-      resumeTimeoutRef.current = null;
-    }
-    canvasRef.current?.setFrozen(true);
-    setIsPaused(true);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    // Don't auto-resume if manually paused
-    if (manualPause) return;
-    resumeTimeoutRef.current = setTimeout(() => {
-      canvasRef.current?.setFrozen(false);
-      setIsPaused(false);
-      resumeTimeoutRef.current = null;
-    }, 300);
-  }, [manualPause]);
-
-  const handleTogglePause = useCallback(() => {
-    if (manualPause) {
-      // Unpause
-      setManualPause(false);
-      canvasRef.current?.setFrozen(false);
-      setIsPaused(false);
-    } else {
-      // Manual pause
-      setManualPause(true);
-      canvasRef.current?.setFrozen(true);
-      setIsPaused(true);
-    }
-  }, [manualPause]);
-
-  // Cleanup debounce timeout
-  useEffect(() => {
-    return () => {
-      if (resumeTimeoutRef.current) clearTimeout(resumeTimeoutRef.current);
-    };
-  }, []);
+  const { isPaused, handleMouseEnter, handleMouseLeave, handleTogglePause, resetPause } =
+    usePausableSimulation(canvasRef);
 
   // ── Tooltip + context menu state (owned here, not in GraphCanvas) ──
 
-  const [tooltip, setTooltip] = useState<{
-    x: number; y: number;
-    node?: TopologyNode; edge?: TopologyEdge;
-  } | null>(null);
+  const { tooltip, handleNodeHover, handleLinkHover } =
+    useTooltipTracking<TopologyNode, TopologyEdge>();
   const [contextMenu, setContextMenu] = useState<{
     x: number; y: number; node: TopologyNode;
   } | null>(null);
-
-  // Track mouse position for tooltip positioning (library hover callbacks don't include events)
-  const mousePos = useRef({ x: 0, y: 0 });
-  useEffect(() => {
-    const handler = (e: MouseEvent) => { mousePos.current = { x: e.clientX, y: e.clientY }; };
-    window.addEventListener('mousemove', handler);
-    return () => window.removeEventListener('mousemove', handler);
-  }, []);
-
-  const handleNodeHover = useCallback((node: TopologyNode | null) => {
-    if (node) {
-      setTooltip({ x: mousePos.current.x, y: mousePos.current.y, node, edge: undefined });
-    } else {
-      setTooltip(null);
-    }
-  }, []);
-
-  const handleLinkHover = useCallback((edge: TopologyEdge | null) => {
-    if (edge) {
-      setTooltip({ x: mousePos.current.x, y: mousePos.current.y, edge, node: undefined });
-    } else {
-      setTooltip(null);
-    }
-  }, []);
 
   const handleNodeRightClick = useCallback((node: TopologyNode, event: MouseEvent) => {
     event.preventDefault();
@@ -102,12 +40,16 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
   // ── User customization (persisted to localStorage) ──
 
   const [nodeDisplayField, setNodeDisplayField] = useState<Record<string, string>>(() => {
-    const stored = localStorage.getItem('graph-display-fields');
-    return stored ? JSON.parse(stored) : {};
+    try {
+      const stored = localStorage.getItem(`graph-display-fields:${storagePrefix}`);
+      return stored ? JSON.parse(stored) : {};
+    } catch { return {}; }
   });
   const [nodeColorOverride, setNodeColorOverride] = useState<Record<string, string>>(() => {
-    const stored = localStorage.getItem('graph-colors');
-    return stored ? JSON.parse(stored) : {};
+    try {
+      const stored = localStorage.getItem(`graph-colors:${storagePrefix}`);
+      return stored ? JSON.parse(stored) : {};
+    } catch { return {}; }
   });
 
   // Label filtering
@@ -116,11 +58,11 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
 
   // Persist customization
   useEffect(() => {
-    localStorage.setItem('graph-display-fields', JSON.stringify(nodeDisplayField));
-  }, [nodeDisplayField]);
+    localStorage.setItem(`graph-display-fields:${storagePrefix}`, JSON.stringify(nodeDisplayField));
+  }, [nodeDisplayField, storagePrefix]);
   useEffect(() => {
-    localStorage.setItem('graph-colors', JSON.stringify(nodeColorOverride));
-  }, [nodeColorOverride]);
+    localStorage.setItem(`graph-colors:${storagePrefix}`, JSON.stringify(nodeColorOverride));
+  }, [nodeColorOverride, storagePrefix]);
 
   // ── Node/edge filtering ──
 
@@ -153,7 +95,7 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
         }
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        onRefresh={() => { refetch(); setManualPause(false); }}
+        onRefresh={() => { refetch(); resetPause(); }}
         onZoomToFit={() => canvasRef.current?.zoomToFit()}
         isPaused={isPaused}
         onTogglePause={handleTogglePause}

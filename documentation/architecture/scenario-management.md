@@ -7,7 +7,7 @@
 
 Scenarios are first-class objects in the system. A **scenario** bundles together:
 - A `scenario.yaml` manifest (v2.0 format) defining all resources and agents
-- A Gremlin graph (`{name}-topology` — from `data_sources.graph.config.graph`)
+- A graph backend (connector-driven: `cosmosdb-gremlin` → Gremlin graph, `fabric-gql` → Fabric Ontology, `mock` → in-memory)
 - Telemetry containers (`{name}-*` prefix — from `data_sources.telemetry.config.container_prefix`)
 - Runbook search indexes (`{name}-runbooks-index` — from `data_sources.search_indexes.runbooks.index_name`)
 - Ticket search indexes (`{name}-tickets-index` — from `data_sources.search_indexes.tickets.index_name`)
@@ -15,6 +15,12 @@ Scenarios are first-class objects in the system. A **scenario** bundles together
 - Agent definitions (N agents with roles, tools, instructions — from `agents:` section)
 - A metadata record in Cosmos NoSQL (`scenarios/scenarios`)
 - A config record in Cosmos NoSQL (`scenarios/configs`) — for `config_store.py`
+
+> **V11 change:** The `connector` field in `data_sources.graph` determines which
+> `GraphBackend` implementation is used at query time. `async get_scenario_context()`
+> in `config.py` reads the scenario config from `config_store` and resolves the
+> backend via `CONNECTOR_TO_BACKEND`. Fabric scenarios (`connector: "fabric-gql"`)
+> do NOT create Gremlin graphs — graph data is managed via Fabric Ontology.
 
 Previously, users had to manually upload 5 tarballs, select each data source from
 individual dropdowns, and provision agents — 6+ manual steps with no "scenario"
@@ -74,18 +80,18 @@ This ensures query-time prefix derivation (`graph_name.rsplit("-", 1)[0]`) in
 
 | File | Type | Purpose |
 |------|------|---------|
-| `graph-query-api/router_scenarios.py` | **New** (~220 lines) | Scenario CRUD endpoints + `_get_scenarios_container()` + metadata fields (use_cases, example_questions, graph_styles, domain) |
+| `graph-query-api/router_scenarios.py` | **New** (~230 lines) | Scenario CRUD endpoints + `_get_scenarios_container()` + metadata fields (use_cases, example_questions, graph_styles, domain, graph_connector) |
 | `frontend/src/utils/sseStream.ts` | **New** (~142 lines) | Shared `consumeSSE()` + `uploadWithSSE()` utilities |
-| `frontend/src/components/AddScenarioModal.tsx` | **New** (~682 lines) | Multi-slot file upload with auto-detect; captures `scenario_metadata` from graph upload onComplete |
-| `frontend/src/components/ScenarioChip.tsx` | **New** (~153 lines) | Header scenario selector chip + flyout |
+| `frontend/src/components/AddScenarioModal.tsx` | **New** (~706 lines) | Multi-slot file upload with auto-detect; captures `scenario_metadata` + `graph_connector` from graph upload onComplete; Fabric connector detection banner (V11) |
+| `frontend/src/components/ScenarioChip.tsx` | **New** (~175 lines) | Header scenario selector chip + flyout + backend badges (V11: Fabric/Mock/Cosmos) |
 | `frontend/src/components/ProvisioningBanner.tsx` | **New** (~101 lines) | Non-blocking provisioning feedback banner; handles `needs-provisioning` state with amber ⚠ + "Provision Now" button |
 | `frontend/src/components/TabBar.tsx` | **New** (~31 lines) | Investigate / Scenario Info / Resources tab bar |
 | `frontend/src/components/ScenarioInfoPanel.tsx` | **New** (~95 lines) | Scenario detail: description, use cases, clickable example questions. Fetches `savedScenarios` on mount (V9.5 fix) |
 | `frontend/src/hooks/useNodeColor.ts` | **New** (~42 lines) | Centralised node color resolution hook with 4-tier fallback + auto-palette |
 | `frontend/src/context/ScenarioContext.tsx` | **Modified** (~174 lines) | Added `activeScenario`, `activePromptSet`, `provisioningStatus`, localStorage, `scenarioNodeColors`, `scenarioNodeSizes`, `setScenarioStyles` |
-| `frontend/src/types/index.ts` | **Modified** (~77 lines) | Added `SavedScenario`, `SlotKey`, `SlotStatus`, `ScenarioUploadSlot` + graph_styles/use_cases/example_questions/domain fields |
-| `frontend/src/hooks/useScenarios.ts` | **Modified** (~192 lines) | Added scenario CRUD + selection + `graph_styles` push to context on scenario select |
-| `frontend/src/components/SettingsModal.tsx` | **Modified** (~673 lines) | 3-tab layout, scenario cards, read-only Data Sources when active |
+| `frontend/src/types/index.ts` | **Modified** (~85 lines) | Added `SavedScenario` (with `graph_connector`), `SlotKey`, `SlotStatus`, `ScenarioUploadSlot`, `FabricItem` + graph_styles/use_cases/example_questions/domain fields |
+| `frontend/src/hooks/useScenarios.ts` | **Modified** (~200 lines) | Added scenario CRUD + selection + `graph_styles` push to context on scenario select; `saveScenario()` accepts `graph_connector` (V11) |
+| `frontend/src/components/SettingsModal.tsx` | **Modified** (~800 lines) | 4-tab layout (Scenarios + Data Sources + Upload + Fabric Setup), scenario cards, read-only Data Sources when active; Fabric tab uses `useFabricDiscovery()` (V11) |
 | `frontend/src/components/Header.tsx` | **Modified** (~72 lines) | Added ScenarioChip + ProvisioningBanner + dynamic agent status |
 | `frontend/src/App.tsx` | **Modified** (~209 lines) | Added TabBar + tab state + conditional rendering (investigate vs info tab) + InteractionSidebar |
 | `frontend/src/components/graph/GraphCanvas.tsx` | **Modified** (~184 lines) | Uses `useNodeColor()` hook + scenario-driven sizes |

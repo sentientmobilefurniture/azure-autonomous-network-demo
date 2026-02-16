@@ -35,20 +35,24 @@ _NAME_RE = re.compile(r"^[a-z0-9](?!.*--)[a-z0-9-]{0,48}[a-z0-9]$")
 _RESERVED_SUFFIXES = ("-topology", "-telemetry", "-prompts", "-runbooks", "-tickets")
 
 
-def _validate_scenario_name(name: str) -> str:
-    """Validate and return a cleaned scenario name, or raise HTTPException."""
+def _check_scenario_name(name: str) -> None:
+    """Raise ValueError if name is invalid. Pure validation, no HTTP concerns."""
     if not _NAME_RE.match(name):
-        raise HTTPException(
-            400,
+        raise ValueError(
             "Scenario name must be 2-50 chars, lowercase alphanumeric + hyphens, "
             "no consecutive hyphens, and must start/end with alphanumeric.",
         )
     for suffix in _RESERVED_SUFFIXES:
         if name.endswith(suffix):
-            raise HTTPException(
-                400,
-                f"Scenario name must not end with reserved suffix '{suffix}'.",
-            )
+            raise ValueError(f"Scenario name must not end with reserved suffix '{suffix}'.")
+
+
+def _validate_scenario_name(name: str) -> str:
+    """Validate and return a cleaned scenario name, or raise HTTPException."""
+    try:
+        _check_scenario_name(name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return name
 
 
@@ -99,6 +103,7 @@ class ScenarioSaveRequest(BaseModel):
     example_questions: list[str] | None = None
     graph_styles: dict | None = None
     domain: str | None = None
+    graph_connector: str | None = None  # e.g. "cosmosdb-gremlin", "fabric-gql"
     upload_results: dict = {}
     config: dict | None = None  # full scenario config (data_sources, agents, etc.)
 
@@ -106,14 +111,7 @@ class ScenarioSaveRequest(BaseModel):
     @classmethod
     def validate_name(cls, v: str) -> str:
         v = v.strip().lower()
-        if not _NAME_RE.match(v):
-            raise ValueError(
-                "Scenario name must be 2-50 chars, lowercase alphanumeric + hyphens, "
-                "no consecutive hyphens."
-            )
-        for suffix in _RESERVED_SUFFIXES:
-            if v.endswith(suffix):
-                raise ValueError(f"Scenario name must not end with reserved suffix '{suffix}'.")
+        _check_scenario_name(v)  # raises ValueError → Pydantic converts to 422
         return v
 
 
@@ -154,6 +152,13 @@ async def save_scenario(req: ScenarioSaveRequest):
     # Build resource bindings from config (or convention fallback)
     resources = _derive_resources(name, req.config)
 
+    # Determine graph connector from explicit field, config, or default
+    graph_connector = (
+        req.graph_connector
+        or (req.config or {}).get("data_sources", {}).get("graph", {}).get("connector", "")
+        or "cosmosdb-gremlin"
+    )
+
     doc = {
         "id": name,
         "display_name": display_name,
@@ -167,6 +172,7 @@ async def save_scenario(req: ScenarioSaveRequest):
         "example_questions": req.example_questions or [],
         "graph_styles": req.graph_styles or {},
         "domain": req.domain or "",
+        "graph_connector": graph_connector,
     }
 
     # Check if existing document has a created_at we should preserve
@@ -174,8 +180,8 @@ async def save_scenario(req: ScenarioSaveRequest):
         existing = await store.get(name, partition_key=name)
         if existing:
             doc["created_at"] = existing.get("created_at", now)
-    except Exception:
-        pass
+    except (KeyError, ValueError):
+        pass  # Document doesn't exist yet — OK
 
     result = await store.upsert(doc)
     logger.info("Saved scenario: %s", name)

@@ -250,7 +250,7 @@ class CosmosDBGremlinBackend:
             # Edges: both endpoints must be in the filtered label set
             e_query = (
                 f"g.V().hasLabel({label_csv}).bothE()"
-                ".where(otherV().hasLabel({label_csv}))"
+                f".where(otherV().hasLabel({label_csv}))"
                 ".project('id','label','source','target','properties')"
                 ".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
             )
@@ -300,8 +300,7 @@ class CosmosDBGremlinBackend:
     def _ensure_gremlin_graph(graph_name: str, graph_database: str) -> None:
         """Create a Gremlin graph resource if it doesn't exist (ARM)."""
         try:
-            from azure.mgmt.cosmosdb import CosmosDBManagementClient
-            from config import get_credential
+            from cosmos_helpers import get_mgmt_client
 
             account_name = COSMOS_GREMLIN_ENDPOINT.split(".")[0]
             sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
@@ -313,7 +312,7 @@ class CosmosDBGremlinBackend:
                 )
                 return
 
-            mgmt = CosmosDBManagementClient(get_credential(), sub_id)
+            mgmt = get_mgmt_client()
             logger.info("Creating Gremlin graph '%s' via ARM (if not exists)...", graph_name)
             mgmt.gremlin_resources.begin_create_update_gremlin_graph(
                 rg, account_name, graph_database, graph_name,
@@ -328,24 +327,6 @@ class CosmosDBGremlinBackend:
             logger.info("Graph '%s' ready.", graph_name)
         except Exception as e:
             logger.warning("ARM graph creation failed (may already exist): %s", e)
-
-    def _submit_with_retry(
-        self,
-        gremlin_c: client.Client,
-        query: str,
-        bindings: dict | None = None,
-        retries: int = 3,
-    ) -> list:
-        """Submit a Gremlin query on a provided client with retry on 429/408."""
-        for attempt in range(1, retries + 1):
-            try:
-                return gremlin_c.submit(message=query, bindings=bindings or {}).all().result()
-            except GremlinServerError as e:
-                status = getattr(e, "status_code", 0)
-                if status in (429, 408) and attempt < retries:
-                    time.sleep(2 ** attempt)
-                    continue
-                raise
 
     async def ingest(
         self,
@@ -382,13 +363,8 @@ class CosmosDBGremlinBackend:
 
         def _load() -> dict:
             # Create a dedicated client for the target graph
-            gremlin_c = client.Client(
-                url=f"wss://{COSMOS_GREMLIN_ENDPOINT}:443/",
-                traversal_source="g",
-                username=f"/dbs/{graph_database}/colls/{graph_name}",
-                password=COSMOS_GREMLIN_PRIMARY_KEY,
-                message_serializer=serializer.GraphSONSerializersV2d0(),
-            )
+            from gremlin_helpers import create_gremlin_client, gremlin_submit_with_retry
+            gremlin_c = create_gremlin_client(graph_name, database=graph_database)
             errors: list[str] = []
             total_v = 0
             total_e = 0
@@ -397,7 +373,7 @@ class CosmosDBGremlinBackend:
             try:
                 # Clear existing data
                 _progress("Clearing existing graph data...", 0, total)
-                self._submit_with_retry(gremlin_c, "g.V().drop()")
+                gremlin_submit_with_retry(gremlin_c, "g.V().drop()")
 
                 # Load vertices
                 for i, v in enumerate(vertices):
@@ -417,7 +393,7 @@ class CosmosDBGremlinBackend:
                             ".property('partitionKey', pk_val)"
                             + "".join(props)
                         )
-                        self._submit_with_retry(gremlin_c, query, bindings)
+                        gremlin_submit_with_retry(gremlin_c, query, bindings)
                         total_v += 1
                     except Exception as e:
                         errors.append(f"Vertex {v.get('id', '?')}: {e}")
@@ -448,7 +424,7 @@ class CosmosDBGremlinBackend:
                             bindings[f"ep{pi}"] = pval
                             q += f".property('{pname}', ep{pi})"
 
-                        self._submit_with_retry(gremlin_c, q, bindings)
+                        gremlin_submit_with_retry(gremlin_c, q, bindings)
                         total_e += 1
                     except Exception as ex:
                         errors.append(f"Edge {e.get('label', '?')}: {ex}")

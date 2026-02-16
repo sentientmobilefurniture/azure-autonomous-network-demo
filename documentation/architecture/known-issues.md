@@ -103,6 +103,24 @@ lifespan shutdown — it calls `close_graph_backend()` + `close_telemetry_backen
 separately instead. The unused import should be removed or the shutdown should use
 `close_all_backends()`.
 
+## Fabric Backend `ingest()` Not Supported (V11)
+`FabricGQLBackend.ingest()` raises `NotImplementedError`. Attempting to upload graph
+data via `/upload/graph` for a Fabric scenario will fail. Graph data must be created
+through the Fabric provision pipeline (`/api/fabric/provision/pipeline`) or Fabric
+Studio. Phase 3 (frontend) will add connector-aware upload UI to prevent this.
+
+## Fabric Discovery Returns Empty Without Config (V11)
+`/query/fabric/*` discovery endpoints return empty results or 500 if
+`FABRIC_WORKSPACE_ID` is not set. These endpoints require both `FABRIC_WORKSPACE_ID`
+and valid AAD credentials with Fabric workspace access. No graceful degradation is
+implemented — the endpoints assume Fabric is configured when called.
+
+## Fabric 429 Rate Limiting (V11)
+Fabric REST API enforces rate limits that return HTTP 429. The `FabricGQLBackend`
+retries with `15s × attempt` backoff (up to 5 retries). Under sustained load, queries
+may take up to ~225s (sum of 15+30+45+60+75) before failing. No circuit breaker is
+implemented.
+
 ## Template Has Vars Not Consumed at Runtime
 ~~`azure_config.env.template` defines `RUNBOOKS_INDEX_NAME`, `TICKETS_INDEX_NAME`,
 `RUNBOOKS_CONTAINER_NAME`, `TICKETS_CONTAINER_NAME`, `DEFAULT_SCENARIO`, and

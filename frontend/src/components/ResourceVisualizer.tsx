@@ -4,6 +4,8 @@ import { ResourceCanvas, ResourceCanvasHandle } from './resource/ResourceCanvas'
 import { ResourceToolbar } from './resource/ResourceToolbar';
 import { ResourceTooltip } from './resource/ResourceTooltip';
 import type { ResourceNode, ResourceEdge, ResourceNodeType } from '../types';
+import { usePausableSimulation } from '../hooks/usePausableSimulation';
+import { useTooltipTracking } from '../hooks/useTooltipTracking';
 
 /**
  * ResourceVisualizer — full-page tab component showing the agent & data-source
@@ -36,77 +38,13 @@ export function ResourceVisualizer() {
 
   // ── Pause / freeze ───────────────────────────────────────────────────
 
-  const [isPaused, setIsPaused] = useState(false);
-  const [manualPause, setManualPause] = useState(false);
-  const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleMouseEnter = useCallback(() => {
-    if (resumeTimeoutRef.current) {
-      clearTimeout(resumeTimeoutRef.current);
-      resumeTimeoutRef.current = null;
-    }
-    canvasRef.current?.setFrozen(true);
-    setIsPaused(true);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    if (manualPause) return;
-    resumeTimeoutRef.current = setTimeout(() => {
-      canvasRef.current?.setFrozen(false);
-      setIsPaused(false);
-      resumeTimeoutRef.current = null;
-    }, 300);
-  }, [manualPause]);
-
-  const handleTogglePause = useCallback(() => {
-    if (manualPause) {
-      setManualPause(false);
-      canvasRef.current?.setFrozen(false);
-      setIsPaused(false);
-    } else {
-      setManualPause(true);
-      canvasRef.current?.setFrozen(true);
-      setIsPaused(true);
-    }
-  }, [manualPause]);
-
-  useEffect(() => {
-    return () => {
-      if (resumeTimeoutRef.current) clearTimeout(resumeTimeoutRef.current);
-    };
-  }, []);
+  const { isPaused, handleMouseEnter, handleMouseLeave, handleTogglePause } =
+    usePausableSimulation(canvasRef);
 
   // ── Tooltip ───────────────────────────────────────────────────────────
 
-  const [tooltip, setTooltip] = useState<{
-    x: number; y: number;
-    node?: ResourceNode; edge?: ResourceEdge;
-  } | null>(null);
-
-  const mousePos = useRef({ x: 0, y: 0 });
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      mousePos.current = { x: e.clientX, y: e.clientY };
-    };
-    window.addEventListener('mousemove', handler);
-    return () => window.removeEventListener('mousemove', handler);
-  }, []);
-
-  const handleNodeHover = useCallback((node: ResourceNode | null) => {
-    if (node) {
-      setTooltip({ x: mousePos.current.x, y: mousePos.current.y, node, edge: undefined });
-    } else {
-      setTooltip(null);
-    }
-  }, []);
-
-  const handleLinkHover = useCallback((edge: ResourceEdge | null) => {
-    if (edge) {
-      setTooltip({ x: mousePos.current.x, y: mousePos.current.y, edge, node: undefined });
-    } else {
-      setTooltip(null);
-    }
-  }, []);
+  const { tooltip, handleNodeHover, handleLinkHover, clearTooltip } =
+    useTooltipTracking<ResourceNode, ResourceEdge>();
 
   // ── Filtering ─────────────────────────────────────────────────────────
 
@@ -182,7 +120,7 @@ export function ResourceVisualizer() {
             height={Math.max(dims.height - TOOLBAR_HEIGHT, 100)}
             onNodeHover={handleNodeHover}
             onLinkHover={handleLinkHover}
-            onBackgroundClick={() => setTooltip(null)}
+            onBackgroundClick={clearTooltip}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
           />

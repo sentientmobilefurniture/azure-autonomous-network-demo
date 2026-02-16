@@ -10,6 +10,11 @@
 | GET | `/api/config/current` | JSON | Current active configuration state |
 | GET | `/api/config/resources` | JSON | Resource graph for visualization (agents → tools → data sources → infra) |
 | GET | `/api/logs` | SSE stream | Real-time log broadcast (fan-out to all clients) |
+| POST | `/api/fabric/provision` | SSE stream | Full Fabric provisioning pipeline (Lakehouse + Eventhouse + Ontology) |
+| POST | `/api/fabric/provision/lakehouse` | SSE stream | Create/find Fabric Lakehouse |
+| POST | `/api/fabric/provision/eventhouse` | SSE stream | Create/find Fabric Eventhouse |
+| POST | `/api/fabric/provision/ontology` | SSE stream | Create/find Fabric Ontology |
+| GET | `/api/fabric/status` | JSON | Check Fabric provisioned resource status |
 | GET | `/health` | JSON `{"status": "ok", "service": "autonomous-network-noc-api"}` | Health check |
 
 ## graph-query-api Service (`:8100`)
@@ -43,6 +48,12 @@
 | POST | `/query/interactions` | JSON | Save a completed interaction |
 | GET | `/query/interactions/{interaction_id}` | JSON | Get a specific interaction |
 | DELETE | `/query/interactions/{interaction_id}` | JSON | Delete a specific interaction |
+| GET | `/query/fabric/ontologies` | JSON | List Fabric ontologies in workspace |
+| GET | `/query/fabric/ontologies/{id}/models` | JSON | List graph models under a Fabric ontology |
+| GET | `/query/fabric/eventhouses` | JSON | List Fabric Eventhouses |
+| GET | `/query/fabric/kql-databases` | JSON | List KQL databases |
+| GET | `/query/fabric/lakehouses` | JSON | List Fabric Lakehouses |
+| GET | `/query/fabric/health` | JSON | Check Fabric API connectivity |
 
 ## Request/Response Models (`graph-query-api/models.py`)
 

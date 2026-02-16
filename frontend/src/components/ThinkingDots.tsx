@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 
-export function ThinkingDots({ agent, status }: { agent: string; status: string }) {
+export function ThinkingDots({ agent, status }: { agent?: string; status?: string }) {
   return (
     <motion.div
       className="flex items-center gap-3 px-3 py-2"
@@ -23,9 +23,11 @@ export function ThinkingDots({ agent, status }: { agent: string; status: string 
           style={{ animationDelay: '300ms' }}
         />
       </div>
-      <span className="text-xs text-text-secondary">
-        {agent} — {status}
-      </span>
+      {(agent || status) && (
+        <span className="text-xs text-text-secondary">
+          {agent}{agent && status ? ' — ' : ''}{status}
+        </span>
+      )}
     </motion.div>
   );
 }

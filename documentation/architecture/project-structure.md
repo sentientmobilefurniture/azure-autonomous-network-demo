@@ -1,4 +1,4 @@
-# Project Structure (as of 2026-02-17)
+# Project Structure (as of 2026-02-17, V11)
 
 ```
 .
@@ -14,7 +14,7 @@
 │   ├── pyproject.toml          # Deps: fastapi, uvicorn, python-dotenv, sse-starlette,
 │   │                           #       azure-identity, azure-ai-projects, azure-ai-agents, pyyaml
 │   └── app/
-│       ├── main.py             # Mounts 4 routers + /health + CORS (~54 lines)
+│       ├── main.py             # Mounts 5 routers + /health + CORS (~58 lines)
 │       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE, ~500 lines)
 │       └── routers/
 │           ├── alert.py        # POST /api/alert → SSE investigation stream (~91 lines)
@@ -22,17 +22,20 @@
 │           ├── config.py       # POST /api/config/apply → SSE provisioning stream
 │           │                   # GET /api/config/current → current config state
 │           │                   # GET /api/config/resources → resource graph for visualisation (~460 lines)
+│           ├── fabric_provision.py  # V11: POST /api/fabric/provision → SSE Fabric provisioning
+│           │                   # AsyncFabricClient, Lakehouse/Eventhouse/Ontology endpoints (~470 lines)
 │           └── logs.py         # GET /api/logs → SSE log broadcast (~128 lines)
 │
 ├── graph-query-api/            # Data management + query microservice (:8100)
 │   ├── pyproject.toml          # Deps: fastapi, gremlinpython, azure-cosmos,
 │   │                           #       azure-mgmt-cosmosdb, azure-storage-blob,
-│   │                           #       azure-search-documents, sse-starlette, pyyaml
-│   ├── config.py               # ScenarioContext, X-Graph header, env vars, credential (~117 lines)
+│   │                           #       azure-search-documents, sse-starlette, pyyaml, httpx
+│   ├── config.py               # ScenarioContext, X-Graph header, env vars, credential,
+│   │                           # CONNECTOR_TO_BACKEND, async get_scenario_context (~140 lines)
 │   ├── config_store.py         # Config store — read/write scenario config to Cosmos (~62 lines)
 │   ├── config_validator.py     # Config validator — validates agents section of scenario.yaml (~104 lines)
 │   ├── cosmos_helpers.py       # Centralised Cosmos client/container init + caching (~132 lines)
-│   ├── main.py                 # Mounts 7 routers + /health + /query/logs (SSE) + request logging middleware
+│   ├── main.py                 # Mounts 8 routers + /health + /query/logs (SSE) + request logging middleware
 │   ├── models.py               # Pydantic request/response models
 │   ├── router_graph.py         # POST /query/graph (per-scenario Gremlin)
 │   ├── router_telemetry.py     # POST /query/telemetry (per-scenario NoSQL)
@@ -41,11 +44,15 @@
 │   ├── router_prompts.py       # Prompts CRUD in Cosmos (~288 lines)
 │   ├── router_scenarios.py     # Scenario metadata CRUD in Cosmos (~220 lines)
 │   ├── router_interactions.py  # Interaction history CRUD (~146 lines)
+│   ├── router_fabric_discovery.py  # V11: Fabric workspace discovery (ontologies, models,
+│   │                           # eventhouses, lakehouses, KQL databases, health) (~210 lines)
 │   ├── sse_helpers.py          # SSE upload lifecycle helper (~86 lines)
 │   ├── search_indexer.py       # AI Search indexer pipeline creation
 │   ├── adapters/               # Backend-specific config adapters
 │   │   ├── __init__.py
-│   │   └── cosmos_config.py    # All Cosmos-specific env var reads (endpoints, keys, database names)
+│   │   ├── cosmos_config.py    # All Cosmos-specific env var reads (endpoints, keys, database names)
+│   │   └── fabric_config.py    # V11: All Fabric-specific env var reads (workspace, graph model,
+│   │                           # API URL, scope, eventhouse/lakehouse IDs)
 │   ├── stores/                 # DocumentStore Protocol + implementations
 │   │   ├── __init__.py         # DocumentStore Protocol (runtime_checkable) + registry + factory
 │   │   ├── cosmos_nosql.py     # CosmosDocumentStore — Cosmos NoSQL implementation
@@ -62,6 +69,7 @@
 │   └── backends/
 │       ├── __init__.py         # GraphBackend Protocol + per-graph cache + registry + factory
 │       ├── cosmosdb.py         # CosmosDBGremlinBackend (~303 lines, retry logic, ingest())
+│       ├── fabric.py           # V11: FabricGQLBackend (~240 lines, ISO GQL via REST, httpx)
 │       └── mock.py             # Static topology (offline demos)
 │
 ├── frontend/                   # React/Vite dashboard
@@ -85,19 +93,20 @@
 │       │   │                        # selectScenario with auto-provisioning (~192 lines)
 │       │   ├── useInteractions.ts   # Interaction history CRUD (fetch/save/delete, ~63 lines)
 │       │   ├── useNodeColor.ts      # Centralised node color resolution hook (~42 lines)
-│       │   └── useResourceGraph.ts  # Fetch resource graph from /api/config/resources
+│       │   ├── useResourceGraph.ts  # Fetch resource graph from /api/config/resources
+│       │   └── useFabricDiscovery.ts # Fabric workspace discovery + provision pipeline SSE (~202 lines) (V11)
 │       ├── utils/
 │       │   └── sseStream.ts         # Shared consumeSSE() + uploadWithSSE() utilities (~142 lines)
 │       └── components/
 │           ├── Header.tsx           # Title bar + ScenarioChip + ProvisioningBanner + HealthDot + ⚙ (~72 lines)
-│           ├── ScenarioChip.tsx     # Header scenario selector chip + flyout dropdown (~153 lines)
+│           ├── ScenarioChip.tsx     # Header scenario selector chip + flyout dropdown + backend badges (~175 lines)
 │           ├── ProvisioningBanner.tsx # Non-blocking 28px banner during agent provisioning (~101 lines)
 │           ├── TabBar.tsx            # Investigate / Scenario Info tab bar (~31 lines)
 │           ├── ScenarioInfoPanel.tsx # Scenario detail view: use cases + example questions (~95 lines)
 │           ├── AddScenarioModal.tsx  # Scenario creation: name + 5 slot file upload + auto-detect (~682 lines)
 │           ├── EmptyState.tsx       # Empty state placeholder (no scenario selected)
 │           ├── HealthDot.tsx        # Polls /health every 15s (~40 lines)
-│           ├── SettingsModal.tsx     # 3 tabs: Scenarios + Data Sources + Upload (~673 lines)
+│           ├── SettingsModal.tsx     # 4 tabs: Scenarios + Data Sources + Upload + Fabric Setup (~800 lines)
 │           ├── ActionButton.tsx      # Extracted reusable action button with status state machine (~52 lines)
 │           ├── TabbedLogStream.tsx   # Tabbed log stream viewer (~48 lines)
 │           ├── MetricsBar.tsx       # Resizable panel: topology viewer + log stream (~50 lines)
@@ -130,8 +139,10 @@
 ├── data/
 │   ├── generate_all.sh         # Generate + package all scenarios as 5 per-type tarballs
 │   └── scenarios/
-│       └── telco-noc/          # scenario.yaml (v2.0), graph_schema.yaml, scripts/, data/
-│                               # (only scenario with local data packs; others need generation)
+│       ├── telco-noc/          # scenario.yaml (v2.0), graph_schema.yaml, scripts/, data/
+│       │                       # (cosmosdb-gremlin backend)
+│       └── telco-noc-fabric/   # V11: scenario.yaml (fabric-gql backend), language_gql.md prompt
+│                               # Same topology data, uses Fabric Graph Models instead of Cosmos
 │
 ├── scripts/
 │   ├── agent_provisioner.py    # AgentProvisioner class — config-driven + legacy provisioning (~565 lines)

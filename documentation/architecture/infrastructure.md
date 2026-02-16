@@ -14,7 +14,7 @@
 | `location` | (required) | Azure region |
 | `principalId` | — | User principal for role assignments |
 | `gptCapacity` | 300 | In 1K TPM units |
-| `graphBackend` | `"cosmosdb"` | `@allowed(['cosmosdb'])` — only `cosmosdb` at Bicep level; `mock` is a runtime-only env var override, never a Bicep parameter |
+| `graphBackend` | `"cosmosdb"` | `@allowed(['cosmosdb'])` — only `cosmosdb` at Bicep level; `mock` and `fabric-gql` are runtime-only backends selected via `scenario.yaml` connector, never Bicep parameters |
 | `devIpAddress` | — | For local Cosmos firewall rules |
 
 **Modules deployed** (9 total):
@@ -108,10 +108,13 @@ FROM python:3.11-slim
 # graph-query-api at /app/graph-query-api
 #   uv sync --frozen --no-dev --no-install-project
 #   Copies: *.py, adapters/, backends/, openapi/, services/, stores/
+#   V11: backends/fabric.py, adapters/fabric_config.py, router_fabric_discovery.py
+#        added automatically (copied with their parent dirs)
 
 # api at /app/api
 #   uv sync --frozen --no-dev --no-install-project
 #   Copies: app/
+#   V11: app/routers/fabric_provision.py added automatically (inside app/)
 
 # Scripts at /app/scripts
 #   Copies: agent_provisioner.py
@@ -132,8 +135,8 @@ FROM python:3.11-slim
 │   ├── app/                # FastAPI app package
 │   └── .venv/              # uv-managed virtualenv
 ├── graph-query-api/        # Query service
-│   ├── adapters/           # V10: cosmos_config.py
-│   ├── backends/           # GraphBackend Protocol + implementations
+│   ├── adapters/           # V10: cosmos_config.py, V11: fabric_config.py
+│   ├── backends/           # GraphBackend Protocol + implementations (cosmosdb, mock, fabric)
 │   ├── openapi/            # Static specs + templates/ subdirectory
 │   │   ├── cosmosdb.yaml   # Legacy static spec
 │   │   ├── mock.yaml       # Legacy static spec

@@ -1,33 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useScenarioContext } from '../context/ScenarioContext';
+import type { TopologyNode, TopologyEdge, TopologyMeta } from '../types';
 
-// ── Types ──────────────────────────────────────────────────────
-
-export interface TopologyNode {
-  id: string;
-  label: string;     // vertex label (CoreRouter, AggSwitch, etc.)
-  properties: Record<string, unknown>;
-  // Force-graph internal fields (added by the library)
-  x?: number;
-  y?: number;
-  fx?: number;
-  fy?: number;
-}
-
-export interface TopologyEdge {
-  id: string;
-  source: string | TopologyNode;
-  target: string | TopologyNode;
-  label: string;     // edge label (connects_to, etc.)
-  properties: Record<string, unknown>;
-}
-
-export interface TopologyMeta {
-  node_count: number;
-  edge_count: number;
-  query_time_ms: number;
-  labels: string[];
-}
+// Re-export types for consumers that import from this module
+export type { TopologyNode, TopologyEdge, TopologyMeta };
 
 interface TopologyData {
   nodes: TopologyNode[];

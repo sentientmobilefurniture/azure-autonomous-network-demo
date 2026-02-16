@@ -20,39 +20,64 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from app.paths import PROJECT_ROOT, AGENT_IDS_FILE
+from app.agent_ids import load_agent_ids
+
 logger = logging.getLogger("api.config")
 
 router = APIRouter(prefix="/api/config", tags=["configuration"])
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-
 # Add scripts/ to path for agent_provisioner import
-# In container: /app/api/app/routers/config.py → PROJECT_ROOT = /app/api
-# Scripts are at /app/scripts/, so we check both locations
 for scripts_path in [PROJECT_ROOT / "scripts", PROJECT_ROOT.parent / "scripts"]:
     if scripts_path.exists() and str(scripts_path) not in sys.path:
         sys.path.insert(0, str(scripts_path))
         break
 
 # ---------------------------------------------------------------------------
-# In-memory config state
+# In-memory config state (persisted to active_config.json)
 # ---------------------------------------------------------------------------
 
 _config_lock = threading.Lock()
 _current_config: dict | None = None
+ACTIVE_CONFIG_PATH = PROJECT_ROOT / "scripts" / "active_config.json"
+
+
+def _save_config(config: dict) -> None:
+    """Persist config to disk atomically (temp file + rename)."""
+    import tempfile
+    with _config_lock:
+        global _current_config
+        _current_config = config
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=ACTIVE_CONFIG_PATH.parent, suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(config, f, indent=2)
+            os.rename(tmp_path, ACTIVE_CONFIG_PATH)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def _load_current_config() -> dict:
-    """Load current config from agent_ids.json + defaults."""
+    """Load current config from disk or defaults."""
     global _current_config
     if _current_config is not None:
         return _current_config
 
-    agent_ids_path = Path(os.getenv(
-        "AGENT_IDS_PATH",
-        str(PROJECT_ROOT / "scripts" / "agent_ids.json"),
-    ))
+    # Try loading from persisted file first
+    if ACTIVE_CONFIG_PATH.exists():
+        try:
+            _current_config = json.loads(ACTIVE_CONFIG_PATH.read_text())
+            return _current_config
+        except Exception:
+            pass
 
+    # Fall back to env-var defaults
     _current_config = {
         "graph": os.getenv("COSMOS_GREMLIN_GRAPH", "topology"),
         "runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", "runbooks-index"),
@@ -60,13 +85,29 @@ def _load_current_config() -> dict:
         "agents": None,
     }
 
-    if agent_ids_path.exists():
+    if AGENT_IDS_FILE.exists():
         try:
-            _current_config["agents"] = json.loads(agent_ids_path.read_text())
+            _current_config["agents"] = load_agent_ids()
         except Exception:
             pass
 
     return _current_config
+
+
+# ---------------------------------------------------------------------------
+# Async HTTP helper — replaces blocking urllib.request.urlopen() calls
+# ---------------------------------------------------------------------------
+
+GRAPH_API_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://127.0.0.1:8100")
+
+
+async def _fetch_from_graph_api(path: str, params: dict | None = None) -> dict:
+    """Non-blocking HTTP GET to graph-query-api."""
+    import httpx
+    async with httpx.AsyncClient(base_url=GRAPH_API_BASE, timeout=30) as client:
+        resp = await client.get(path, params=params or {})
+        resp.raise_for_status()
+        return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +135,13 @@ async def get_current_config():
     return _load_current_config()
 
 
+# ---------------------------------------------------------------------------
+# Provisioning concurrency guard
+# ---------------------------------------------------------------------------
+
+_provisioning_lock = asyncio.Lock()
+
+
 @router.post("/apply", summary="Apply configuration changes")
 async def apply_config(req: ConfigApplyRequest):
     """Apply new data source + prompt bindings.
@@ -101,6 +149,9 @@ async def apply_config(req: ConfigApplyRequest):
     This re-provisions the AI Foundry agents with the new settings.
     Returns an SSE stream with progress events (~30s total).
     """
+    if _provisioning_lock.locked():
+        raise HTTPException(409, "Provisioning already in progress")
+
     # Check if we can provision (need Foundry credentials)
     project_endpoint_base = os.getenv("PROJECT_ENDPOINT", "")
     project_name = os.getenv("AI_FOUNDRY_PROJECT_NAME", "")
@@ -118,165 +169,158 @@ async def apply_config(req: ConfigApplyRequest):
         progress: asyncio.Queue = asyncio.Queue()
 
         async def run_provisioning():
-            try:
-                from agent_provisioner import AgentProvisioner
-
-                def on_progress(step: str, detail: str):
-                    progress.put_nowait({"step": step, "detail": detail})
-
-                provisioner = AgentProvisioner(
-                    project_endpoint=project_endpoint,
-                )
-
-                # Resolve prompts — fetch from Cosmos if available
-                prompts = req.prompts or {}
-                if not prompts:
-                    # Determine which scenario's prompts to use
-                    scenario_prefix = req.prompt_scenario or (
-                        req.graph.rsplit("-", 1)[0] if "-" in req.graph else "telco-noc"
-                    )
-                    on_progress("prompts", f"Fetching prompts for '{scenario_prefix}' from Cosmos...")
-                    try:
-                        import urllib.request
-                        import urllib.parse
-                        import json as _json
-                        # Single request with content — avoids N+1 round-trips
-                        prompts_url = (
-                            f"http://127.0.0.1:8100/query/prompts"
-                            f"?scenario={urllib.parse.quote(scenario_prefix)}"
-                            f"&include_content=true"
-                        )
-                        prompts_req = urllib.request.Request(prompts_url)
-                        with urllib.request.urlopen(prompts_req, timeout=30) as resp:
-                            prompts_data = _json.loads(resp.read())
-
-                        # Substitute placeholders — scenario prompts stored in
-                        # Cosmos may still contain {graph_name} / {scenario_prefix}
-                        # if they originated from template files.
-                        _graph_name = req.graph  # e.g. "telco-noc-topology"
-                        _scenario_pfx = _graph_name.rsplit("-", 1)[0] if "-" in _graph_name else _graph_name
-
-                        for p in prompts_data.get("prompts", []):
-                            if p.get("is_active") and p.get("content"):
-                                agent_name = p.get("agent", "")
-                                if agent_name and agent_name not in prompts:
-                                    content = p["content"]
-                                    content = content.replace("{graph_name}", _graph_name)
-                                    content = content.replace("{scenario_prefix}", _scenario_pfx)
-                                    prompts[agent_name] = content
-                                    on_progress("prompts", f"Loaded {agent_name} prompt ({len(content)} chars)")
-
-                    except Exception as e:
-                        on_progress("prompts", f"Could not fetch from Cosmos: {e}")
-
-                # Ensure placeholder substitution for directly-passed prompts too
-                _gn = req.graph
-                _sp = _gn.rsplit("-", 1)[0] if "-" in _gn else _gn
-                prompts = {
-                    k: v.replace("{graph_name}", _gn).replace("{scenario_prefix}", _sp)
-                    for k, v in prompts.items()
-                }
-
-                # Fall back to minimal defaults for any missing agents
-                defaults = {
-                    "orchestrator": "You are an investigation orchestrator.",
-                    "graph_explorer": "You are a graph explorer agent.",
-                    "telemetry": "You are a telemetry analysis agent.",
-                    "runbook": "You are a runbook knowledge base agent.",
-                    "ticket": "You are a historical ticket search agent.",
-                }
-                for agent, default_prompt in defaults.items():
-                    if agent not in prompts:
-                        prompts[agent] = default_prompt
-                        on_progress("prompts", f"Using default prompt for {agent} (no Cosmos prompt found)")
-
-                # Build search connection ID
-                sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
-                rg = os.getenv("AZURE_RESOURCE_GROUP", "")
-                foundry = os.getenv("AI_FOUNDRY_NAME", "")
-                graph_query_uri = os.getenv("GRAPH_QUERY_API_URI", "")
-                if not graph_query_uri:
-                    _hostname = os.getenv("CONTAINER_APP_HOSTNAME", "")
-                    if _hostname:
-                        graph_query_uri = f"https://{_hostname}"
-                graph_backend = os.getenv("GRAPH_BACKEND", "cosmosdb")
-
-                search_conn_id = (
-                    f"/subscriptions/{sub_id}/resourceGroups/{rg}"
-                    f"/providers/Microsoft.CognitiveServices"
-                    f"/accounts/{foundry}/projects/{project_name}"
-                    f"/connections/aisearch-connection"
-                )
-
-                on_progress("provisioning", "Starting agent provisioning...")
-
-                # Try config-driven provisioning first (Phase 8)
-                scenario_config = None
+            async with _provisioning_lock:
                 try:
-                    import urllib.request as _ur2
-                    import json as _j2
-                    _cfg_url = (
-                        f"http://127.0.0.1:8100/query/scenario/config"
-                        f"?scenario={urllib.parse.quote(scenario_prefix)}"
+                    from agent_provisioner import AgentProvisioner
+
+                    def on_progress(step: str, detail: str):
+                        progress.put_nowait({"step": step, "detail": detail})
+
+                    provisioner = AgentProvisioner(
+                        project_endpoint=project_endpoint,
                     )
-                    with _ur2.urlopen(_ur2.Request(_cfg_url), timeout=10) as _resp:
-                        _cfg_data = _j2.loads(_resp.read())
+
+                    # Resolve prompts — fetch from Cosmos if available
+                    prompts = req.prompts or {}
+                    if not prompts:
+                        # Determine which scenario's prompts to use
+                        scenario_prefix = req.prompt_scenario or (
+                            req.graph.rsplit("-", 1)[0] if "-" in req.graph else "telco-noc"
+                        )
+                        on_progress("prompts", f"Fetching prompts for '{scenario_prefix}' from Cosmos...")
+                        try:
+                            prompts_data = await _fetch_from_graph_api(
+                                "/query/prompts",
+                                {"scenario": scenario_prefix, "include_content": "true"},
+                            )
+
+                            # Substitute placeholders — scenario prompts stored in
+                            # Cosmos may still contain {graph_name} / {scenario_prefix}
+                            # if they originated from template files.
+                            _graph_name = req.graph  # e.g. "telco-noc-topology"
+                            _scenario_pfx = _graph_name.rsplit("-", 1)[0] if "-" in _graph_name else _graph_name
+
+                            for p in prompts_data.get("prompts", []):
+                                if p.get("is_active") and p.get("content"):
+                                    agent_name = p.get("agent", "")
+                                    if agent_name and agent_name not in prompts:
+                                        content = p["content"]
+                                        content = content.replace("{graph_name}", _graph_name)
+                                        content = content.replace("{scenario_prefix}", _scenario_pfx)
+                                        prompts[agent_name] = content
+                                        on_progress("prompts", f"Loaded {agent_name} prompt ({len(content)} chars)")
+
+                        except Exception as e:
+                            on_progress("prompts", f"Could not fetch from Cosmos: {e}")
+
+                    # Ensure placeholder substitution for directly-passed prompts too
+                    _gn = req.graph
+                    _sp = _gn.rsplit("-", 1)[0] if "-" in _gn else _gn
+                    prompts = {
+                        k: v.replace("{graph_name}", _gn).replace("{scenario_prefix}", _sp)
+                        for k, v in prompts.items()
+                    }
+
+                    # Fall back to minimal defaults for any missing agents
+                    defaults = {
+                        "orchestrator": "You are an investigation orchestrator.",
+                        "graph_explorer": "You are a graph explorer agent.",
+                        "telemetry": "You are a telemetry analysis agent.",
+                        "runbook": "You are a runbook knowledge base agent.",
+                        "ticket": "You are a historical ticket search agent.",
+                    }
+                    for agent, default_prompt in defaults.items():
+                        if agent not in prompts:
+                            prompts[agent] = default_prompt
+                            on_progress("prompts", f"Using default prompt for {agent} (no Cosmos prompt found)")
+
+                    # Build search connection ID
+                    sub_id = os.getenv("AZURE_SUBSCRIPTION_ID", "")
+                    rg = os.getenv("AZURE_RESOURCE_GROUP", "")
+                    foundry = os.getenv("AI_FOUNDRY_NAME", "")
+                    graph_query_uri = os.getenv("GRAPH_QUERY_API_URI", "")
+                    if not graph_query_uri:
+                        _hostname = os.getenv("CONTAINER_APP_HOSTNAME", "")
+                        if _hostname:
+                            graph_query_uri = f"https://{_hostname}"
+                    graph_backend = os.getenv("GRAPH_BACKEND", "cosmosdb")
+
+                    from agent_provisioner import _build_connection_id
+                    search_conn_id = _build_connection_id(
+                        sub_id, rg, foundry, project_name, "aisearch-connection"
+                    )
+
+                    on_progress("provisioning", "Starting agent provisioning...")
+
+                    # Try config-driven provisioning first (Phase 8)
+                    scenario_config = None
+                    try:
+                        _cfg_data = await _fetch_from_graph_api(
+                            "/query/scenario/config",
+                            {"scenario": scenario_prefix},
+                        )
                         if _cfg_data.get("config", {}).get("agents"):
                             scenario_config = _cfg_data["config"]
                             on_progress("provisioning", "Using config-driven provisioning")
-                except Exception:
-                    pass  # No config stored — use legacy path
+                    except Exception:
+                        pass  # No config stored — use legacy path
 
-                if scenario_config and scenario_config.get("agents"):
-                    # Config-driven: provision N agents from scenario.yaml
-                    result = provisioner.provision_from_config(
-                        config=scenario_config,
-                        graph_query_api_uri=graph_query_uri,
-                        search_connection_id=search_conn_id,
-                        graph_name=req.graph,
-                        prompts=prompts,
-                        force=True,
-                        on_progress=on_progress,
-                    )
-                    n_agents = len(scenario_config["agents"])
-                else:
-                    # Legacy: provision hardcoded 5 agents
-                    result = provisioner.provision_all(
-                        model=model,
-                        prompts=prompts,
-                        graph_query_api_uri=graph_query_uri,
-                        graph_backend=graph_backend,
-                        graph_name=req.graph,
-                        runbooks_index=req.runbooks_index,
-                        tickets_index=req.tickets_index,
-                        search_connection_id=search_conn_id,
-                        force=True,
-                        on_progress=on_progress,
-                    )
-                    n_agents = 5
+                    if scenario_config and scenario_config.get("agents"):
+                        # Config-driven: provision N agents from scenario.yaml
+                        result = await asyncio.to_thread(
+                            provisioner.provision_from_config,
+                            config=scenario_config,
+                            graph_query_api_uri=graph_query_uri,
+                            search_connection_id=search_conn_id,
+                            graph_name=req.graph,
+                            prompts=prompts,
+                            force=True,
+                            on_progress=on_progress,
+                        )
+                        n_agents = len(scenario_config["agents"])
+                    else:
+                        # Legacy fallback: provision hardcoded 5 agents
+                        # DEPRECATED — will be removed once all scenarios have config-driven agents
+                        logger.warning(
+                            "Using legacy provision_all() — scenario '%s' has no config-driven agents. "
+                            "Add an 'agents' section to the scenario.yaml to use config-driven provisioning.",
+                            scenario_prefix,
+                        )
+                        result = await asyncio.to_thread(
+                            provisioner.provision_all,
+                            model=model,
+                            prompts=prompts,
+                            graph_query_api_uri=graph_query_uri,
+                            graph_backend=graph_backend,
+                            graph_name=req.graph,
+                            runbooks_index=req.runbooks_index,
+                            tickets_index=req.tickets_index,
+                            search_connection_id=search_conn_id,
+                            force=True,
+                            on_progress=on_progress,
+                        )
+                        n_agents = 5
 
-                # Update in-memory config
-                with _config_lock:
-                    global _current_config
-                    _current_config = {
+                    # Persist config to disk (atomic write)
+                    _save_config({
                         "graph": req.graph,
                         "runbooks_index": req.runbooks_index,
                         "tickets_index": req.tickets_index,
                         "agents": result,
-                    }
+                    })
 
-                progress.put_nowait({
-                    "step": "done",
-                    "detail": f"All {n_agents} agents re-provisioned. Orchestrator: {result['orchestrator']['id']}",
-                    "result": result,
-                })
+                    progress.put_nowait({
+                        "step": "done",
+                        "detail": f"All {n_agents} agents re-provisioned. Orchestrator: {result['orchestrator']['id']}",
+                        "result": result,
+                    })
 
-            except Exception as e:
-                logger.exception("Agent provisioning failed")
-                progress.put_nowait({"step": "error", "detail": str(e)})
-            finally:
-                await asyncio.sleep(0)  # yield to event loop
-                progress.put_nowait(None)  # sentinel
+                except Exception as e:
+                    logger.exception("Agent provisioning failed")
+                    progress.put_nowait({"step": "error", "detail": str(e)})
+                finally:
+                    await asyncio.sleep(0)  # yield to event loop
+                    progress.put_nowait(None)  # sentinel
 
         task = asyncio.create_task(run_provisioning())
 
@@ -391,20 +435,7 @@ def _build_resource_graph(config: dict, scenario_name: str) -> dict:
         nodes.append({"id": f"ds-{ds_key}", "label": ds_label, "type": nt, "meta": ds_meta})
 
     # ── Infrastructure layer (from env vars) ─────────────────────────────
-    infra_nodes = [
-        ("infra-foundry", "AI Foundry", "foundry",
-         {"resource": os.getenv("AI_FOUNDRY_NAME", ""), "project": os.getenv("AI_FOUNDRY_PROJECT_NAME", "")}),
-        ("infra-cosmos-g", "Cosmos DB (Gremlin)", "cosmos-account",
-         {"resource": os.getenv("COSMOS_GREMLIN_ENDPOINT", ""), "api": "Gremlin"}),
-        ("infra-cosmos-n", "Cosmos DB (NoSQL)", "cosmos-account",
-         {"resource": os.getenv("COSMOS_NOSQL_ENDPOINT", ""), "api": "NoSQL"}),
-        ("infra-storage", "Storage Account", "storage",
-         {"resource": os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "")}),
-        ("infra-search", "AI Search", "search-service",
-         {"resource": os.getenv("AZURE_SEARCH_ENDPOINT", "")}),
-    ]
-    for nid, label, ntype, meta in infra_nodes:
-        nodes.append({"id": nid, "label": label, "type": ntype, "meta": meta})
+    nodes.extend(_infra_nodes_only())
 
     # Agents → Foundry
     for ag in agents:
@@ -453,8 +484,6 @@ def _infra_nodes_only() -> list[dict]:
 @router.get("/resources", summary="Get resource graph for visualization")
 async def get_resource_graph(request: Request):
     """Build and return the nodes+edges resource graph from the active scenario config."""
-    import urllib.request
-    import urllib.parse
 
     # Determine active scenario — prefer X-Scenario header, fall back to graph-name derivation
     cfg = _load_current_config()
@@ -469,13 +498,11 @@ async def get_resource_graph(request: Request):
                 "error": "No active scenario detected"}
 
     try:
-        cfg_url = (
-            f"http://127.0.0.1:8100/query/scenario/config"
-            f"?scenario={urllib.parse.quote(scenario_name)}"
+        cfg_data = await _fetch_from_graph_api(
+            "/query/scenario/config",
+            {"scenario": scenario_name},
         )
-        with urllib.request.urlopen(urllib.request.Request(cfg_url), timeout=10) as resp:
-            cfg_data = json.loads(resp.read())
-            config = cfg_data.get("config", {})
+        config = cfg_data.get("config", {})
 
         if config.get("agents") or config.get("data_sources"):
             return _build_resource_graph(config, scenario_name)

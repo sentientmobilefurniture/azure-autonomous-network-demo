@@ -8,11 +8,11 @@
     <App>                               ← useInvestigation() + useInteractions() hooks
       │                                    Startup overlay: AnimatePresence while !scenarioReady
       ├── <Header>                      ← Fixed 48px top bar
-      │   ├── <ScenarioChip>            ← Flyout dropdown: scenario switching + "+ New Scenario"
+      │   ├── <ScenarioChip>            ← Flyout dropdown: scenario switching + "+ New Scenario" + backend badges (V11)
       │   ├── <HealthDot label="API">   ← Polls /health every 15s
       │   ├── Dynamic agent status      ← "5 Agents ✓" / "Provisioning..." / "Error"
       │   │                                (needs-provisioning falls through to default green dot)
-      │   ├── <SettingsModal>           ← useScenarios(), useScenarioContext()
+      │   ├── <SettingsModal>           ← useScenarios(), useScenarioContext(), useFabricDiscovery() (V11)
       │   └── <ProvisioningBanner>      ← Rendered inside Header; handles provisioning + needs-provisioning
       ├── <TabBar>                      ← "▸ Investigate" | "ℹ Scenario Info" | "🔗 Resources" tabs
       │
@@ -150,6 +150,7 @@ interface SavedScenario {
   created_at: string;
   updated_at: string;
   created_by: string;
+  graph_connector?: string;     // V11: "cosmosdb-gremlin" | "fabric-gql" | "mock" — determines backend
   resources: {
     graph: string;                // "cloud-outage-topology"
     telemetry_database: string;   // "cloud-outage-telemetry"
@@ -170,6 +171,14 @@ interface SavedScenario {
   use_cases?: string[];           // Scenario use case descriptions
   example_questions?: string[];   // Clickable example investigation prompts
   domain?: string;                // Scenario domain (e.g. "telecommunications")
+}
+
+// V11: Fabric workspace resource item
+interface FabricItem {
+  id: string;
+  display_name: string;
+  type: string;
+  description?: string;
 }
 
 type SlotKey = 'graph' | 'telemetry' | 'runbooks' | 'tickets' | 'prompts';
@@ -268,6 +277,7 @@ interface SearchIndex {
 | `useInteractions()` | `{interactions, loading, fetchInteractions, saveInteraction, deleteInteraction}` | `fetchInteractions()` → GET `/query/interactions?scenario=X&limit=50`; auto-fetches on mount and `activeScenario` change; `saveInteraction()` called automatically when investigation completes (running→false with finalMessage); `deleteInteraction()` → DELETE `/query/interactions/{id}` |
 | `useNodeColor(nodeColorOverride)` | `(label: string) => string` | Centralised color resolution hook — 4-tier fallback: `nodeColorOverride → scenarioNodeColors → NODE_COLORS → autoColor`. Uses a 12-color auto-palette with stable string hash for unknown labels |
 | `useResourceGraph()` | `{nodes, edges, loading, error}` | **NEW (V10)** — fetches `GET /api/config/resources`; re-fetches on `activeScenario` change and when `provisioningStatus.state === 'done'`; returns typed `ResourceNode[]` + `ResourceEdge[]` for the resource visualizer |
+| `useFabricDiscovery()` | `{healthy, checking, ontologies, graphModels, eventhouses, loadingSection, error, provisionPct, provisionStep, provisionState, provisionError, checkHealth, fetchOntologies, fetchGraphModels, fetchEventhouses, runProvisionPipeline, fetchAll}` | **NEW (V11)** — Fabric workspace discovery: health check (`/query/fabric/health`), list ontologies/graph models/eventhouses, run provision pipeline (`/api/fabric/provision/pipeline`) with SSE progress tracking. Used by SettingsModal Fabric tab |
 
 **`selectScenario(name)` flow** (in `useScenarios`):
 1. Calls `setActiveScenario(name)` → auto-derives all bindings
@@ -307,14 +317,19 @@ interface SearchIndex {
 | `/query/interactions/{id}` | DELETE | — | Delete from InteractionSidebar | `useInteractions` |
 | `/health` | GET | — | Every 15s polling | `HealthDot` |
 | `/api/logs` | GET (EventSource) | — | On mount | `LogStream` |
+| `/query/fabric/health` | GET | — | Fabric Setup tab opens | `useFabricDiscovery` |
+| `/query/fabric/ontologies` | GET | — | Fabric Setup tab opens | `useFabricDiscovery` |
+| `/query/fabric/ontologies/{id}/models` | GET | — | User selects ontology | `useFabricDiscovery` |
+| `/query/fabric/eventhouses` | GET | — | Fabric Setup tab opens | `useFabricDiscovery` |
+| `/api/fabric/provision/pipeline` | POST | `Content-Type: application/json` | "Provision Pipeline" button | `useFabricDiscovery` |
 
 **Note on AddScenarioModal uploads:** When triggered from AddScenarioModal, each upload
 appends `?scenario_name=X` to the URL to override the tarball's `scenario.yaml` name.
 Uses the shared `uploadWithSSE()` utility from `utils/sseStream.ts`.
 
-## SettingsModal — 3 Tabs
+## SettingsModal — 4 Tabs
 
-**Scenarios tab (new — first tab):**
+**Scenarios tab (first tab):**
 - Lists saved scenarios as cards from `GET /query/scenarios/saved`
 - Each card shows: scenario name, display name, vertex/prompt/index counts, timestamps
 - Click a card → activates that scenario (same as `selectScenario()`) + auto-provisions
@@ -339,6 +354,15 @@ Uses the shared `uploadWithSSE()` utility from `utils/sseStream.ts`.
 - 5 UploadBox components: Graph Data, Telemetry, Runbooks, Tickets, Prompts
 - Each uses `uploadWithSSE()` from `utils/sseStream.ts`: drag-drop → upload → SSE progress bar → done/error state machine
 - For ad-hoc individual uploads outside the scenario workflow
+
+**Fabric Setup tab (V11 — conditional, only shown when active scenario uses `fabric-gql`):**
+- Conditionally visible: only appears when `activeScenarioRecord?.graph_connector === 'fabric-gql'`
+- Workspace health status card (calls `/query/fabric/health`)
+- Ontology selector dropdown (populated from `/query/fabric/ontologies`)
+- Graph Model list (populated from `/query/fabric/ontologies/{id}/models` on ontology select)
+- Eventhouse list (populated from `/query/fabric/eventhouses`)
+- "Provision Pipeline" button → calls `POST /api/fabric/provision/pipeline` with SSE progress bar
+- Uses `useFabricDiscovery()` hook for all API calls and state management
 
 **Modal behavior:** Closes on Escape keypress and backdrop click (except during active
 upload/provisioning). Uses `aria-modal="true"` and `role="dialog"` attributes.
@@ -426,11 +450,11 @@ pattern but for infrastructure topology rather than network topology.
     - `uploadWithSSE(endpoint, file, handlers, params?, signal?)` — High-level: takes a `File` (not `FormData`), builds `FormData` internally, appends optional `params` as URL query parameters, wraps `fetch` + `consumeSSE` for form upload endpoints
     - Completion detection uses heuristic field-checking (`scenario`, `index`, `graph`, `prompts_stored` keys in parsed JSON) because backend SSE streams use `data:` lines only, not `event:` type markers (deviation D-5)
 
-15. **AddScenarioModal auto-slot detection**: `detectSlot(filename)` parses the last hyphen-separated segment before `.tar.gz` to match file to upload slot. E.g., `cloud-outage-graph.tar.gz` → slot `graph`, scenarioName `cloud-outage`. Auto-fills scenario name input if empty. Multi-file drop assigns all matching files in one gesture. On graph upload completion, captures `scenario_metadata` (display_name, description, use_cases, example_questions, graph_styles, domain) from the SSE response and stores it in a `scenarioMetadataRef`; these metadata fields are forwarded to `saveScenario()` when the user clicks Save.
+15. **AddScenarioModal auto-slot detection**: `detectSlot(filename)` parses the last hyphen-separated segment before `.tar.gz` to match file to upload slot. E.g., `cloud-outage-graph.tar.gz` → slot `graph`, scenarioName `cloud-outage`. Auto-fills scenario name input if empty. Multi-file drop assigns all matching files in one gesture. On graph upload completion, captures `scenario_metadata` (display_name, description, use_cases, example_questions, graph_styles, domain) from the SSE response and stores it in a `scenarioMetadataRef`; these metadata fields are forwarded to `saveScenario()` when the user clicks Save. **V11:** Also detects `graph_connector` from uploaded manifest metadata (`scenario_metadata.graph_connector` or `scenario_metadata.data_sources.graph.connector`). When `fabric-gql` is detected, shows a cyan info banner: "Fabric Graph Connector Detected — graph data will be managed via Fabric". The `graph_connector` value is passed through `saveScenarioMeta()` → `useScenarios.saveScenario()` → `POST /query/scenarios/save` for persistence.
 
 16. **ProvisioningBanner lifecycle**: Appears during provisioning **and** `needs-provisioning` state. Rendered inside `<Header>` (not as a sibling). During provisioning: shows current step from SSE stream, auto-dismisses 3s after completion with green flash. On error: banner turns red and stays until manually dismissed. On `needs-provisioning`: amber banner with ⚠ icon and "Provision Now" button → clicking triggers `POST /api/config/apply` SSE flow. Detection: on `activeScenario` change, fetches `GET /api/agents`; if `agents.length === 0`, transitions to `needs-provisioning`. Workspace remains interactive during provisioning — only "Submit Alert" is disabled.
 
-17. **ScenarioChip flyout dropdown**: Shows saved scenarios + "(Custom)" option. Selecting triggers `selectScenario()` which auto-provisions. Small spinner inside chip during provisioning. "+ New Scenario" link at bottom opens AddScenarioModal.
+17. **ScenarioChip flyout dropdown**: Shows saved scenarios + "(Custom)" option. Selecting triggers `selectScenario()` which auto-provisions. Small spinner inside chip during provisioning. "+ New Scenario" link at bottom opens AddScenarioModal. **V11:** Each scenario shows a color-coded backend badge: Fabric (cyan), Mock (yellow), Cosmos (emerald). Active chip also displays the badge next to the scenario name.
 
 18. **Example question suggestion chips**: `InvestigationPanel` self-sources example questions from `useScenarios()` + `useScenarioContext()` (no prop threading through App.tsx needed). `AlertInput` accepts an optional `exampleQuestions` prop and renders suggestion chips between the textarea and submit button, but ONLY when the textarea is empty. Clicking a chip populates the textarea; chips auto-hide once the user types. This gives users the same quick-pick functionality as the ScenarioInfoPanel tab but at the point of input.
 

@@ -24,9 +24,7 @@ import asyncio
 import json
 import os
 import logging
-import threading
 import time as _time
-from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -37,12 +35,12 @@ from starlette.responses import StreamingResponse
 from config import GRAPH_BACKEND, BACKEND_REQUIRED_VARS, TELEMETRY_REQUIRED_VARS
 from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router, close_telemetry_backend
-from backends import close_all_backends
 from router_topology import router as topology_router
 from router_ingest import router as ingest_router
 from router_prompts import router as prompts_router
 from router_scenarios import router as scenarios_router
 from router_interactions import router as interactions_router
+from router_fabric_discovery import router as fabric_discovery_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -134,86 +132,28 @@ app.include_router(ingest_router)
 app.include_router(prompts_router)
 app.include_router(scenarios_router)
 app.include_router(interactions_router)
+app.include_router(fabric_discovery_router)
 
 
 # ---------------------------------------------------------------------------
-# Log streaming SSE
+# Log streaming SSE (uses shared LogBroadcaster)
 # ---------------------------------------------------------------------------
 
-_lock = threading.Lock()  # Protects _log_subscribers from cross-thread access
-_log_subscribers: set[asyncio.Queue] = set()
-_log_buffer: deque[dict] = deque(maxlen=100)
+from log_broadcaster import LogBroadcaster
 
-# Cache the running event loop for thread-safe queue puts
-_event_loop: asyncio.AbstractEventLoop | None = None
+_log_broadcaster = LogBroadcaster(max_buffer=100, max_queue=500)
 
-
-def _broadcast_log(record: dict) -> None:
-    with _lock:
-        _log_buffer.append(record)
-        subscribers_snapshot = list(_log_subscribers)
-    dead: list[asyncio.Queue] = []
-    for q in subscribers_snapshot:
-        try:
-            if _event_loop is not None and _event_loop.is_running():
-                _event_loop.call_soon_threadsafe(q.put_nowait, record)
-            else:
-                q.put_nowait(record)
-        except (asyncio.QueueFull, RuntimeError):
-            dead.append(q)
-    if dead:
-        with _lock:
-            for q in dead:
-                _log_subscribers.discard(q)
-
-
-class _SSELogHandler(logging.Handler):
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            entry = {
-                "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S.%f")[:-3],
-                "level": record.levelname,
-                "name": record.name,
-                "msg": self.format(record),
-            }
-            _broadcast_log(entry)
-        except Exception:
-            self.handleError(record)
-
-
-_sse_handler = _SSELogHandler()
-_sse_handler.setLevel(logging.DEBUG)
+_sse_handler = _log_broadcaster.get_handler(level=logging.DEBUG)
 _sse_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 _sse_handler.addFilter(lambda r: r.name.startswith(("graph-query-api",)))
 logging.getLogger().addHandler(_sse_handler)
-
-
-async def _log_sse_generator():
-    global _event_loop
-    _event_loop = asyncio.get_running_loop()
-
-    q: asyncio.Queue = asyncio.Queue(maxsize=500)
-
-    # Snapshot buffer BEFORE subscribing to avoid duplicate delivery
-    with _lock:
-        buffered = list(_log_buffer)
-        _log_subscribers.add(q)
-    try:
-        for rec in buffered:
-            yield f"event: log\ndata: {json.dumps(rec)}\n\n"
-        while True:
-            rec = await q.get()
-            yield f"event: log\ndata: {json.dumps(rec)}\n\n"
-    finally:
-        with _lock:
-            _log_subscribers.discard(q)
 
 
 @app.get("/query/logs", summary="Stream graph-query-api logs via SSE")
 async def stream_logs():
     """Stream graph-query-api logs via SSE (accessible through nginx's /query/* routing)."""
     return StreamingResponse(
-        _log_sse_generator(),
+        _log_broadcaster.subscribe(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

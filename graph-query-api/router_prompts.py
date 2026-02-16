@@ -14,6 +14,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -135,9 +136,8 @@ async def list_prompts(
     if scenario:
         items = await _query_scenario(scenario)
     else:
-        import asyncio
         all_items = []
-        for sc in _list_prompt_scenarios():
+        for sc in await asyncio.to_thread(_list_prompt_scenarios):
             all_items.extend(await _query_scenario(sc))
         items = all_items
 
@@ -148,7 +148,7 @@ async def list_prompts(
 async def list_prompt_scenarios():
     """List distinct scenario names that have prompts stored in Cosmos."""
     try:
-        scenarios = _list_prompt_scenarios()
+        scenarios = await asyncio.to_thread(_list_prompt_scenarios)
         result = []
         for sc in scenarios:
             try:

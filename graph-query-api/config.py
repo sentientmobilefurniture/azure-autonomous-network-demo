@@ -73,7 +73,18 @@ class ScenarioContext:
     backend_type: str
 
 
-def get_scenario_context(
+# ---------------------------------------------------------------------------
+# Connector → backend key mapping
+# ---------------------------------------------------------------------------
+
+CONNECTOR_TO_BACKEND: dict[str, str] = {
+    "cosmosdb-gremlin": "cosmosdb",
+    "fabric-gql": "fabric-gql",
+    "mock": "mock",
+}
+
+
+async def get_scenario_context(
     x_graph: str | None = Header(default=None, alias="X-Graph"),
 ) -> ScenarioContext:
     """FastAPI dependency — resolve scenario context from X-Graph header.
@@ -83,11 +94,31 @@ def get_scenario_context(
     The scenario prefix is derived from the graph name:
       "cloud-outage-topology" → "cloud-outage"
     If no hyphen exists, the full graph_name is used as the prefix.
+
+    Backend type resolution:
+      1. Try to read the scenario's config from the config store
+         (requires V10 DocumentStore infrastructure)
+      2. Falls back to the GRAPH_BACKEND env var default
     """
     graph_name = x_graph or COSMOS_GREMLIN_GRAPH
 
     # Derive scenario prefix: "cloud-outage-topology" → "cloud-outage"
     prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
+
+    # Per-scenario backend resolution: check config store for connector type
+    backend_type = GRAPH_BACKEND  # default
+    try:
+        from config_store import fetch_scenario_config
+        config = await fetch_scenario_config(prefix)
+        connector = (
+            config.get("data_sources", {})
+                  .get("graph", {})
+                  .get("connector", "")
+        )
+        if connector:
+            backend_type = CONNECTOR_TO_BACKEND.get(connector, connector)
+    except Exception:
+        pass  # No config in store — use env var default
 
     return ScenarioContext(
         graph_name=graph_name,
@@ -96,7 +127,7 @@ def get_scenario_context(
         telemetry_container_prefix=prefix,         # scenario prefix for container lookup
         prompts_database="prompts",                # shared DB
         prompts_container=prefix,                  # scenario container name
-        backend_type=GRAPH_BACKEND,
+        backend_type=backend_type,
     )
 
 # ---------------------------------------------------------------------------
@@ -108,6 +139,7 @@ BACKEND_REQUIRED_VARS: dict[str, tuple[str, ...]] = {
         "COSMOS_GREMLIN_ENDPOINT",
         "COSMOS_GREMLIN_PRIMARY_KEY",
     ),
+    "fabric-gql": ("FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID"),
     "mock": (),
 }
 

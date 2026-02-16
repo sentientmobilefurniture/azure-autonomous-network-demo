@@ -27,28 +27,34 @@
 | 19 | **Shared telemetry/prompts databases** — moved from per-scenario DBs to shared DBs with container prefixes | ✅ Done (V10) | `telemetry` (shared DB, `{scenario}-ContainerName` pattern), `prompts` (shared DB, `{scenario}` container) |
 | 20 | **Deploy cleanup** — removed 7 vestigial env vars, `COSMOS_GREMLIN_GRAPH` from Bicep | ✅ Done (V10) | `azure_config.env.template`, `infra/main.bicep` cleaned up |
 
-## Fabric Integration (Future)
+## Fabric Integration (V11 — Phases 0-2 Implemented)
 
-> **Source:** `documentation/v9fabricintegration.md` (plan only — no implementation in main codebase)
+> **Source:** `documentation/v11fabricv2.md` (plan + implementation status)
 > **Reference code:** `fabric_implementation_references/` (full stack reference)
 
-Planned alternative to CosmosDB/Gremlin backend using Microsoft Fabric Ontology for graph data
-and Fabric Eventhouses for telemetry. Key architectural impacts if implemented:
+Microsoft Fabric GQL backend implemented as an alternative to CosmosDB/Gremlin for graph
+data. Uses ISO Graph Query Language (GQL) — MATCH/RETURN syntax — via Fabric REST API.
 
-| Requirement | Description | Files Affected |
-|-------------|-------------|----------------|
-| Fabric workspace ID configuration | User provides workspace ID via Settings UI | `azure_config.env`, `ScenarioContext`, `SettingsModal` |
-| Ontology listing | Read available ontologies from Fabric workspace | New backend module in `graph-query-api/backends/` |
-| Backend toggle | Checkbox in Settings to switch between CosmosDB and Fabric | `SettingsModal.tsx` (new tab), `config.py` (backend factory) |
-| Graph topology from Fabric | Query Fabric ontology for topology visualization | New `GraphBackend` implementation |
-| Telemetry from Eventhouses | Query Fabric eventhouse for telemetry data | New telemetry backend |
-| Agent data connections | Create Fabric workspace connections for OpenApiTool | `agent_provisioner.py` modifications |
+| Component | Status | Files |
+|-----------|--------|-------|
+| `FabricGQLBackend` (GraphBackend Protocol) | ✅ Done | `backends/fabric.py` |
+| `fabric_config.py` adapter | ✅ Done | `adapters/fabric_config.py` |
+| Backend registry (`"fabric-gql"` key) | ✅ Done | `backends/__init__.py` |
+| `CONNECTOR_TO_BACKEND` dual-key system | ✅ Done | `config.py` |
+| `async get_scenario_context()` with config_store | ✅ Done | `config.py` |
+| Fabric discovery router (`/query/fabric/*`) | ✅ Done | `router_fabric_discovery.py` |
+| Fabric provision pipeline (`/api/fabric/*`) | ✅ Done | `api/app/routers/fabric_provision.py` |
+| `language_gql.md` prompt file | ✅ Done | `data/scenarios/telco-noc-fabric/` |
+| `telco-noc-fabric` scenario pack | ✅ Done | `data/scenarios/telco-noc-fabric/scenario.yaml` |
+| Agent provisioner GQL support | ✅ Done | `scripts/agent_provisioner.py` |
+| Frontend Fabric settings UI | ✅ Done | `useFabricDiscovery.ts`, `SettingsModal.tsx` (Fabric tab), `ScenarioChip.tsx` (badges), `AddScenarioModal.tsx` (connector detection) |
+| Fabric Eventhouse telemetry backend | ⬜ Future | — |
 
-**Current state:** Reference implementations exist in `fabric_implementation_references/` directory
-(full API, frontend, graph-query-api, data, infra). Root `pyproject.toml` includes
-`azure-storage-file-datalake>=12.18.0` (OneLake/ADLS Gen2 dependency — for Fabric integration).
-Env vars `FABRIC_ONTOLOGY_ID` and `FABRIC_GRAPH_MODEL_ID` may exist in some `azure_config.env` files
-but are NOT in the template and NOT consumed by any runtime code.
+**Key architectural decisions:**
+- Fabric uses AAD token auth (no key auth) — `DefaultAzureCredential` with `https://api.fabric.microsoft.com/.default` scope
+- 429 retry with 15s × attempt backoff (5 retries), token re-acquisition between retries
+- `ingest()` raises `NotImplementedError` — Fabric data is managed via Fabric Studio or provision pipeline
+- ISO GQL, NOT GraphQL — `MATCH (n:Router) RETURN n.name` syntax
 
 ## SDK Versions
 
@@ -61,6 +67,7 @@ but are NOT in the template and NOT consumed by any runtime code.
 | `azure-storage-blob` | `>=12.19.0` | Blob uploads |
 | `azure-search-documents` | `>=11.6.0` | Search indexer pipelines |
 | `gremlinpython` | `>=3.7.0` | Cosmos Gremlin data-plane (key auth only) |
+| `httpx` | `>=0.27.0` | Fabric REST API client (async) — V11 |
 | `fastapi` | `>=0.115` | ASGI framework |
 | `sse-starlette` | `>=1.6` | SSE streaming |
 | `react` | 18.x | UI framework |
@@ -89,7 +96,8 @@ but are NOT in the template and NOT consumed by any runtime code.
 | `documentation/CUSTOM_SKILLS.md` | Custom skills documentation (neo4j, cosmosdb gremlin, etc.) |
 | `documentation/v11customizableagentworkflows.md` | V11 customizable agent workflows (placeholder — currently empty) |
 | `documentation/v8codesimplificationandrefactor.md` | V8 code simplification and refactor notes |
-| `documentation/v9fabricintegration.md` | V9 Fabric ontology integration plan (alternative graph backend) |
+| `documentation/v11fabricv2.md` | V11 Fabric GQL integration plan — Phases 0-3 fully implemented |
+| `documentation/v9fabricintegration.md` | V9 Fabric ontology integration plan (superseded by V11) |
 | `documentation/QOLimprovements.md` | QOL improvement backlog (DB pre-provisioning, upload timer, graph pause, interaction history) |
 | `fabric_implementation_references/` | Reference implementation for Fabric integration (full stack: API, frontend, graph-query-api, data, infra) |
 | `documentation/deprecated/` | 16 historical docs (TASKS, BUGSTOFIX, SCENARIO, older versions) — kept for reference |

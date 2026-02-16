@@ -97,6 +97,8 @@ async def get_interaction(interaction_id: str, scenario: str = Query(...)):
     store = _get_store()
     try:
         return await store.get(interaction_id, partition_key=scenario)
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=404, detail="Interaction not found")
     except Exception:
         raise HTTPException(status_code=404, detail="Interaction not found")
 
@@ -107,6 +109,8 @@ async def delete_interaction(interaction_id: str, scenario: str = Query(...)):
     store = _get_store()
     try:
         await store.delete(interaction_id, partition_key=scenario)
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=404, detail="Interaction not found")
     except Exception:
         raise HTTPException(status_code=404, detail="Interaction not found")
     return {"deleted": interaction_id}

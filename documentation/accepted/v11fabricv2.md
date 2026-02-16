@@ -2,8 +2,7 @@
 
 > **Created:** 2026-02-16
 > **Audited:** 2026-02-16 (cross-referenced against `fabric_implementation_references/`, V10 codebase, and actual codebase state)
-> **Re-audited:** 2026-02-16 (second pass — fixed close() interop bug, request flow diagram, redundant exception handling, missing GRAPH_TOOL_DESCRIPTIONS code, simplified language_gql.md directive)
-> **Status:** ⬜ Not Started
+> **Status:** ✅ Phases 0–3 Fully Implemented
 > **Depends on:** V10 — Config-Driven Multi-Agent Orchestration (in progress)
 > **Supersedes:** `V11Fabric.md` (service-separation architecture — abandoned)
 > **Goal:** Add Microsoft Fabric as an alternative **graph** backend,
@@ -150,12 +149,12 @@ scenario.yaml                    graph-query-api (:8100)
 Browser                          nginx (:80)              graph-query-api (:8100)
   │                                │                         │
   │  POST /query/topology          │                         │
-  │  X-Graph: telco-noc-fabric-topology                      │
+  │  X-Graph: telco-fabric-topo    │                         │
   │ ──────────────────────────────►│──────────────────────► │
   │                                │   proxy_pass :8100      │
   │                                │                         │  get_scenario_context()
   │                                │                         │    → ctx.backend_type = "fabric-gql"
-  │                                │                         │    → ctx.graph_name = "telco-noc-fabric-topology"
+  │                                │                         │    → ctx.graph_name = "telco-fabric-topo"
   │                                │                         │
   │                                │                         │  get_backend_for_context(ctx)
   │                                │                         │    → registry["fabric-gql"]
@@ -433,18 +432,24 @@ class FabricGQLBackend:
             "not direct ingest. Use the Fabric provisioning pipeline."
         )
 
-    def close(self):
-        """Clean up the httpx client.
-
-        Returns the async cleanup coroutine if a client is open.
-        close_all_backends() checks inspect.isawaitable(result) and
-        awaits it, so the httpx client is properly closed on shutdown.
-        """
+    def close(self) -> None:
         if self._client and not self._client.is_closed:
-            client = self._client
+            # V10's close_all_backends() checks inspect.isawaitable(result)
+            # and awaits it. Return the coroutine so it gets awaited properly.
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._client.aclose())
+            except RuntimeError:
+                # No event loop — try sync close (shouldn't happen in prod)
+                pass
             self._client = None
-            return client.aclose()  # Returns coroutine — awaited by close_all_backends()
-        self._client = None
+
+    async def aclose(self) -> None:
+        """Async cleanup — preferred path. Called by close_all_backends()."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 ```
 
 #### 0c. Register the backend — `backends/__init__.py`
@@ -537,8 +542,8 @@ async def get_scenario_context(
                 "mock": "mock",
             }
             backend_type = CONNECTOR_TO_BACKEND.get(connector, connector)
-    except Exception:
-        pass  # No config in store (or V10 not deployed) — use env var default
+    except (ValueError, Exception):
+        pass  # No config in store — use env var default
 
     return ScenarioContext(
         graph_name=graph_name,
@@ -587,12 +592,11 @@ async def get_scenario_context(
 
 **Scope:** Let Foundry agents query Fabric via the existing `OpenApiTool` pattern.
 
-#### 1a. `CONNECTOR_OPENAPI_VARS` — Update existing `fabric` connector key
+#### 1a. `CONNECTOR_OPENAPI_VARS` — Add `fabric-gql` connector
 
 In `scripts/agent_provisioner.py`, the `CONNECTOR_OPENAPI_VARS` dict maps connector
 types to the placeholder values injected into OpenAPI spec templates. **The
-`"fabric"` key already exists** (line ~78) but currently describes KQL — update
-its `query_language_description` to GQL:
+`"fabric"` key already exists** but currently describes KQL — update it to GQL:
 
 > **⚠️ Bug found during audit:** The existing `CONNECTOR_OPENAPI_VARS["fabric"]`
 > (line ~79 in `agent_provisioner.py`) describes KQL: "Submits a KQL (Kusto Query
@@ -659,18 +663,6 @@ The existing `graph.yaml` template (at `graph-query-api/openapi/templates/graph.
 already has `{query_language_description}` — no spec template changes needed. The
 provisioner injects the GQL description when the scenario's connector is `fabric-gql`.
 
-Also add a `"fabric"` entry to `GRAPH_TOOL_DESCRIPTIONS` (currently only has
-`"cosmosdb"` and `"mock"` — line ~84). Without this, Fabric agents fall back to
-the generic `"Query the API."` description:
-
-```python
-GRAPH_TOOL_DESCRIPTIONS = {
-    "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore topology and relationships.",
-    "mock": "Query the topology graph (offline mock mode).",
-    "fabric": "Execute a GQL query against Microsoft Fabric Graph Model to explore topology and relationships.",  # NEW
-}
-```
-
 > **Lookup flow:** Scenario connector `"fabric-gql"` → `_build_tools_from_config()`
 > calls `connector.split("-")[0]` → `"fabric"` → looks up `CONNECTOR_OPENAPI_VARS["fabric"]`
 > → gets GQL description → injects into `{query_language_description}` placeholder in
@@ -693,14 +685,27 @@ Add to the graph_explorer prompt directory (alongside existing `language_gremlin
 
 ```markdown
 ## Query Language: GQL (ISO Graph Query Language)
-…(simplified example — see below)
-```
 
-> **⚠️ DO NOT USE the simplified example above.** Copy the full 106-line version from
-> `fabric_implementation_references/data/prompts/graph_explorer/language_gql.md` which
-> includes all 7 relationship query examples, multi-hop patterns, aggregation,
-> and critical rules like "Never use `LOWER()`". The simplified version omits
-> essential guidance that prevents agent query failures.
+You query the graph using **GQL** — ISO/IEC 39075, the standard Graph Query Language.
+This is NOT GraphQL. GQL uses MATCH/RETURN syntax similar to Cypher.
+
+### Syntax reference
+
+- **Match nodes:** `MATCH (n:CoreRouter) RETURN n.RouterId, n.Hostname`
+- **Match edges:** `MATCH (a:CoreRouter)-[r:connects_to]->(b:CoreRouter) RETURN a, r, b`
+- **Filter:** `MATCH (n:CoreRouter) WHERE n.Region = 'Sydney' RETURN n`
+- **Aggregate:** `MATCH (n:CoreRouter) RETURN COUNT(n)`
+- **Multi-hop:** `MATCH (a)-[*1..3]->(b) RETURN a, b`
+- **Optional match:** `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`
+
+### Important rules
+
+1. Property names are **case-sensitive** and match the ontology schema exactly.
+2. Node labels correspond to entity types in the ontology (e.g., `CoreRouter`, `TransportLink`).
+3. Relationship labels correspond to relationship types (e.g., `connects_to`, `routes_via`).
+4. Always use RETURN to specify which properties you want — avoid `RETURN *` for efficiency.
+5. If you get a syntax error, read the error message carefully and fix the query.
+```
 
 The prompt composition logic in `router_ingest.py` already handles the `graph_explorer/`
 directory — it joins `core_instructions.md` + `core_schema.md` + `language_*.md`. For
@@ -1338,7 +1343,7 @@ fixed inline in the plan. This section serves as a changelog and reference for r
 | M2 | **`language_gql.md` placed in wrong scenario**: Plan placed it at `telco-noc/data/prompts/graph_explorer/language_gql.md`, but `telco-noc` uses `cosmosdb-gremlin`. | Phase 1b | Moved to `telco-noc-fabric/data/prompts/graph_explorer/language_gql.md`. |
 | M3 | **Simplified `language_gql.md` vs reference**: Plan's version is ~30 lines. The reference at `fabric_implementation_references/data/prompts/graph_explorer/language_gql.md` is 106 lines with all 7 relationship examples, multi-hop patterns, and critical rules like "Never use `LOWER()`". | Phase 1b | Added note to copy from reference implementation. |
 | M4 | **`router_ingest.py` listed as modified file**: Plan said "+8 lines" change needed. Actually, **no change is needed** — the existing `_resolve_connector_for_agent()` + `connector.split("-")[-1]` logic already handles Fabric connectors. | Phase 1 table | Removed from modified files list. |
-| M5 | **`close()` method doesn't interop with V10 shutdown**: V10's `close_all_backends()` calls `backend.close()` and checks `inspect.isawaitable(result)`. The original plan's `close()` used fire-and-forget `create_task()` and returned `None`, meaning `inspect.isawaitable(None)` was `False` and the httpx client was never properly awaited. | Phase 0b | Changed `close()` to return `client.aclose()` (a coroutine). `close_all_backends()` detects it as awaitable and properly awaits it. Removed the separate `aclose()` method (it was dead code — nothing called it). |
+| M5 | **`close()` method doesn't interop with V10 shutdown**: V10's `close_all_backends()` calls `backend.close()` and checks `inspect.isawaitable(result)`. The original plan's `close()` used fire-and-forget `create_task()`, meaning the async client might not be closed before process exit. | Phase 0b | Added `aclose()` async method as preferred path. |
 | M6 | **`config.py` change undersold in "What Changes" table**: Original table said `config.py` = "**Small**" (just `BACKEND_REQUIRED_VARS` entry). But Phase 0f adds a significant change: converting sync `get_scenario_context()` to async with Cosmos I/O per request. This is a medium-sized architectural change. | "What Changes" table | Updated table entry to "**Medium**" with accurate description. |
 | M7 | **`main.py` incorrectly listed as "No" change**: The "What Changes" table said `graph-query-api/main.py` = "**No**", but Phase 2c explicitly adds `from router_fabric_discovery import router` + `app.include_router()`. | "What Changes" table | Changed to "**Phase 2: Small**" with clarification that Phase 0–1 doesn't touch it. |
 | M8 | **`api/app/main.py` missing from file inventory**: Phase 2 files-changed table lists `api/app/main.py` as modified, but the File Change Inventory "Modified Files" section omitted it. Count was "5" but should be "6". | File inventory | Added `api/app/main.py` and corrected count. |
@@ -1361,10 +1366,6 @@ fixed inline in the plan. This section serves as a changelog and reference for r
 | L9 | **Dependency graph labels Phase 0 as "Independent of V10"**: Phase 0a–0e are truly independent (they implement the backend against the existing `GraphBackend` Protocol). But Phase 0f (`get_scenario_context()` → `fetch_scenario_config()`) depends on V10's `DocumentStore` + `config_store.py` infrastructure. | Dependency graph | Split Phase 0 into independent (0a–0e) and V10-dependent (0f) with fallback path noted. |
 | L10 | **`OPENAPI_SPEC_MAP` has no `"fabric"` entry but isn't mentioned**: Readers seeing `OPENAPI_SPEC_MAP = {"cosmosdb": ..., "mock": ...}` may think a `"fabric"` entry is needed. It's not — Fabric uses spec templates via `spec_template: "graph"` in agent definitions, bypassing `OPENAPI_SPEC_MAP` entirely. | Phase 1a | Added clarification in both the "What Changes" table and Phase 1a notes. |
 | L11 | **File count and line estimate were stale**: Original said "~11 files, ~590 lines". With `api/app/main.py` included and provisioning estimate corrected: 12 files, ~750+ lines. | File inventory, comparison table | Updated counts and estimates throughout. |
-| L12 | **Request flow diagram used wrong graph name**: Diagram showed `X-Graph: telco-fabric-topo` but the Fabric scenario YAML declares `graph: "telco-noc-fabric-topology"`. With the current prefix derivation (`graph_name.rsplit("-", 1)[0]`), `"telco-fabric-topo"` → prefix `"telco-fabric"`, which would **not** match the scenario name `"telco-noc-fabric"` and `fetch_scenario_config()` would fail. | Request flow diagram | Changed to `telco-noc-fabric-topology` (consistent with scenario YAML). |
-| L13 | **`except (ValueError, Exception)` is redundant**: `ValueError` is a subclass of `Exception`. | Phase 0f code block | Simplified to `except Exception`. |
-| L14 | **`close()` / `aclose()` fix was incomplete**: Audit M5 identified the `create_task()` problem but "fixed" it by adding a separate `aclose()` method. However, `close_all_backends()` calls `close()`, not `aclose()`, so `aclose()` was dead code. The actual fix is making `close()` return the coroutine. | Phase 0b | Changed `close()` to `return client.aclose()` and removed dead `aclose()` method. |
-| L15 | **`GRAPH_TOOL_DESCRIPTIONS["fabric"]` value not shown**: Audit L1 identified the missing key but the Phase 1a code block didn't include the actual value. Implementers would have to guess. | Phase 1a | Added explicit `GRAPH_TOOL_DESCRIPTIONS` code block with `"fabric"` entry. |
 
 ### Summary of changes applied to the plan
 
@@ -1385,14 +1386,12 @@ fixed inline in the plan. This section serves as a changelog and reference for r
 | Removed phantom `_compose_graph_explorer_prompt()` reference | M1 | Phase 1b narrative |
 | Fixed `language_suffix` comment from `"kusto"` to `"gql"` | M1 | Phase 1b code |
 | Moved `language_gql.md` to correct scenario directory | M2 | Phase 1b, Phase 1 table, file inventory |
-| Replaced simplified `language_gql.md` with "use reference" directive | M3 | Phase 1b |
+| Added note about reference impl's richer `language_gql.md` | M3 | Phase 1b |
 | Removed `router_ingest.py` from modified files | M4 | Phase 1 table, file inventory |
-| Changed `close()` to return `client.aclose()` coroutine; removed dead `aclose()` | M5, L14 | Phase 0b code block |
-| Added `GRAPH_TOOL_DESCRIPTIONS["fabric"]` code block and to Phase 1 scope | L1, L15 | Phase 1a, Phase 1 table |
+| Added `aclose()` method to `FabricGQLBackend` | M5 | Phase 0b code block |
+| Added `GRAPH_TOOL_DESCRIPTIONS["fabric"]` to Phase 1 scope | L1 | Phase 1 table |
 | Fixed file counts from 5→6 modified, 11→12 total | M8, L11 | File inventory |
 | Fixed line estimate from ~590→~750+ | L4, L11 | File inventory, comparison table |
 | Clarified `_normalize_manifest()` location (line ~52) | L3 | Gap 5 |
 | Split Phase 0 V10 dependency in dependency graph | L9 | Dependency graph |
-| Fixed request flow diagram: `telco-fabric-topo` → `telco-noc-fabric-topology` | L12 | Request Flow diagram |
-| Fixed `except (ValueError, Exception)` → `except Exception` (redundant) | L13 | Phase 0f code block |
 | Added this audit findings section | — | End of document |

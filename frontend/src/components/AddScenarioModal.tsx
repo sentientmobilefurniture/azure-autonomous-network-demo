@@ -1,24 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { SlotKey, ScenarioUploadSlot } from '../types';
-import { uploadWithSSE } from '../utils/sseStream';
+import { ProgressBar } from './ProgressBar';
+import { useScenarioUpload, SLOT_DEFS, formatElapsed } from '../hooks/useScenarioUpload';
 
 // ---------------------------------------------------------------------------
-// Slot configuration
+// Helpers (UI / form validation — not upload-related)
 // ---------------------------------------------------------------------------
-
-const SLOT_DEFS: { key: SlotKey; label: string; icon: string; endpoint: string }[] = [
-  { key: 'graph', label: 'Graph Data', icon: '🔗', endpoint: '/query/upload/graph' },
-  { key: 'telemetry', label: 'Telemetry', icon: '📊', endpoint: '/query/upload/telemetry' },
-  { key: 'runbooks', label: 'Runbooks', icon: '📋', endpoint: '/query/upload/runbooks' },
-  { key: 'tickets', label: 'Tickets', icon: '🎫', endpoint: '/query/upload/tickets' },
-  { key: 'prompts', label: 'Prompts', icon: '📝', endpoint: '/query/upload/prompts' },
-];
 
 const KNOWN_SUFFIXES: SlotKey[] = ['graph', 'telemetry', 'runbooks', 'tickets', 'prompts'];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function detectSlot(filename: string): { slot: SlotKey; scenarioName: string } | null {
   const base = filename.replace(/\.(tar\.gz|tgz)$/i, '');
@@ -54,8 +43,6 @@ function formatBytes(bytes: number): string {
 // Component
 // ---------------------------------------------------------------------------
 
-type ModalState = 'idle' | 'uploading' | 'saving' | 'done' | 'error';
-
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -69,6 +56,7 @@ interface Props {
     example_questions?: string[];
     graph_styles?: Record<string, unknown>;
     domain?: string;
+    graph_connector?: string;
     upload_results: Record<string, unknown>;
   }) => Promise<unknown>;
 }
@@ -77,75 +65,45 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   const [name, setName] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
-  const scenarioMetadataRef = useRef<Record<string, unknown> | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [slots, setSlots] = useState<Record<SlotKey, ScenarioUploadSlot>>(() => makeEmptySlots());
-  const [modalState, setModalState] = useState<ModalState>('idle');
-  const [overallPct, setOverallPct] = useState(0);
-  const [currentUploadStep, setCurrentUploadStep] = useState('');
-  const [globalError, setGlobalError] = useState('');
-  const [showOverrideConfirm, setShowOverrideConfirm] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
-  // Upload timer
-  const uploadStartRef = useRef<number>(0);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const {
+    modalState,
+    overallPct,
+    currentUploadStep,
+    globalError,
+    slots,
+    elapsedSeconds,
+    showOverrideConfirm,
+    setShowOverrideConfirm,
+    handleSlotFile,
+    startUpload,
+    scenarioMetadataRef: _scenarioMetadataRef,
+    detectedConnector,
+    updateSlot,
+    cancelUpload,
+    allDone,
+  } = useScenarioUpload({
+    name,
+    displayName,
+    description,
+    existingNames,
+    saveScenarioMeta,
+    onSaved,
+    onClose,
+    open,
+  });
 
-  function formatElapsed(seconds: number): string {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return m > 0 ? `${m}m ${s.toString().padStart(2, '0')}s` : `${s}s`;
-  }
-
-  function stopTimer() {
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
-  }
-
-  function makeEmptySlots(): Record<SlotKey, ScenarioUploadSlot> {
-    const result: Partial<Record<SlotKey, ScenarioUploadSlot>> = {};
-    for (const def of SLOT_DEFS) {
-      result[def.key] = {
-        key: def.key,
-        label: def.label,
-        icon: def.icon,
-        file: null,
-        status: 'empty',
-        progress: '',
-        pct: 0,
-        result: null,
-        error: null,
-      };
-    }
-    return result as Record<SlotKey, ScenarioUploadSlot>;
-  }
-
-  // Reset state when modal opens
+  // Reset local form fields when modal opens
   useEffect(() => {
     if (open) {
       setName('');
       setDisplayName('');
       setDescription('');
       setShowAdvanced(false);
-      setSlots(makeEmptySlots());
-      setModalState('idle');
-      setOverallPct(0);
-      setCurrentUploadStep('');
-      setGlobalError('');
-      setShowOverrideConfirm(false);
-      setElapsedSeconds(0);
-      stopTimer();
     }
   }, [open]);
-
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => stopTimer();
-  }, []);
 
   // Close on Escape (when not uploading)
   useEffect(() => {
@@ -160,15 +118,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     return () => window.removeEventListener('keydown', handler);
   }, [open, modalState, onClose]);
 
-  const updateSlot = useCallback((key: SlotKey, updates: Partial<ScenarioUploadSlot>) => {
-    setSlots(prev => ({ ...prev, [key]: { ...prev[key], ...updates } }));
-  }, []);
-
-  // Assign a file to a slot
-  const assignFile = useCallback((key: SlotKey, file: File) => {
-    updateSlot(key, { file, status: 'staged', progress: '', pct: 0, result: null, error: null });
-  }, [updateSlot]);
-
   // Handle multi-file drop
   const handleDrop = useCallback((files: FileList | File[]) => {
     const fileArr = Array.from(files);
@@ -177,7 +126,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
     for (const file of fileArr) {
       const detected = detectSlot(file.name);
       if (detected) {
-        assignFile(detected.slot, file);
+        handleSlotFile(detected.slot, file);
         detectedNames.push(detected.scenarioName);
       } else {
         // Can't reliably auto-assign without filename detection
@@ -193,146 +142,26 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
       setName(sorted[0][0]);
     }
-  }, [assignFile, name]);
+  }, [handleSlotFile]);
 
   const nameError = name ? validateName(name) : null;
 
   const allFilled = SLOT_DEFS.every(d => slots[d.key].file);
   const canSave = !!name && !nameError && allFilled && modalState === 'idle';
 
-  // Check if all previously completed slots are done (for retry scenario)
-  const allDone = SLOT_DEFS.every(d => slots[d.key].status === 'done');
-
   // Handle Save button click
   const handleSave = useCallback(async () => {
     if (!canSave && !allDone) return;
-
-    // Check if scenario already exists — show confirmation
-    if (existingNames.includes(name) && !showOverrideConfirm) {
-      setShowOverrideConfirm(true);
-      return;
-    }
-    setShowOverrideConfirm(false);
-
-    setModalState('uploading');
-    setGlobalError('');
-    abortRef.current = new AbortController();
-
-    // Start upload timer
-    uploadStartRef.current = Date.now();
-    setElapsedSeconds(0);
-    timerIntervalRef.current = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - uploadStartRef.current) / 1000));
-    }, 1000);
-
-    const uploadResults: Record<string, unknown> = {};
-
-    // Upload sequentially: graph → telemetry → runbooks → tickets → prompts
-    for (let i = 0; i < SLOT_DEFS.length; i++) {
-      const def = SLOT_DEFS[i];
-      const slot = slots[def.key];
-
-      // Skip already-done slots (for retry)
-      if (slot.status === 'done') {
-        uploadResults[def.key] = slot.result;
-        continue;
-      }
-
-      if (!slot.file) continue;
-
-      updateSlot(def.key, { status: 'uploading', progress: 'Starting...', pct: 0 });
-      setCurrentUploadStep(`Uploading ${def.label}...`);
-
-      try {
-        const result = await uploadWithSSE(
-          def.endpoint,
-          slot.file,
-          {
-            onProgress: (data) => {
-              updateSlot(def.key, { progress: data.detail, pct: data.pct, category: data.category });
-              setCurrentUploadStep(data.category ? `${def.label}: ${data.category}` : `Uploading ${def.label}...`);
-              const overallBase = (i / SLOT_DEFS.length) * 100;
-              const slotContribution = (data.pct / 100) * (100 / SLOT_DEFS.length);
-              setOverallPct(Math.round(overallBase + slotContribution));
-            },
-            onComplete: (data) => {
-              updateSlot(def.key, { status: 'done', result: data, progress: 'Complete', pct: 100 });
-              uploadResults[def.key] = data;
-              // Capture metadata from graph upload for save call
-              if (def.key === 'graph' && data.scenario_metadata) {
-                scenarioMetadataRef.current = data.scenario_metadata as Record<string, unknown>;
-              }
-            },
-            onError: (data) => {
-              updateSlot(def.key, { status: 'error', error: data.error });
-            },
-          },
-          { scenario_name: name },
-          abortRef.current!.signal,
-        );
-
-        // If no complete event was received but no error either, mark as done
-        if (slot.status !== 'error' && result) {
-          uploadResults[def.key] = result;
-        }
-
-        // Check if the slot errored (set by onError handler)
-        if (slots[def.key]?.status === 'error') {
-          setModalState('idle');
-          return;
-        }
-      } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') {
-          setModalState('idle');
-          return;
-        }
-        updateSlot(def.key, { status: 'error', error: String(e) });
-        setModalState('idle');
-        return;
-      }
-    }
-
-    // All uploads done, save metadata
-    setModalState('saving');
-    setCurrentUploadStep('Saving scenario metadata...');
-    setOverallPct(95);
-
-    try {
-      const meta = scenarioMetadataRef.current;
-      await saveScenarioMeta({
-        name,
-        display_name: (meta?.display_name as string) || displayName || undefined,
-        description: (meta?.description as string) || description || undefined,
-        use_cases: meta?.use_cases as string[] | undefined,
-        example_questions: meta?.example_questions as string[] | undefined,
-        graph_styles: meta?.graph_styles as Record<string, unknown> | undefined,
-        domain: meta?.domain as string | undefined,
-        upload_results: uploadResults,
-      });
-      setModalState('done');
-      setOverallPct(100);
-      stopTimer();
-      // Auto-close after brief delay
-      setTimeout(() => {
-        onSaved();
-        onClose();
-      }, 1500);
-    } catch (e) {
-      setGlobalError(String(e));
-      setModalState('error');
-      stopTimer();
-    }
-  }, [canSave, allDone, existingNames, name, showOverrideConfirm, slots, updateSlot, saveScenarioMeta, displayName, description, onSaved, onClose]);
+    startUpload();
+  }, [canSave, allDone, startUpload]);
 
   const handleCancel = useCallback(() => {
     if (modalState === 'uploading') {
-      abortRef.current?.abort();
-      stopTimer();
-      setModalState('idle');
+      cancelUpload();
     } else {
       onClose();
     }
-  }, [modalState, onClose]);
+  }, [modalState, onClose, cancelUpload]);
 
   if (!open) return null;
 
@@ -490,13 +319,27 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
                   def={def}
                   slot={slot}
                   disabled={modalState !== 'idle'}
-                  onFile={(file) => assignFile(def.key, file)}
+                  onFile={(file) => handleSlotFile(def.key, file)}
                   onClear={() => updateSlot(def.key, { file: null, status: 'empty', progress: '', pct: 0, result: null, error: null })}
                   onRetry={slot.status === 'error' ? () => updateSlot(def.key, { status: 'staged', error: null }) : undefined}
                 />
               );
             })}
           </div>
+
+          {/* Fabric connector detected */}
+          {detectedConnector === 'fabric-gql' && modalState === 'idle' && (
+            <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-3 flex items-start gap-2">
+              <span className="text-cyan-400 text-sm leading-none mt-0.5">⬡</span>
+              <div>
+                <p className="text-xs font-medium text-cyan-300">Fabric Graph Connector Detected</p>
+                <p className="text-[11px] text-cyan-400/70 mt-0.5">
+                  Graph data will be managed via Microsoft Fabric. After saving, use the
+                  Fabric Setup tab in Settings to provision resources.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Upload Progress */}
           {(modalState === 'uploading' || modalState === 'saving') && (
@@ -505,12 +348,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
                 <span>{currentUploadStep}</span>
                 <span>{overallPct}%</span>
               </div>
-              <div className="w-full bg-neutral-bg1 rounded-full h-1.5">
-                <div
-                  className="bg-brand h-1.5 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.max(overallPct, 3)}%` }}
-                />
-              </div>
+              <ProgressBar pct={Math.max(overallPct, 3)} className="bg-neutral-bg1" />
               <div className="flex items-center justify-between mt-1">
                 <span className="text-xs text-text-secondary">
                   Overall: {SLOT_DEFS.filter(d => slots[d.key].status === 'done').length} of {SLOT_DEFS.length}
@@ -650,9 +488,7 @@ function FileSlot({ def, slot, disabled, onFile, onClear, onRetry }: {
           {slot.category && (
             <p className="text-[10px] font-medium text-brand truncate">{slot.category}</p>
           )}
-          <div className="w-full bg-neutral-bg2 rounded-full h-1">
-            <div className="bg-brand h-1 rounded-full transition-all" style={{ width: `${Math.max(slot.pct, 5)}%` }} />
-          </div>
+          <ProgressBar pct={Math.max(slot.pct, 5)} className="h-1" />
           <p className="text-[10px] text-text-muted truncate">{slot.progress}</p>
         </div>
       )}

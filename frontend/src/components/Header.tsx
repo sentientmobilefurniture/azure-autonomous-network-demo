@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { HealthDot } from './HealthDot';
 import { SettingsModal } from './SettingsModal';
 import { ScenarioChip } from './ScenarioChip';
@@ -8,13 +8,24 @@ import { useScenarioContext } from '../context/ScenarioContext';
 export function Header() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { provisioningStatus } = useScenarioContext();
+  const [agentCount, setAgentCount] = useState(0);
+
+  // Fetch actual agent count when provisioning completes
+  useEffect(() => {
+    if (provisioningStatus.state === 'done' || provisioningStatus.state === 'idle') {
+      fetch('/api/agents')
+        .then(r => r.json())
+        .then(d => setAgentCount(d.agents?.length ?? 0))
+        .catch(() => {});
+    }
+  }, [provisioningStatus.state]);
 
   const agentLabel = (() => {
     switch (provisioningStatus.state) {
       case 'provisioning': return 'Provisioning...';
-      case 'done': return '5 Agents ✓';
+      case 'done': return `${agentCount || '?'} Agent${agentCount !== 1 ? 's' : ''} ✓`;
       case 'error': return 'Error';
-      default: return '5 Agents';
+      default: return agentCount > 0 ? `${agentCount} Agent${agentCount !== 1 ? 's' : ''}` : 'No Agents';
     }
   })();
 

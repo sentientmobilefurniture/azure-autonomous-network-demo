@@ -1,12 +1,21 @@
 # Architecture — AI Incident Investigator
 
-> **Last updated:** 2026-02-17 — reflects V10 config-driven architecture
-> (V10generalflow.md phases 0-13), including: config-driven N-agent
-> provisioning from `scenario.yaml`, `DocumentStore` Protocol + registry,
-> `GraphBackend` registry, OpenAPI spec templates, `_normalize_manifest()`
-> v1→v2 backward compatibility, config store + validator, resource graph
-> API, frontend `EmptyState` + `ResourceVisualizer`, and all prior work
-> (V8 refactor, scenario management, V9.5 fixes, V10 interaction history).
+> **Last updated:** 2026-02-17 — reflects V11 Fabric Integration (Phases 0–3, fully implemented)
+> on top of V10 config-driven architecture. V11 adds: `FabricGQLBackend`
+> (ISO GQL queries via Fabric REST API), `fabric_config.py` adapter,
+> `router_fabric_discovery.py` (workspace discovery), `fabric_provision.py`
+> (Lakehouse/Eventhouse/Ontology provisioning with SSE), `CONNECTOR_TO_BACKEND`
+> dual-key mapping, async `get_scenario_context()` with config-store lookup,
+> `telco-noc-fabric` reference scenario, `language_gql.md` prompt fragment,
+> `useFabricDiscovery` hook, Fabric Setup tab in SettingsModal, `graph_connector`
+> field on `SavedScenario`, backend badges on ScenarioChip, and Fabric-aware
+> AddScenarioModal. No infrastructure/Bicep changes.
+>
+> Prior work: V10 config-driven N-agent provisioning, `DocumentStore` Protocol,
+> `GraphBackend` registry, OpenAPI spec templates, `_normalize_manifest()`,
+> config store + validator, resource graph API, frontend `EmptyState` +
+> `ResourceVisualizer`, V8 refactor, scenario management, V9.5 fixes,
+> V10 interaction history.
 >
 > This document has been split into focused sections for targeted referencing.
 > See the individual files in [`architecture/`](architecture/) below.

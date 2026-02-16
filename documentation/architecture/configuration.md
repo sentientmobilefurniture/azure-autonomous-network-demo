@@ -10,7 +10,7 @@ All config lives in `azure_config.env`. Key variables:
 | `AI_FOUNDRY_PROJECT_NAME` | postprovision / Bicep | Agent provisioner, orchestrator |
 | `AI_FOUNDRY_NAME` | postprovision / Bicep | Search connection ID |
 | `MODEL_DEPLOYMENT_NAME` | user (default: gpt-4.1) | Agent model |
-| `GRAPH_BACKEND` | user (default: cosmosdb) | Backend selector (cosmosdb / mock) |
+| `GRAPH_BACKEND` | user (default: cosmosdb) | Backend selector (cosmosdb / mock / fabric-gql) |
 | `COSMOS_GREMLIN_ENDPOINT` | postprovision | Gremlin WSS connection |
 | `COSMOS_GREMLIN_PRIMARY_KEY` | postprovision (`az cosmosdb keys list`) | Gremlin key auth |
 | `COSMOS_GREMLIN_DATABASE` | Bicep (default: networkgraph) | Gremlin db (shared across scenarios) |
@@ -26,6 +26,24 @@ All config lives in `azure_config.env`. Key variables:
 | `CONTAINER_APP_HOSTNAME` | runtime (auto-set by Azure) | Fallback for `GRAPH_QUERY_API_URI` |
 | `AI_FOUNDRY_ENDPOINT` | postprovision | AI Foundry hub endpoint (separate from PROJECT_ENDPOINT) |
 | `GRAPH_QUERY_API_PRINCIPAL_ID` | postprovision | Managed identity principal for RBAC |
+
+### Fabric Variables (V11)
+
+The following variables are required when using the `fabric-gql` backend.
+They are read by `adapters/fabric_config.py` and consumed by `backends/fabric.py`
+and `router_fabric_discovery.py`. These are **not provisioned via Bicep** — they
+are set manually in `azure_config.env` or as Container App env vars when Fabric
+integration is enabled.
+
+| Variable | Set by | Used by |
+|----------|--------|---------|
+| `FABRIC_WORKSPACE_ID` | user | Fabric REST API calls (workspace scope) |
+| `FABRIC_GRAPH_MODEL_ID` | user | `executeQuery` endpoint target |
+| `FABRIC_API_URL` | user (default: `https://api.fabric.microsoft.com/v1`) | Fabric REST API base URL |
+| `FABRIC_SCOPE` | user (default: `https://api.fabric.microsoft.com/.default`) | AAD token scope |
+| `FABRIC_EVENTHOUSE_ID` | user (future) | Eventhouse telemetry queries |
+| `EVENTHOUSE_QUERY_URI` | user (future) | Eventhouse KQL endpoint |
+| `EVENTHOUSE_DATABASE` | user (future) | Eventhouse database name |
 
 ### Removed Variables (V10)
 

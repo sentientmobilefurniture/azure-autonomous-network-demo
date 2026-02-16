@@ -2,7 +2,6 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import type { TopologyNode, TopologyEdge } from '../../hooks/useTopology';
 import { useNodeColor } from '../../hooks/useNodeColor';
-import { NODE_SIZES } from './graphConstants';
 import { useScenarioContext } from '../../context/ScenarioContext';
 
 type GNode = NodeObject<TopologyNode>;
@@ -64,7 +63,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
       (label: string) => {
         const scenarioSize = scenarioNodeSizes[label];
         if (scenarioSize != null) return Math.round(scenarioSize / 3); // normalize from 12-30 to 4-10
-        return NODE_SIZES[label] ?? 6;
+        return 6; // default size
       },
       [scenarioNodeSizes],
     );

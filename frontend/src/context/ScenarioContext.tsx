@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
+import type { SavedScenario } from '../types';
 
 interface ScenarioState {
   /** Currently active saved scenario name, or null for custom/manual mode */
@@ -17,6 +18,14 @@ interface ScenarioState {
   scenarioNodeColors: Record<string, string>;
   /** Scenario-driven node sizes from graph_styles */
   scenarioNodeSizes: Record<string, number>;
+  /** All saved scenarios from Cosmos (single source of truth) */
+  savedScenarios: SavedScenario[];
+  /** The full record for the currently active scenario, or null */
+  activeScenarioRecord: SavedScenario | null;
+  /** Whether saved scenarios are loading */
+  scenariosLoading: boolean;
+  /** Refresh saved scenarios from Cosmos */
+  refreshScenarios: () => Promise<void>;
   /** Set active scenario (auto-derives all bindings when non-null) */
   setActiveScenario: (name: string | null, scenario?: { resources?: { graph?: string; runbooks_index?: string; tickets_index?: string; prompts_container?: string } }) => void;
   /** Set active graph */
@@ -64,6 +73,26 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
   const [activePromptSet, setActivePromptSet] = useState(() => derivePrompts(activeScenario));
   const [provisioningStatus, setProvisioningStatus] = useState<ProvisioningStatus>({ state: 'idle' });
 
+  // Saved scenarios from Cosmos (single source of truth — eliminates 4x independent fetches)
+  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>([]);
+  const [scenariosLoading, setScenariosLoading] = useState(false);
+
+  const refreshScenarios = useCallback(async () => {
+    setScenariosLoading(true);
+    try {
+      const res = await fetch('/query/scenarios/saved');
+      const data = await res.json();
+      setSavedScenarios(data.scenarios || []);
+    } catch (e) {
+      console.warn('Failed to fetch saved scenarios:', e);
+    } finally {
+      setScenariosLoading(false);
+    }
+  }, []);
+
+  // Derived: full record for the currently active scenario
+  const activeScenarioRecord = savedScenarios.find(s => s.id === activeScenario) ?? null;
+
   // Whether we've finished validating the persisted scenario against Cosmos
   const [scenarioReady, setScenarioReady] = useState<boolean>(
     () => localStorage.getItem('activeScenario') === null,
@@ -102,7 +131,11 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
   // Clears the ghost if the Cosmos record was deleted (e.g. after azd up).
   // Sets scenarioReady=true when done (or after 5s timeout).
   useEffect(() => {
-    if (!activeScenario) return;
+    if (!activeScenario) {
+      // Still fetch scenarios for ScenarioChip etc.
+      refreshScenarios();
+      return;
+    }
     let cancelled = false;
     const timeout = setTimeout(() => {
       if (!cancelled) setScenarioReady(true);
@@ -111,7 +144,9 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
-        const saved: string[] = (data.scenarios ?? []).map((s: { id: string }) => s.id);
+        const scenarios = data.scenarios ?? [];
+        setSavedScenarios(scenarios);
+        const saved: string[] = scenarios.map((s: { id: string }) => s.id);
         if (!saved.includes(activeScenario)) {
           console.warn(`Persisted scenario "${activeScenario}" no longer exists — clearing.`);
           setActiveScenarioRaw(null);
@@ -162,6 +197,10 @@ export function ScenarioProvider({ children }: { children: ReactNode }) {
       provisioningStatus,
       scenarioNodeColors,
       scenarioNodeSizes,
+      savedScenarios,
+      activeScenarioRecord,
+      scenariosLoading,
+      refreshScenarios,
       setActiveScenario,
       setActiveGraph,
       setActiveRunbooksIndex,
