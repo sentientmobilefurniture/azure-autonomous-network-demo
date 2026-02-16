@@ -13,6 +13,7 @@ import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { EmptyState } from './components/EmptyState';
 import { AddScenarioModal } from './components/AddScenarioModal';
+import { TerminalPanel } from './components/TerminalPanel';
 import { useScenarioContext } from './context/ScenarioContext';
 import { useScenarios } from './hooks/useScenarios';
 import { formatTimeAgo } from './utils/formatTime';
@@ -119,95 +120,112 @@ export default function App() {
       {/* Tab bar */}
       <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
-      {/* Zone 2 + 3: Main content + sidebar */}
-      <div className="flex-1 min-h-0 flex" role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={activeTab}>
-        {activeTab === 'resources' ? (
-          <ResourceVisualizer />
-        ) : activeTab === 'investigate' ? (
-          !activeScenario ? (
-            <EmptyState onUpload={() => setAddModalOpen(true)} />
-          ) : (
-          <>
-            {/* Main content area */}
-            <div className="flex-1 min-w-0">
-              <PanelGroup orientation="vertical" className="h-full">
-                {/* Zone 2: Metrics bar — draggable bottom edge */}
-                <Panel defaultSize={30} minSize={15}>
-                  <div className="h-full border-b border-white/10">
-                    <MetricsBar />
-                  </div>
-                </Panel>
-
-                <PanelResizeHandle className="vertical-resize-handle" />
-
-                {/* Zone 3: Two-panel split — fills remaining height */}
-                <Panel defaultSize={70} minSize={20}>
-                  <div className="h-full flex flex-col min-h-0">
-                    {/* Viewing past interaction banner */}
-                    {viewingInteraction && (
-                      <div className="flex items-center justify-between px-4 py-1.5 bg-brand/10 border-b border-brand/20 shrink-0">
-                        <span className="text-xs text-brand">
-                          ◀ Viewing interaction from {formatTimeAgo(viewingInteraction.created_at)}
-                          <span className="ml-2 px-1.5 py-0.5 rounded bg-brand/15 text-[10px] font-medium">
-                            {viewingInteraction.scenario}
-                          </span>
-                        </span>
-                        <button
-                          onClick={() => setViewingInteraction(null)}
-                          className="text-xs text-brand hover:text-brand/80 font-medium"
-                        >
-                          Clear
-                        </button>
+      {/* Outer vertical split: main content (top) + terminal panel (bottom) */}
+      <PanelGroup
+        orientation="vertical"
+        className="flex-1 min-h-0"
+        id="app-terminal-layout"
+      >
+        {/* Main content panel */}
+        <Panel defaultSize={75} minSize={30}>
+          <div className="h-full flex" role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={activeTab}>
+            {activeTab === 'resources' ? (
+              <ResourceVisualizer />
+            ) : activeTab === 'investigate' ? (
+              !activeScenario ? (
+                <EmptyState onUpload={() => setAddModalOpen(true)} />
+              ) : (
+              <>
+                {/* Main content area */}
+                <div className="flex-1 min-w-0">
+                  <PanelGroup orientation="vertical" className="h-full">
+                    {/* Zone 2: Metrics bar — draggable bottom edge */}
+                    <Panel defaultSize={30} minSize={15}>
+                      <div className="h-full border-b border-white/10">
+                        <MetricsBar />
                       </div>
-                    )}
+                    </Panel>
 
-                    <div className="flex-1 flex min-h-0">
-                      {/* Left: Investigation */}
-                      <InvestigationPanel
-                        alert={alert}
-                        onAlertChange={setAlert}
-                        onSubmit={submitAlert}
-                        steps={displaySteps}
-                        thinking={thinking}
-                        errorMessage={errorMessage}
-                        running={running}
-                        runStarted={runStarted}
-                        runMeta={displayRunMeta}
-                      />
+                    <PanelResizeHandle className="vertical-resize-handle" />
 
-                      {/* Right: Diagnosis */}
-                      <DiagnosisPanel
-                        finalMessage={displayDiagnosis}
-                        running={running}
-                        runMeta={displayRunMeta}
-                      />
-                    </div>
-                  </div>
-                </Panel>
-              </PanelGroup>
-            </div>
+                    {/* Zone 3: Two-panel split — fills remaining height */}
+                    <Panel defaultSize={70} minSize={20}>
+                      <div className="h-full flex flex-col min-h-0">
+                        {/* Viewing past interaction banner */}
+                        {viewingInteraction && (
+                          <div className="flex items-center justify-between px-4 py-1.5 bg-brand/10 border-b border-brand/20 shrink-0">
+                            <span className="text-xs text-brand">
+                              ◀ Viewing interaction from {formatTimeAgo(viewingInteraction.created_at)}
+                              <span className="ml-2 px-1.5 py-0.5 rounded bg-brand/15 text-[10px] font-medium">
+                                {viewingInteraction.scenario}
+                              </span>
+                            </span>
+                            <button
+                              onClick={() => setViewingInteraction(null)}
+                              className="text-xs text-brand hover:text-brand/80 font-medium"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        )}
 
-            {/* Interaction history sidebar */}
-            <InteractionSidebar
-              interactions={interactions}
-              loading={interactionsLoading}
-              onSelect={(i) => { setViewingInteraction(i); setAlert(i.query); }}
-              onDelete={deleteInteraction}
-              activeInteractionId={viewingInteraction?.id ?? null}
-              collapsed={sidebarCollapsed}
-              onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-            />
-          </>
-          )
-        ) : (
-          <ScenarioInfoPanel
-            onSelectQuestion={(q) => {
-              setAlert(q);
-              setActiveTab('investigate');
-            }}
-          />
-        )}
-      </div>
+                        <div className="flex-1 flex min-h-0">
+                          {/* Left: Investigation */}
+                          <InvestigationPanel
+                            alert={alert}
+                            onAlertChange={setAlert}
+                            onSubmit={submitAlert}
+                            steps={displaySteps}
+                            thinking={thinking}
+                            errorMessage={errorMessage}
+                            running={running}
+                            runStarted={runStarted}
+                            runMeta={displayRunMeta}
+                          />
+
+                          {/* Right: Diagnosis */}
+                          <DiagnosisPanel
+                            finalMessage={displayDiagnosis}
+                            running={running}
+                            runMeta={displayRunMeta}
+                          />
+                        </div>
+                      </div>
+                    </Panel>
+                  </PanelGroup>
+                </div>
+
+                {/* Interaction history sidebar */}
+                <InteractionSidebar
+                  interactions={interactions}
+                  loading={interactionsLoading}
+                  onSelect={(i) => { setViewingInteraction(i); setAlert(i.query); }}
+                  onDelete={deleteInteraction}
+                  activeInteractionId={viewingInteraction?.id ?? null}
+                  collapsed={sidebarCollapsed}
+                  onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+                />
+              </>
+              )
+            ) : (
+              <ScenarioInfoPanel
+                onSelectQuestion={(q) => {
+                  setAlert(q);
+                  setActiveTab('investigate');
+                }}
+              />
+            )}
+          </div>
+        </Panel>
+
+        {/* Resizable divider */}
+        <PanelResizeHandle className="h-1 bg-white/5 hover:bg-brand/30 transition-colors cursor-row-resize" />
+
+        {/* Persistent terminal panel — always visible */}
+        <Panel defaultSize={25} minSize={8} collapsible>
+          <TerminalPanel />
+        </Panel>
+      </PanelGroup>
 
       {/* Upload scenario modal — triggered from empty state or ScenarioChip */}
       <AddScenarioModal

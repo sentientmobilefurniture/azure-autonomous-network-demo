@@ -21,7 +21,8 @@ const LEVEL_COLORS: Record<string, string> = {
 const MAX_LINES = 200;
 
 interface LogStreamProps {
-  url?: string;
+  /** Single SSE url or array of urls to merge */
+  url?: string | string[];
   title?: string;
 }
 
@@ -47,31 +48,45 @@ export function LogStream({ url = '/api/logs', title = 'Logs' }: LogStreamProps)
     setAutoScroll(atBottom);
   };
 
-  // SSE connection
+  // SSE connection(s) — supports single url or multiple merged sources
   useEffect(() => {
-    const evtSource = new EventSource(url);
+    const urls = Array.isArray(url) ? url : [url];
+    const sources: EventSource[] = [];
+    let openCount = 0;
 
-    evtSource.addEventListener('log', (ev) => {
-      try {
-        const raw = JSON.parse(ev.data);
-        const entry: LogEntry = { ...raw, id: ++_logIdCounter };
-        setLines((prev) => {
-          const next = [...prev, entry];
-          return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
-        });
-      } catch {
-        // ignore malformed events
-      }
-    });
-
-    evtSource.onopen = () => setConnected(true);
-    evtSource.onerror = () => {
-      setConnected(false);
-      // EventSource auto-reconnects
+    const addEntry = (raw: Record<string, unknown>) => {
+      const entry: LogEntry = { ...(raw as Omit<LogEntry, 'id'>), id: ++_logIdCounter };
+      setLines((prev) => {
+        const next = [...prev, entry];
+        return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
+      });
     };
 
-    return () => evtSource.close();
-  }, [url]);
+    for (const u of urls) {
+      const evtSource = new EventSource(u);
+
+      evtSource.addEventListener('log', (ev) => {
+        try {
+          addEntry(JSON.parse(ev.data));
+        } catch {
+          // ignore malformed events
+        }
+      });
+
+      evtSource.onopen = () => {
+        openCount++;
+        if (openCount > 0) setConnected(true);
+      };
+      evtSource.onerror = () => {
+        openCount = Math.max(0, openCount - 1);
+        if (openCount === 0) setConnected(false);
+      };
+
+      sources.push(evtSource);
+    }
+
+    return () => sources.forEach((s) => s.close());
+  }, [Array.isArray(url) ? url.join(',') : url]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="glass-card h-full flex flex-col overflow-hidden">

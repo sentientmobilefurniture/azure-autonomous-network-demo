@@ -23,7 +23,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.paths import PROJECT_ROOT, AGENT_IDS_FILE
 from app.agent_ids import load_agent_ids
 
-logger = logging.getLogger("api.config")
+logger = logging.getLogger("app.config")
 
 router = APIRouter(prefix="/api/config", tags=["configuration"])
 

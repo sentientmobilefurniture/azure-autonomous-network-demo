@@ -11,17 +11,20 @@ Run locally:
 
 import logging
 import os
+import time as _time
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import alert, agents, logs, config
-from app.routers import fabric_provision
-
-# Configure logging so app.* loggers emit INFO
+# Configure logging BEFORE importing routers (logs.py adds a handler
+# to the root logger at import time; if basicConfig runs after that,
+# it becomes a no-op and the root level stays at WARNING).
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("app").setLevel(logging.DEBUG)
+
+from app.routers import alert, agents, logs, config  # noqa: E402
+from app.routers import fabric_provision  # noqa: E402
 
 # Load project-level config (CORS_ORIGINS, etc.)
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "azure_config.env"))
@@ -48,6 +51,28 @@ app.include_router(agents.router)
 app.include_router(logs.router)
 app.include_router(config.router)
 app.include_router(fabric_provision.router)
+
+logger = logging.getLogger("app")
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every incoming request with timing info."""
+    logger.info("▶ %s %s", request.method, request.url.path)
+    t0 = _time.time()
+    response = await call_next(request)
+    elapsed_ms = (_time.time() - t0) * 1000
+    if response.status_code >= 400:
+        logger.warning(
+            "◀ %s %s → %d  (%.0fms)",
+            request.method, request.url.path, response.status_code, elapsed_ms,
+        )
+    else:
+        logger.info(
+            "◀ %s %s → %d  (%.0fms)",
+            request.method, request.url.path, response.status_code, elapsed_ms,
+        )
+    return response
 
 
 @app.get("/health")

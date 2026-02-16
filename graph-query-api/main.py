@@ -148,12 +148,36 @@ _sse_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s:
 _sse_handler.addFilter(lambda r: r.name.startswith(("graph-query-api",)))
 logging.getLogger().addHandler(_sse_handler)
 
+# Data-ops only: ingest, cosmos, indexer, blob
+_data_ops_broadcaster = LogBroadcaster(max_buffer=200, max_queue=500)
+_data_ops_handler = _data_ops_broadcaster.get_handler(level=logging.DEBUG)
+_data_ops_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+_data_ops_handler.addFilter(
+    lambda r: r.name.startswith((
+        "graph-query-api.ingest",
+        "graph-query-api.cosmos",
+        "graph-query-api.indexer",
+        "graph-query-api.blob",
+    ))
+)
+logging.getLogger().addHandler(_data_ops_handler)
+
 
 @app.get("/query/logs", summary="Stream graph-query-api logs via SSE")
 async def stream_logs():
-    """Stream graph-query-api logs via SSE (accessible through nginx's /query/* routing)."""
+    """Stream graph-query-api logs via SSE."""
     return StreamingResponse(
         _log_broadcaster.subscribe(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/query/logs/data-ops", summary="Stream data-operation logs via SSE")
+async def stream_data_ops_logs():
+    """Stream only data-operation logs (ingest, cosmos, indexer, blob)."""
+    return StreamingResponse(
+        _data_ops_broadcaster.subscribe(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
