@@ -180,7 +180,7 @@ async def save_scenario(req: ScenarioSaveRequest):
         existing = await store.get(name, partition_key=name)
         if existing:
             doc["created_at"] = existing.get("created_at", now)
-    except (KeyError, ValueError):
+    except Exception:
         pass  # Document doesn't exist yet — OK
 
     result = await store.upsert(doc)

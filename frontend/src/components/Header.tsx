@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
 import { HealthDot } from './HealthDot';
-import { SettingsModal } from './SettingsModal';
 import { ScenarioChip } from './ScenarioChip';
 import { ProvisioningBanner } from './ProvisioningBanner';
+import { FabricSetupModal } from './FabricSetupModal';
 import { useScenarioContext } from '../context/ScenarioContext';
 
 export function Header() {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const { provisioningStatus } = useScenarioContext();
+  const { provisioningStatus, activeScenarioRecord } = useScenarioContext();
   const [agentCount, setAgentCount] = useState(0);
+  const [fabricOpen, setFabricOpen] = useState(false);
+
+  const isFabricScenario = activeScenarioRecord?.graph_connector === 'fabric-gql';
 
   // Fetch actual agent count when provisioning completes
   useEffect(() => {
@@ -58,6 +60,15 @@ export function Header() {
             Multi-agent diagnosis
           </span>
           <ScenarioChip />
+          {isFabricScenario && (
+            <button
+              onClick={() => setFabricOpen(true)}
+              className="text-xs text-cyan-400 hover:text-cyan-300 bg-cyan-400/10 hover:bg-cyan-400/20 border border-cyan-400/30 px-2 py-0.5 rounded transition-colors"
+              title="Fabric Setup"
+            >
+              ⬡ Fabric
+            </button>
+          )}
         </div>
 
         {/* Right: status indicators + settings */}
@@ -67,17 +78,10 @@ export function Header() {
             <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />
             <span className={agentColor}>{agentLabel}</span>
           </span>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="text-text-muted hover:text-text-primary transition-colors text-sm"
-            title="Settings"
-          >
-            ⚙
-          </button>
         </div>
       </header>
       <ProvisioningBanner />
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <FabricSetupModal open={fabricOpen} onClose={() => setFabricOpen(false)} />
     </>
   );
 }

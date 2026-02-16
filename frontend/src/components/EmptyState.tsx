@@ -13,7 +13,11 @@ const STEPS = [
   { num: 4, label: 'Investigate', icon: '🔍' },
 ] as const;
 
-export function EmptyState() {
+interface EmptyStateProps {
+  onUpload: () => void;
+}
+
+export function EmptyState({ onUpload }: EmptyStateProps) {
   return (
     <div className="flex-1 flex items-center justify-center p-8">
       <div className="max-w-md w-full text-center space-y-6">
@@ -44,11 +48,13 @@ export function EmptyState() {
           ))}
         </div>
 
-        {/* CTA */}
-        <p className="text-xs text-text-muted">
-          Open <span className="font-medium text-text-secondary">⚙ Settings</span> in the header
-          to upload scenario data and configure agents.
-        </p>
+        {/* Primary CTA */}
+        <button
+          onClick={onUpload}
+          className="px-6 py-2.5 bg-brand hover:bg-brand/90 text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-brand/20"
+        >
+          📂 Upload Scenario
+        </button>
       </div>
     </div>
   );

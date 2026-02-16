@@ -26,9 +26,9 @@ v11fabricv2.md was implemented. The Fabric backend is wired up:
 - `telco-noc-fabric/scenario.yaml` — reference Fabric scenario ✅
 - `agent_provisioner.py` — Fabric GQL entries in CONNECTOR_OPENAPI_VARS ✅
 
-**But the experience is broken.** Five bugs in the frontend hook, a chicken-and-egg
-Fabric tab, an incomplete provision pipeline, and no coherent UX flow from "I have
-no Fabric" to "I have a working Fabric scenario."
+**But the experience is broken.** Four bugs in the frontend hook (one was fixed by the
+refactor), a chicken-and-egg Fabric tab, an incomplete provision pipeline, and no
+coherent UX flow from "I have no Fabric" to "I have a working Fabric scenario."
 
 ### What the refactor (v11refactor.md) changed
 
@@ -345,8 +345,8 @@ async def get_fabric_config() -> dict:
     if time.monotonic() - _cache_ts < _CACHE_TTL and _fabric_config_cache:
         return _fabric_config_cache
     try:
-        from config_store import fetch_fabric_config
-        stored = await fetch_fabric_config()
+        from config_store import fetch_scenario_config
+        stored = await fetch_scenario_config("__fabric__")
         _fabric_config_cache = {**_env_defaults(), **stored}
     except Exception:
         _fabric_config_cache = _env_defaults()
@@ -518,13 +518,17 @@ in place. New data-upload functions slot cleanly into the existing pipeline stru
 2. **Lakehouse step** — After `_find_or_create(... resource_type="Lakehouse" ...)`, add:
    - `_upload_csvs_to_onelake(workspace_id, lakehouse_id)` — ported from reference
    - `_load_delta_tables(workspace_id, lakehouse_id)` — one API call per CSV
-   - CSV source: `data/scenarios/{scenario_name}/data/entities/*.csv`
+   - CSV source: `data/scenarios/telco-noc/data/entities/*.csv` (the Fabric scenario
+     reuses `telco-noc`'s entity CSVs — `telco-noc-fabric/data/entities/` does not exist;
+     the provision pipeline must resolve to the base scenario's data directory or
+     the CSVs must be copied/symlinked into the Fabric scenario)
 
 3. **Eventhouse step** — After `_find_or_create(... resource_type="Eventhouse" ...)`, add:
    - `_discover_kql_database(workspace_id, eventhouse_id)` — auto-created
    - `_create_kql_tables(kql_uri, db_name)` — `.create-merge table` commands
    - `_ingest_kql_data(kql_uri, db_name)` — queued + inline fallback
-   - CSV source: `data/scenarios/{scenario_name}/data/telemetry/*.csv`
+   - CSV source: `data/scenarios/telco-noc/data/telemetry/*.csv` (same note — Fabric
+     scenario has no telemetry CSVs of its own)
 
 4. **Ontology step** — After `_find_or_create(... resource_type="Ontology" ...)`, add:
    - `_build_ontology_definition(workspace_id, lakehouse_id, eventhouse_id)` — ported
@@ -532,13 +536,13 @@ in place. New data-upload functions slot cleanly into the existing pipeline stru
    - `_discover_graph_model(workspace_id, ontology_name)` — find auto-created
    - `_update_config(FABRIC_GRAPH_MODEL_ID=graph_model_id)` — write to env
 
-4. **Conditional execution** — Read `scenario_name` from `FabricProvisionRequest`:
+5. **Conditional execution** — Read `scenario_name` from `FabricProvisionRequest`:
    - Load scenario config from config store
    - If `graph.connector === "fabric-gql"` → run Lakehouse + Ontology steps
    - If `telemetry.connector === "fabric-kql"` → run Eventhouse step
    - Always create workspace (it's the container for everything)
 
-5. **Respect provisioning concurrency guard** — Refactor #48 added an `asyncio.Lock`
+6. **Respect provisioning concurrency guard** — Refactor #48 added an `asyncio.Lock`
    to `config.py` for agent provisioning. Fabric provisioning should use its own lock
    (or the same one) to prevent concurrent provision requests from conflicting.
 
@@ -824,7 +828,7 @@ Inline scenario picker + CTA button.
 |---|--------|--------|
 | FE-1 | Fix B1: health check | `data.status === 'ok'` → `data.workspace_connected === true` (after BE-3) |
 | FE-2 | Fix B2: provision URL | `/api/fabric/provision/pipeline` → `/api/fabric/provision` |
-| FE-3 | Fix B3: stale closure | Remove `provisionState` from useCallback deps |
+| FE-3 | ~~Fix B3: stale closure~~ | **Already fixed by refactor** — replaced with `receivedTerminalEvent` flag |
 | FE-4 | Fix B4: discovery parsing | `data.items \|\| []` → `Array.isArray(data) ? data : []` |
 | FE-5 | Add `fetchLakehouses()` | Call `GET /query/fabric/lakehouses` |
 | FE-6 | Add `fetchKqlDatabases()` | Call `GET /query/fabric/kql-databases` |
@@ -834,20 +838,20 @@ Inline scenario picker + CTA button.
 
 | Component | Size est. | Description |
 |-----------|-----------|-------------|
-| `ConnectionsDrawer.tsx` | ~280 lines | Slide-over with grouped services + Fabric section |
+| `ConnectionsDrawer.tsx` | ~320 lines | Slide-over with grouped services + Fabric section (workspace setup UI + Data Agent section). Uses `<ModalShell>`, `<ProgressBar>`. |
 | `ServiceHealthSummary.tsx` | ~60 lines | "N/M Services" ambient indicator in header |
-| `ScenarioManagerModal.tsx` | ~550 lines | Refactored from SettingsModal, 2 tabs |
+| `ScenarioManagerModal.tsx` | ~400 lines | Composed from existing `settings/` tab components + `<ModalShell>` + `<BindingCard>` |
 
 ### Modified components
 
 | Component | Changes |
 |-----------|---------|
 | `Header.tsx` | Remove ⚙ gear, add ServiceHealthSummary + 🔌 button |
-| `ScenarioChip.tsx` | Add "⊞ Manage" action, backend badge, skeleton state |
-| `AddScenarioModal.tsx` | Add backend chooser cards, grey out graph upload for Fabric |
+| `ScenarioChip.tsx` | Add "⊞ Manage" action, backend badge, skeleton state. Uses `useClickOutside`. |
+| `AddScenarioModal.tsx` (514 lines) | Add backend chooser cards, grey out graph upload. Integrates with `useScenarioUpload`. |
 | `EmptyState.tsx` | Replace passive text with interactive checklist |
-| `ScenarioContext.tsx` | Already has `savedScenarios`/`scenariosLoading`/`activeScenarioRecord` from refactor #44. Remaining: add crossfade transition support. |
-| `App.tsx` | Remove loading overlay, add crossfade + slim loading banner |
+| `ScenarioContext.tsx` | Has `savedScenarios`/`scenariosLoading`/`activeScenarioRecord`. Remaining: crossfade support. |
+| `App.tsx` | Remove `!scenarioReady` overlay (L90-109), add crossfade + slim banner. `resetInvestigation()` already wired. |
 
 ### Deleted
 
@@ -865,7 +869,7 @@ Inline scenario picker + CTA button.
 
 | Task | Files | Effort |
 |------|-------|--------|
-| A1: Fix 5 bugs in useFabricDiscovery.ts (FE-1 through FE-4) | `useFabricDiscovery.ts` | Low (1hr) |
+| A1: Fix 4 remaining bugs in useFabricDiscovery.ts (B1, B2, B4, B5) | `useFabricDiscovery.ts` | Low (1hr) |
 | A2: Split FABRIC_CONFIGURED (BE-1) + re-add needed env vars | `adapters/fabric_config.py` | Low (30min) |
 | A3: Discovery gates on workspace-only (BE-2) | `router_fabric_discovery.py` | Low (30min) |
 | A4: Richer health endpoint (BE-3) | `router_fabric_discovery.py` | Low (1hr) |
@@ -1149,7 +1153,7 @@ var changes still work as fallback defaults but are overridden by config store v
 
 **After this plan: Yes.** The flow is:
 
-1. **CONNECT** — Set FABRIC_WORKSPACE_ID → partial connection visible in ConnectionsDrawer
+1. **CONNECT** — Enter workspace ID in ConnectionsDrawer (or set env var) → partial connection visible
 2. **DISCOVER** — Expand Fabric → see all 5 resource types (works before Graph Model exists)
 3. **PROVISION** — Scenario-aware button → creates resources WITH data → ontology auto-creates
    Graph Model → pipeline discovers it → config updated → Fabric upgrades to "Connected ✓"

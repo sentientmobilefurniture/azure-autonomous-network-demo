@@ -12,7 +12,9 @@ import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { EmptyState } from './components/EmptyState';
+import { AddScenarioModal } from './components/AddScenarioModal';
 import { useScenarioContext } from './context/ScenarioContext';
+import { useScenarios } from './hooks/useScenarios';
 import { formatTimeAgo } from './utils/formatTime';
 import type { Interaction } from './types';
 
@@ -35,11 +37,13 @@ export default function App() {
 
   const { interactions, loading: interactionsLoading, fetchInteractions,
     saveInteraction, deleteInteraction } = useInteractions();
-  const { activeScenario, scenarioReady } = useScenarioContext();
+  const { activeScenario, scenarioReady, refreshScenarios, savedScenarios } = useScenarioContext();
+  const { saveScenario } = useScenarios();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewingInteraction, setViewingInteraction] = useState<Interaction | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('investigate');
+  const [addModalOpen, setAddModalOpen] = useState(false);
 
   // Fetch interactions on mount and when scenario changes
   useEffect(() => {
@@ -121,7 +125,7 @@ export default function App() {
           <ResourceVisualizer />
         ) : activeTab === 'investigate' ? (
           !activeScenario ? (
-            <EmptyState />
+            <EmptyState onUpload={() => setAddModalOpen(true)} />
           ) : (
           <>
             {/* Main content area */}
@@ -204,6 +208,15 @@ export default function App() {
           />
         )}
       </div>
+
+      {/* Upload scenario modal — triggered from empty state or ScenarioChip */}
+      <AddScenarioModal
+        open={addModalOpen}
+        onClose={() => setAddModalOpen(false)}
+        onSaved={() => refreshScenarios()}
+        existingNames={savedScenarios.map(s => s.id)}
+        saveScenarioMeta={saveScenario}
+      />
     </motion.div>
   );
 }
