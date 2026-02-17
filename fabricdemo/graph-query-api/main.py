@@ -36,13 +36,7 @@ from config import GRAPH_BACKEND, BACKEND_REQUIRED_VARS
 from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router
 from router_topology import router as topology_router
-from router_ingest import router as ingest_router
-from router_prompts import router as prompts_router
-from router_scenarios import router as scenarios_router
 from router_interactions import router as interactions_router
-from router_fabric_discovery import router as fabric_discovery_router
-from router_fabric_connections import router as fabric_connections_router
-from router_docs import router as docs_router
 from router_health import router as health_router
 
 # ---------------------------------------------------------------------------
@@ -125,13 +119,7 @@ async def log_requests(request: Request, call_next):
 app.include_router(graph_router)
 app.include_router(telemetry_router)
 app.include_router(topology_router)
-app.include_router(ingest_router)
-app.include_router(prompts_router)
-app.include_router(scenarios_router)
 app.include_router(interactions_router)
-app.include_router(fabric_discovery_router)
-app.include_router(fabric_connections_router)
-app.include_router(docs_router)
 app.include_router(health_router)
 
 

@@ -6,7 +6,7 @@ import { GraphTooltip } from './graph/GraphTooltip';
 import { GraphContextMenu } from './graph/GraphContextMenu';
 import { usePausableSimulation } from '../hooks/usePausableSimulation';
 import { useTooltipTracking } from '../hooks/useTooltipTracking';
-import { useScenarioContext } from '../context/ScenarioContext';
+import { SCENARIO } from '../config';
 
 interface GraphTopologyViewerProps {
   width: number;
@@ -15,9 +15,8 @@ interface GraphTopologyViewerProps {
 
 export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps) {
   const { data, loading, error, refetch } = useTopology();
-  const { activeScenario } = useScenarioContext();
+  const storagePrefix = SCENARIO.name;
   const canvasRef = useRef<GraphCanvasHandle>(null);
-  const storagePrefix = activeScenario ?? '__custom__';
 
   // ── Graph pause/freeze state ──
 

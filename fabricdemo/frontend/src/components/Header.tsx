@@ -1,17 +1,12 @@
 import { useState } from 'react';
-import { ScenarioChip } from './ScenarioChip';
 import { AgentBar } from './AgentBar';
 import { DataSourceBar } from './DataSourceBar';
-import { ProvisioningBanner } from './ProvisioningBanner';
-import { FabricConnectionPanel } from './FabricConnectionPanel';
 import { ServiceHealthSummary } from './ServiceHealthSummary';
 import { ServiceHealthPopover } from './ServiceHealthPopover';
-import { ScenarioStatusPanel, UploadStatusBadge } from './ScenarioStatusPanel';
+import { SCENARIO } from '../config';
 
 export function Header() {
-  const [fabricOpen, setFabricOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
 
   return (
     <>
@@ -24,36 +19,20 @@ export function Header() {
           <span className="text-xs text-text-muted ml-1 hidden sm:inline">
             Multi-agent diagnosis
           </span>
-          <ScenarioChip />
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand/10 text-brand border border-brand/20 font-medium">
+            {SCENARIO.displayName}
+          </span>
         </div>
         <div className="flex items-center gap-2 relative">
-          <button
-            onClick={() => setFabricOpen(true)}
-            className="text-xs px-2 py-0.5 rounded border border-white/10 hover:bg-white/5 transition-colors text-cyan-400/70 hover:text-cyan-400"
-            title="Fabric Workspaces"
-          >
-            🔌 Fabric
-          </button>
-          <UploadStatusBadge onClick={() => setStatusOpen(!statusOpen)} />
           <ServiceHealthSummary onClick={() => setHealthOpen(!healthOpen)} />
           <ServiceHealthPopover
             open={healthOpen}
             onClose={() => setHealthOpen(false)}
-            onFabricSetup={() => setFabricOpen(true)}
-          />
-          <ScenarioStatusPanel
-            open={statusOpen}
-            onClose={() => setStatusOpen(false)}
           />
         </div>
       </header>
       <AgentBar />
       <DataSourceBar />
-      <ProvisioningBanner />
-      <FabricConnectionPanel
-        open={fabricOpen}
-        onClose={() => setFabricOpen(false)}
-      />
     </>
   );
 }

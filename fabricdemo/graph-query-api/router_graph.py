@@ -1,14 +1,14 @@
 """
 Router: POST /query/graph — dispatches to the configured graph backend.
 
-Supports per-request graph selection via the X-Graph header (ScenarioContext).
+Uses a fixed hardcoded ScenarioContext (no X-Graph header routing).
 """
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 
 from backends import get_backend_for_context, close_all_backends, GraphBackend
 from config import GRAPH_BACKEND, ScenarioContext, get_scenario_context
@@ -36,15 +36,14 @@ async def close_graph_backend() -> None:
     description=(
         "Dispatches to the configured graph backend "
         "(Fabric GQL or mock) and returns columns + data. "
-        "Use the X-Graph header to target a specific scenario's graph. "
         "If the query has a syntax error, the response will contain an "
         "'error' field with the details — read it, fix your query, and retry."
     ),
 )
 async def query_graph(
     req: GraphQueryRequest,
-    ctx: ScenarioContext = Depends(get_scenario_context),
 ):
+    ctx = get_scenario_context()
     backend = get_backend_for_context(ctx)
     logger.info(
         "POST /query/graph — backend=%s graph=%s  query=%.200s",

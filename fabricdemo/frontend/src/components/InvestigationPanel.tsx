@@ -3,7 +3,7 @@ import type { StepEvent, ThinkingState, RunMeta } from '../types';
 import { AlertInput } from './AlertInput';
 import { AgentTimeline } from './AgentTimeline';
 import { ErrorBanner } from './ErrorBanner';
-import { useScenarioContext } from '../context/ScenarioContext';
+import { SCENARIO } from '../config';
 
 interface InvestigationPanelProps {
   alert: string;
@@ -28,10 +28,7 @@ export function InvestigationPanel({
   runStarted,
   runMeta,
 }: InvestigationPanelProps) {
-  // Source example questions from the active scenario
-  const { activeScenario, savedScenarios } = useScenarioContext();
-  const scenario = savedScenarios.find(s => s.id === activeScenario);
-  const exampleQuestions = scenario?.example_questions;
+  const exampleQuestions = SCENARIO.exampleQuestions;
 
   return (
     <div className="h-full overflow-y-auto p-4 flex flex-col">

@@ -1,7 +1,7 @@
 """
-Health-check router — probes each data source for the active scenario.
+Health-check router — probes each data source for the telco-noc demo.
 
-GET /query/health/sources?scenario=<name>
+GET /query/health/sources?scenario=telco-noc
 
 Returns per-source health status including the exact query used,
 latency, and error details. Consumed by the frontend DataSourceBar.
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
 
-from config_store import fetch_scenario_config
+from config import DATA_SOURCES
 from backends import get_backend_for_graph
 
 logger = logging.getLogger("graph-query-api.health")
@@ -92,49 +92,30 @@ async def _ping_search_index(index_name: str) -> dict:
         return {"ok": False, "query": query, "detail": str(e), "latency_ms": latency}
 
 
-def _derive_resource_name(source_type: str, source_def: dict) -> str:
-    """Derive a display name for a data source."""
-    cfg = source_def.get("config", {})
-    if source_type == "graph":
-        return cfg.get("graph_name", cfg.get("ontology_name", source_type))
-    if source_type == "telemetry":
-        return cfg.get("eventhouse_name", cfg.get("container_prefix", source_type))
-    # search indexes
-    return cfg.get("index_name", source_type)
-
-
 @router.get("/health/sources")
-async def health_check_sources(scenario: str = Query(..., description="Scenario name")):
-    """Probe each data source defined in the scenario config and return health status."""
-    try:
-        config = await fetch_scenario_config(scenario)
-    except ValueError:
-        return {"sources": [], "checked_at": datetime.now(timezone.utc).isoformat(), "error": f"No config for '{scenario}'"}
-
-    data_sources = config.get("data_sources", {})
+async def health_check_sources(scenario: str = Query(default="telco-noc", description="Scenario name")):
+    """Probe each data source and return health status."""
     results = []
 
     # Graph source
-    graph_def = data_sources.get("graph", {})
+    graph_def = DATA_SOURCES.get("graph", {})
     if graph_def:
         connector = graph_def.get("connector", "fabric-gql")
-        graph_cfg = graph_def.get("config", {})
-        graph_name = graph_cfg.get("graph_name", f"{scenario}-topology")
-        resource_name = _derive_resource_name("graph", graph_def)
-        ping_result = await _ping_graph_backend(connector, graph_cfg, graph_name)
+        graph_name = graph_def.get("resource_name", "telco-noc-topology")
+        ping_result = await _ping_graph_backend(connector, {}, graph_name)
         results.append({
             "source_type": "graph",
             "connector": connector,
-            "resource_name": resource_name,
+            "resource_name": graph_name,
             **ping_result,
         })
 
     # Telemetry source
-    telemetry_def = data_sources.get("telemetry", {})
+    telemetry_def = DATA_SOURCES.get("telemetry", {})
     if telemetry_def:
         connector = telemetry_def.get("connector", "fabric-kql")
-        resource_name = _derive_resource_name("telemetry", telemetry_def)
-        ping_result = await _ping_telemetry_backend(connector, telemetry_def.get("config", {}))
+        resource_name = telemetry_def.get("resource_name", "telemetry")
+        ping_result = await _ping_telemetry_backend(connector, {})
         results.append({
             "source_type": "telemetry",
             "connector": connector,
@@ -143,9 +124,9 @@ async def health_check_sources(scenario: str = Query(..., description="Scenario 
         })
 
     # Search indexes
-    search_indexes = data_sources.get("search_indexes", {})
+    search_indexes = DATA_SOURCES.get("search_indexes", {})
     for idx_name, idx_def in search_indexes.items():
-        index_name = idx_def.get("config", {}).get("index_name", f"{scenario}-{idx_name}")
+        index_name = idx_def.get("index_name", f"{scenario}-{idx_name}")
         ping_result = await _ping_search_index(index_name)
         results.append({
             "source_type": f"search_indexes.{idx_name}",

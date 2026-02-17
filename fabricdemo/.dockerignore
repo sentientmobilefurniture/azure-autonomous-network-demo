@@ -24,24 +24,8 @@ deprecated
 # Frontend build artifacts (built inside Docker)
 frontend/dist
 
-# Data symlinks (point into scenarios/ — don't follow)
-data/telemetry
-data/tickets
-data/runbooks
-data/network
-data/prompts
-data/scripts
-data/graph_schema.yaml
-
-# Generated scenario data (uploaded via UI, not baked into image)
-data/scenarios/*/data/entities
-data/scenarios/*/data/entities/
-data/scenarios/*/data/telemetry
-data/scenarios/*/data/telemetry/
-data/scenarios/*/data/knowledge
-data/scenarios/*/data/knowledge/
-data/scenarios/*/scripts
-data/scenarios/*/scripts/
+# Scenario data (loaded via provisioning scripts, not baked into image)
+data
 
 # Custom skills (not needed at runtime)
 custom_skills

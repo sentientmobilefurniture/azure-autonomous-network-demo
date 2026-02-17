@@ -41,6 +41,13 @@ param eventhouseQueryUri string = ''
 @description('Fabric KQL database name (set after eventhouse provisioning)')
 param fabricKqlDbName string = ''
 
+@description('Fabric capacity SKU (F8 default). Pause when not in use to control cost.')
+@allowed(['F2', 'F4', 'F8', 'F16', 'F32', 'F64', 'F128', 'F256', 'F512', 'F1024', 'F2048'])
+param fabricCapacitySku string = 'F8'
+
+@description('Admin email for Fabric capacity')
+param fabricAdminEmail string = ''
+
 @description('Developer IP for local Cosmos DB access (leave empty in CI/CD)')
 param devIpAddress string = ''
 
@@ -55,6 +62,7 @@ var abbrs = {
   aiFoundryProject: 'proj-'
   search: 'srch-'
   storage: 'st'
+  fabric: 'fc-'
 }
 
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
@@ -105,17 +113,30 @@ module storage 'modules/storage.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Cosmos DB NoSQL (metadata stores: interactions, scenarios, prompts, config)
+// Microsoft Fabric Capacity
 // ---------------------------------------------------------------------------
 
-module cosmosNoSql 'modules/cosmos-gremlin.bicep' = {
+module fabric 'modules/fabric.bicep' = if (!empty(fabricAdminEmail)) {
   scope: rg
   params: {
-    accountName: 'cosmos-gremlin-${resourceToken}'
+    name: '${abbrs.fabric}${resourceToken}'
     location: location
-    databaseName: 'networkgraph'
-    maxThroughput: 1000
-    tags: union(tags, { component: 'metadata-store' })
+    tags: union(tags, { component: 'fabric-capacity' })
+    adminEmail: fabricAdminEmail
+    skuName: fabricCapacitySku
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cosmos DB NoSQL (interactions store only)
+// ---------------------------------------------------------------------------
+
+module cosmosNoSql 'modules/cosmos-nosql.bicep' = {
+  scope: rg
+  params: {
+    accountName: 'cosmos-nosql-${resourceToken}'
+    location: location
+    tags: union(tags, { component: 'interactions-store' })
     devIpAddress: devIpAddress
   }
 }
@@ -176,6 +197,9 @@ module app 'modules/container-app.bicep' = {
       { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
       { name: 'AZURE_RESOURCE_GROUP', value: rg.name }
       { name: 'AI_SEARCH_NAME', value: search.outputs.name }
+      { name: 'AZURE_SEARCH_ENDPOINT', value: search.outputs.endpoint }
+      { name: 'RUNBOOKS_INDEX_NAME', value: 'runbooks-index' }
+      { name: 'TICKETS_INDEX_NAME', value: 'tickets-index' }
       { name: 'STORAGE_ACCOUNT_NAME', value: storage.outputs.name }
       { name: 'AI_FOUNDRY_NAME', value: aiFoundry.outputs.foundryName }
       { name: 'EMBEDDING_MODEL', value: 'text-embedding-3-small' }
@@ -198,7 +222,7 @@ module roles 'modules/roles.bicep' = {
     storageAccountName: storage.outputs.name
     searchPrincipalId: search.outputs.principalId
     foundryPrincipalId: aiFoundry.outputs.foundryPrincipalId
-    cosmosNoSqlAccountName: 'cosmos-gremlin-${resourceToken}-nosql'
+    cosmosNoSqlAccountName: cosmosNoSql.outputs.cosmosAccountName
     containerAppPrincipalId: app.outputs.principalId
     apiContainerAppPrincipalId: app.outputs.principalId
   }
@@ -217,10 +241,8 @@ module cosmosPrivateEndpoints 'modules/cosmos-private-endpoints.bicep' = {
     tags: tags
     vnetId: vnet.outputs.id
     privateEndpointsSubnetId: vnet.outputs.privateEndpointsSubnetId
-    cosmosGremlinAccountId: cosmosNoSql.outputs.cosmosAccountId
-    cosmosGremlinAccountName: cosmosNoSql.outputs.cosmosAccountName
-    cosmosNoSqlAccountId: cosmosNoSql.outputs.cosmosNoSqlAccountId
-    cosmosNoSqlAccountName: cosmosNoSql.outputs.cosmosNoSqlAccountName
+    cosmosNoSqlAccountId: cosmosNoSql.outputs.cosmosAccountId
+    cosmosNoSqlAccountName: cosmosNoSql.outputs.cosmosAccountName
   }
 }
 
@@ -242,3 +264,4 @@ output APP_PRINCIPAL_ID string = app.outputs.principalId
 // Foundry agents use GRAPH_QUERY_API_URI — same container, same URL
 output GRAPH_QUERY_API_URI string = app.outputs.uri
 output COSMOS_NOSQL_ENDPOINT string = cosmosNoSql.outputs.cosmosNoSqlEndpoint
+output FABRIC_CAPACITY_NAME string = !empty(fabricAdminEmail) ? fabric.outputs.name : ''

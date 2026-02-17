@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { useScenarioContext } from '../context/ScenarioContext';
 import { AgentCard } from './AgentCard';
 import { HealthDot } from './HealthDot';
 
@@ -15,14 +14,9 @@ interface AgentData {
 }
 
 export function AgentBar() {
-  const { provisioningStatus, activeScenario } = useScenarioContext();
   const [agents, setAgents] = useState<AgentData[]>([]);
 
   useEffect(() => {
-    if (!activeScenario) {
-      setAgents([]);
-      return;
-    }
     let cancelled = false;
     fetch('/api/agents')
       .then(r => r.json())
@@ -31,7 +25,7 @@ export function AgentBar() {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [activeScenario, provisioningStatus.state]);
+  }, []);
 
   if (agents.length === 0) return null;
 

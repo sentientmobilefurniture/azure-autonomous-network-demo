@@ -4,7 +4,6 @@ import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, useDefaultL
 import type { PanelImperativeHandle } from 'react-resizable-panels';
 import { Header } from './components/Header';
 import { TabBar } from './components/TabBar';
-import { ScenarioInfoPanel } from './components/ScenarioInfoPanel';
 import { MetricsBar } from './components/MetricsBar';
 import { InvestigationPanel } from './components/InvestigationPanel';
 import { DiagnosisPanel } from './components/DiagnosisPanel';
@@ -12,15 +11,12 @@ import { InteractionSidebar } from './components/InteractionSidebar';
 import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
-import { EmptyState } from './components/EmptyState';
-import { AddScenarioModal } from './components/AddScenarioModal';
 import { TerminalPanel } from './components/TerminalPanel';
-import { useScenarioContext } from './context/ScenarioContext';
-import { useScenarios } from './hooks/useScenarios';
+import { SCENARIO } from './config';
 import { formatTimeAgo } from './utils/formatTime';
 import type { Interaction } from './types';
 
-type AppTab = 'investigate' | 'info' | 'resources';
+type AppTab = 'investigate' | 'resources';
 
 export default function App() {
   const {
@@ -34,18 +30,14 @@ export default function App() {
     runStarted,
     runMeta,
     submitAlert,
-    resetInvestigation,
   } = useInvestigation();
 
   const { interactions, loading: interactionsLoading, fetchInteractions,
     saveInteraction, deleteInteraction } = useInteractions();
-  const { activeScenario, refreshScenarios, savedScenarios } = useScenarioContext();
-  const { saveScenario } = useScenarios();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewingInteraction, setViewingInteraction] = useState<Interaction | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('investigate');
-  const [addModalOpen, setAddModalOpen] = useState(false);
   const sidebarPanelRef = useRef<PanelImperativeHandle>(null);
 
   const handleSidebarToggle = () => {
@@ -63,26 +55,23 @@ export default function App() {
   const metricsContent = useDefaultLayout({ id: 'metrics-content-layout', storage: localStorage });
   const investigationDiagnosis = useDefaultLayout({ id: 'investigation-diagnosis-layout', storage: localStorage });
 
-  // Fetch interactions on mount and when scenario changes
+  // Fetch interactions on mount
   useEffect(() => {
-    fetchInteractions(activeScenario ?? undefined);
-    // Clear stale investigation state from previous scenario
-    resetInvestigation();
-    setViewingInteraction(null);
-  }, [activeScenario, fetchInteractions, resetInvestigation]);
+    fetchInteractions(SCENARIO.name);
+  }, [fetchInteractions]);
 
   // Auto-save interaction when investigation completes.
   const prevRunningRef = useRef(running);
-  const latestValuesRef = useRef({ alert, steps, runMeta, activeScenario });
+  const latestValuesRef = useRef({ alert, steps, runMeta });
   useEffect(() => {
-    latestValuesRef.current = { alert, steps, runMeta, activeScenario };
+    latestValuesRef.current = { alert, steps, runMeta };
   });
 
   useEffect(() => {
-    if (prevRunningRef.current && !running && finalMessage && latestValuesRef.current.activeScenario) {
-      const { alert: savedAlert, steps: savedSteps, runMeta: savedRunMeta, activeScenario: savedScenario } = latestValuesRef.current;
+    if (prevRunningRef.current && !running && finalMessage) {
+      const { alert: savedAlert, steps: savedSteps, runMeta: savedRunMeta } = latestValuesRef.current;
       saveInteraction({
-        scenario: savedScenario!,
+        scenario: SCENARIO.name,
         query: savedAlert,
         steps: savedSteps,
         diagnosis: finalMessage,
@@ -128,10 +117,7 @@ export default function App() {
           <div className="h-full flex" role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={activeTab}>
             {activeTab === 'resources' ? (
               <ResourceVisualizer />
-            ) : activeTab === 'investigate' ? (
-              !activeScenario ? (
-                <EmptyState onUpload={() => setAddModalOpen(true)} />
-              ) : (
+            ) : (
               <PanelGroup orientation="horizontal" className="h-full" id="content-sidebar-layout"
                 defaultLayout={contentSidebar.defaultLayout}
                 onLayoutChanged={contentSidebar.onLayoutChanged}
@@ -159,9 +145,6 @@ export default function App() {
                           <div className="flex items-center justify-between px-4 py-1.5 bg-brand/10 border-b border-brand/20 shrink-0">
                             <span className="text-xs text-brand">
                               ◀ Viewing interaction from {formatTimeAgo(viewingInteraction.created_at)}
-                              <span className="ml-2 px-1.5 py-0.5 rounded bg-brand/15 text-[10px] font-medium">
-                                {viewingInteraction.scenario}
-                              </span>
                             </span>
                             <button
                               onClick={() => setViewingInteraction(null)}
@@ -228,14 +211,6 @@ export default function App() {
                   />
                 </Panel>
               </PanelGroup>
-              )
-            ) : (
-              <ScenarioInfoPanel
-                onSelectQuestion={(q) => {
-                  setAlert(q);
-                  setActiveTab('investigate');
-                }}
-              />
             )}
           </div>
         </Panel>
@@ -248,15 +223,6 @@ export default function App() {
           <TerminalPanel />
         </Panel>
       </PanelGroup>
-
-      {/* Upload scenario modal — triggered from empty state or ScenarioChip */}
-      <AddScenarioModal
-        open={addModalOpen}
-        onClose={() => setAddModalOpen(false)}
-        onSaved={() => refreshScenarios()}
-        existingNames={savedScenarios.map(s => s.id)}
-        saveScenarioMeta={saveScenario}
-      />
     </motion.div>
   );
 }

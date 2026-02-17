@@ -4,8 +4,8 @@ Configuration — environment variable loading and shared resources.
 Centralises all env var reads so other modules import from here
 instead of calling os.getenv() directly.
 
-Provides ScenarioContext — a per-request dataclass resolved from the
-X-Graph request header, enabling multi-graph routing.
+Provides ScenarioContext — a fixed hardcoded context for the telco-noc
+demo. No dynamic routing, no X-Graph header parsing, no config store.
 """
 
 from __future__ import annotations
@@ -16,10 +16,7 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-from fastapi import Header
 from azure.identity import DefaultAzureCredential
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -30,10 +27,25 @@ GRAPH_BACKEND: str = os.getenv("GRAPH_BACKEND", "fabric-gql").lower()
 
 
 # ---------------------------------------------------------------------------
-# AI Search settings (used by /query/indexes)
+# AI Search settings (used by /query/health)
 # ---------------------------------------------------------------------------
 
 AI_SEARCH_NAME = os.getenv("AI_SEARCH_NAME", "")
+
+# ---------------------------------------------------------------------------
+# Fabric resource IDs (set by provisioning scripts → azure_config.env)
+# ---------------------------------------------------------------------------
+
+FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
+FABRIC_GRAPH_MODEL_ID = os.getenv("FABRIC_GRAPH_MODEL_ID", "")
+EVENTHOUSE_QUERY_URI = os.getenv("EVENTHOUSE_QUERY_URI", "")
+FABRIC_KQL_DB_NAME = os.getenv("FABRIC_KQL_DB_NAME", "")
+
+# ---------------------------------------------------------------------------
+# Hardcoded scenario defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_GRAPH = "telco-noc-topology"
 
 # ---------------------------------------------------------------------------
 # Shared credential (lazy-initialised to avoid probing at import time)
@@ -49,101 +61,39 @@ def get_credential():
     return _credential
 
 # ---------------------------------------------------------------------------
-# Per-request scenario context (resolved from X-Graph header)
+# Scenario context — hardcoded for telco-noc
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ScenarioContext:
-    """Per-request routing context derived from the X-Graph header.
+    """Fixed routing context for the telco-noc demo.
 
-    Determines which graph and prompts database each request targets.
-    If no header is provided, falls back to the DEFAULT_SCENARIO env var.
-
-    Graph queries route to Fabric GQL. Telemetry queries route to Fabric KQL.
-    Prompts use a shared Cosmos NoSQL database (pre-created by Bicep).
+    No dynamic resolution — returns the same hardcoded context for every
+    request. Graph queries route to Fabric GQL via env var resource IDs.
     """
-    graph_name: str                  # e.g. "cloud-outage-topology"
-    prompts_database: str            # "prompts" (shared DB, pre-created by Bicep)
-    prompts_container: str           # "cloud-outage" (per-scenario container name)
-    backend_type: str
-    # Per-scenario Fabric routing (populated from config store's fabric_resources)
-    fabric_workspace_id: str = ""
-    fabric_graph_model_id: str = ""
-    fabric_eventhouse_id: str = ""
+    graph_name: str = DEFAULT_GRAPH
+    backend_type: str = GRAPH_BACKEND
+    fabric_workspace_id: str = FABRIC_WORKSPACE_ID
+    fabric_graph_model_id: str = FABRIC_GRAPH_MODEL_ID
+
+
+def get_scenario_context() -> ScenarioContext:
+    """Return a fixed ScenarioContext. No X-Graph header, no config store."""
+    return ScenarioContext()
 
 
 # ---------------------------------------------------------------------------
-# Connector → backend key mapping
+# Hardcoded data source definitions (used by router_health.py)
 # ---------------------------------------------------------------------------
 
-CONNECTOR_TO_BACKEND: dict[str, str] = {
-    "fabric-gql": "fabric-gql",
-    "mock": "mock",
+DATA_SOURCES = {
+    "graph": {"connector": "fabric-gql", "resource_name": DEFAULT_GRAPH},
+    "telemetry": {"connector": "fabric-kql", "resource_name": "NetworkTelemetryEH"},
+    "search_indexes": {
+        "runbooks": {"index_name": "runbooks-index"},
+        "tickets": {"index_name": "tickets-index"},
+    },
 }
-
-
-async def get_scenario_context(
-    x_graph: str | None = Header(default=None, alias="X-Graph"),
-) -> ScenarioContext:
-    """FastAPI dependency — resolve scenario context from X-Graph header.
-
-    If the header is absent, falls back to DEFAULT_SCENARIO env var.
-
-    The scenario prefix is derived from the graph name:
-      "cloud-outage-topology" → "cloud-outage"
-    If no hyphen exists, the full graph_name is used as the prefix.
-
-    Backend type resolution:
-      1. Try to read the scenario's config from the config store
-         (requires V10 DocumentStore infrastructure)
-      2. Falls back to the GRAPH_BACKEND env var default
-    """
-    graph_name = x_graph or os.getenv("DEFAULT_SCENARIO", "telco-noc")
-
-    # Derive scenario prefix: "cloud-outage-topology" → "cloud-outage"
-    prefix = graph_name.rsplit("-", 1)[0] if "-" in graph_name else graph_name
-
-    # Per-scenario backend resolution: check config store for connector type
-    backend_type = GRAPH_BACKEND  # default
-    # Fabric per-scenario resource IDs (populated by provisioning pipeline)
-    fabric_workspace_id = ""
-    fabric_graph_model_id = ""
-    fabric_eventhouse_id = ""
-
-    try:
-        from config_store import fetch_scenario_config
-        config = await fetch_scenario_config(prefix)
-        connector = (
-            config.get("data_sources", {})
-                  .get("graph", {})
-                  .get("connector", "")
-        )
-        if connector:
-            backend_type = CONNECTOR_TO_BACKEND.get(connector, connector)
-
-        # Extract per-scenario Fabric resource IDs
-        fabric_resources = config.get("fabric_resources", {})
-        if fabric_resources:
-            from adapters.fabric_config import FABRIC_WORKSPACE_ID as _FW, FABRIC_GRAPH_MODEL_ID as _FG
-            fabric_workspace_id = fabric_resources.get("workspace_id", _FW)
-            fabric_graph_model_id = fabric_resources.get("graph_model_id", _FG)
-            fabric_eventhouse_id = fabric_resources.get("eventhouse_id", "")
-    except Exception:
-        logger.warning(
-            "Config store lookup failed for prefix=%s, backend_type=%s — using env defaults",
-            prefix, backend_type,
-            exc_info=True,
-        )
-
-    return ScenarioContext(
-        graph_name=graph_name,
-        prompts_database="prompts",                # shared DB
-        prompts_container=prefix,                  # scenario container name
-        backend_type=backend_type,
-        fabric_workspace_id=fabric_workspace_id,
-        fabric_graph_model_id=fabric_graph_model_id,
-        fabric_eventhouse_id=fabric_eventhouse_id,
-    )
 
 # ---------------------------------------------------------------------------
 # Required env vars per backend (used by lifespan health check)

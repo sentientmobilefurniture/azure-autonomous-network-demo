@@ -4,7 +4,7 @@ Router: POST /query/topology — returns graph topology for the frontend viewer.
 Returns {nodes, edges, meta} instead of the tabular {columns, data} shape
 used by /query/graph (which is designed for agent consumption).
 
-Supports per-request graph selection via the X-Graph header (ScenarioContext).
+Uses hardcoded ScenarioContext (no X-Graph header routing).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from backends import get_backend_for_context
 from config import ScenarioContext, get_scenario_context
@@ -54,14 +54,13 @@ def invalidate_topology_cache(graph_name: str | None = None) -> None:
     summary="Get graph topology for visualization",
     description=(
         "Returns the graph topology as separate nodes and edges arrays, "
-        "suitable for graph rendering libraries. Optionally filter by vertex labels. "
-        "Use the X-Graph header to target a specific scenario's graph."
+        "suitable for graph rendering libraries. Optionally filter by vertex labels."
     ),
 )
 async def topology(
     req: TopologyRequest,
-    ctx: ScenarioContext = Depends(get_scenario_context),
 ) -> TopologyResponse:
+    ctx = get_scenario_context()
     backend = get_backend_for_context(ctx)
 
     # Normalise cache key: None and [] both mean "all vertices" → same key

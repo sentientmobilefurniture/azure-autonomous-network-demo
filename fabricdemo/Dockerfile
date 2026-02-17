@@ -36,7 +36,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY graph-query-api/*.py ./
 COPY graph-query-api/adapters/ ./adapters/
 COPY graph-query-api/backends/ ./backends/
-COPY graph-query-api/ingest/ ./ingest/
 COPY graph-query-api/openapi/ ./openapi/
 COPY graph-query-api/services/ ./services/
 COPY graph-query-api/stores/ ./stores/
@@ -53,11 +52,6 @@ RUN mkdir -p /app/scripts
 COPY scripts/agent_provisioner.py /app/scripts/
 # agent_ids.json is created post-deploy by provision_agents.py (CLI or UI)
 # The API falls back to stub responses when it doesn't exist
-
-# Copy scenario manifests for runtime resolution (YAML files only)
-# Prompts (.md) are excluded by .dockerignore (*.md) — they're only needed
-# at agent provisioning time (CLI), not at Container App runtime.
-COPY data/scenarios/ /app/data/scenarios/
 
 # ── Frontend static files ─────────────────────────────────────────
 COPY --from=frontend-build /build/dist /usr/share/nginx/html

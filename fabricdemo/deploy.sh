@@ -8,24 +8,22 @@
 #   2. Unified Container App deployment (nginx + API + graph-query-api)
 #   3. Local services (optional — all services deployed to Azure)
 #
-# Scenario-specific resources (graphs, containers, indexes, agents) are created
-# at runtime when a scenario is uploaded via the UI Settings page (⚙ → Upload).
-#
-# Graph & telemetry data is loaded via the UI Settings page (⚙ → Upload Scenario)
-# instead of from this script. See documentation/v8datamanagementplane.md.
+# After infrastructure is provisioned, run provisioning scripts for Fabric,
+# data loading, and agent creation using the --provision-* flags.
 #
 # Usage:
 #   chmod +x deploy.sh && ./deploy.sh
 #
 # Options:
-#   --skip-infra       Skip azd up (reuse existing Azure resources)
-#   --skip-index       Skip AI Search index creation (keeps existing indexes)
-#   --skip-data        Skip graph data loading (keeps existing Cosmos data)
-#   --skip-agents      Skip agent provisioning
-#   --skip-local       Skip starting local API + frontend
-#   --env NAME         Use a specific azd environment name
-#   --location LOC     Azure location (default: swedencentral)
-#   --yes              Skip all confirmation prompts
+#   --skip-infra         Skip azd up (reuse existing Azure resources)
+#   --skip-local         Skip starting local API + frontend
+#   --provision-fabric   Run Fabric provisioning (lakehouse, eventhouse, ontology)
+#   --provision-data     Run data provisioning (Cosmos + AI Search)
+#   --provision-agents   Run agent provisioning
+#   --provision-all      Run all provisioning steps (fabric + data + agents)
+#   --env NAME           Use a specific azd environment name
+#   --location LOC       Azure location (default: swedencentral)
+#   --yes                Skip all confirmation prompts
 #
 # ============================================================================
 set -euo pipefail
@@ -56,24 +54,25 @@ banner() {
 # ── Parse arguments ─────────────────────────────────────────────────
 
 SKIP_INFRA=false
-SKIP_INDEX=false
-SKIP_DATA=false
-SKIP_AGENTS=false
 SKIP_LOCAL=false
+PROVISION_FABRIC=false
+PROVISION_DATA=false
+PROVISION_AGENTS=false
 AUTO_YES=false
 AZD_ENV_NAME=""
 AZURE_LOC=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --skip-infra)   SKIP_INFRA=true; shift ;;
-    --skip-index)   SKIP_INDEX=true; shift ;;
-    --skip-data)    SKIP_DATA=true; shift ;;
-    --skip-agents)  SKIP_AGENTS=true; shift ;;
-    --skip-local)   SKIP_LOCAL=true; shift ;;
-    --yes|-y)       AUTO_YES=true; shift ;;
-    --env)          AZD_ENV_NAME="$2"; shift 2 ;;
-    --location)     AZURE_LOC="$2"; shift 2 ;;
+    --skip-infra)        SKIP_INFRA=true; shift ;;
+    --skip-local)        SKIP_LOCAL=true; shift ;;
+    --provision-fabric)  PROVISION_FABRIC=true; shift ;;
+    --provision-data)    PROVISION_DATA=true; shift ;;
+    --provision-agents)  PROVISION_AGENTS=true; shift ;;
+    --provision-all)     PROVISION_FABRIC=true; PROVISION_DATA=true; PROVISION_AGENTS=true; shift ;;
+    --yes|-y)            AUTO_YES=true; shift ;;
+    --env)               AZD_ENV_NAME="$2"; shift 2 ;;
+    --location)          AZURE_LOC="$2"; shift 2 ;;
     --help|-h)
       sed -n '2,/^set -euo/p' "$0" | head -n -1
       exit 0
@@ -573,12 +572,59 @@ else
   fi
 fi
 
-# (Steps 5, 7 removed — data loading, indexing, and agent provisioning
-#  are all handled via the UI Settings page after deployment)
+# ── Step 5: Fabric Provisioning (optional) ──────────────────────────
 
-# ── Step 6: Verify unified app health ───────────────────────────────
+if $PROVISION_FABRIC; then
+  step "Step 5: Provisioning Fabric resources"
 
-step "Step 6: Verifying unified app deployment"
+  info "5a: Provisioning Lakehouse..."
+  (source "$CONFIG_FILE" && uv run python scripts/fabric/provision_lakehouse.py) || warn "Lakehouse provisioning failed"
+
+  info "5b: Provisioning Eventhouse..."
+  (source "$CONFIG_FILE" && uv run python scripts/fabric/provision_eventhouse.py) || warn "Eventhouse provisioning failed"
+
+  info "5c: Provisioning Ontology + Graph Model..."
+  (source "$CONFIG_FILE" && uv run python scripts/fabric/provision_ontology.py) || warn "Ontology provisioning failed"
+
+  info "5d: Populating Fabric config..."
+  (source "$CONFIG_FILE" && uv run python scripts/fabric/populate_fabric_config.py) || warn "Config population failed"
+
+  ok "Fabric provisioning complete"
+else
+  step "Step 5: Fabric Provisioning (SKIPPED — use --provision-fabric)"
+fi
+
+# ── Step 6: Data Provisioning (optional) ────────────────────────────
+
+if $PROVISION_DATA; then
+  step "Step 6: Provisioning data"
+
+  info "6a: Loading telemetry into Cosmos DB..."
+  (source "$CONFIG_FILE" && uv run python scripts/provision_cosmos.py) || warn "Cosmos provisioning failed"
+
+  info "6b: Creating AI Search indexes..."
+  (source "$CONFIG_FILE" && uv run python scripts/provision_search_index.py --upload-files) || warn "Search index provisioning failed"
+
+  ok "Data provisioning complete"
+else
+  step "Step 6: Data Provisioning (SKIPPED — use --provision-data)"
+fi
+
+# ── Step 7: Agent Provisioning (optional) ───────────────────────────
+
+if $PROVISION_AGENTS; then
+  step "Step 7: Provisioning AI Foundry agents"
+
+  (source "$CONFIG_FILE" && uv run python scripts/provision_agents.py) || warn "Agent provisioning failed"
+
+  ok "Agent provisioning complete"
+else
+  step "Step 7: Agent Provisioning (SKIPPED — use --provision-agents)"
+fi
+
+# ── Step 8: Verify unified app health ───────────────────────────────
+
+step "Step 8: Verifying unified app deployment"
 
 GQ_URI="${APP_URI:-}"
 if [[ -z "$GQ_URI" ]]; then
@@ -613,10 +659,10 @@ else
   warn "Continuing anyway — agent provisioning may fail if the API is down."
 fi
 
-# ── Step 7: Start local services (optional — all services deployed to Azure) ──
+# ── Step 9: Start local services (optional — all services deployed to Azure) ──
 
 if $SKIP_LOCAL; then
-  step "Step 7: Local services (SKIPPED)"
+  step "Step 9: Local services (SKIPPED)"
   echo ""
   ok "Deployment complete! All services are running in Azure."
   echo ""
@@ -634,7 +680,7 @@ if $SKIP_LOCAL; then
   echo ""
   echo "   Open http://localhost:5173"
 else
-  step "Step 7: Starting local API + Frontend"
+  step "Step 9: Starting local API + Frontend"
 
   # Kill any existing processes on our ports
   lsof -ti:8000,5173 2>/dev/null | xargs -r kill -9 2>/dev/null || true
@@ -694,7 +740,7 @@ echo -e "${NC}"
 
 echo -e "  ${BOLD}Environment:${NC}      $USE_ENV"
 echo -e "  ${BOLD}Graph Backend:${NC}    fabric-gql (GQL via Fabric)"
-echo -e "  ${BOLD}Data Loading:${NC}     Via UI Settings page (⚙ → Upload Scenario)"
+echo -e "  ${BOLD}Data Loading:${NC}     Via provisioning scripts (--provision-data)"
 echo -e "  ${BOLD}Location:${NC}         ${AZURE_LOC}"
 echo -e "  ${BOLD}Resource Group:${NC}   ${AZURE_RESOURCE_GROUP:-<pending>}"
 echo ""
@@ -741,7 +787,9 @@ echo "    azd deploy app                     # Redeploy unified app after code c
 echo "    source azure_config.env && uv run python scripts/provision_agents.py --force  # Re-provision agents"
 echo "    azd down --force --purge           # Tear down all Azure resources"
 echo ""
-echo -e "  ${BOLD}Upload scenario data:${NC}"
-echo "    tar czf telco-noc.tar.gz -C data/scenarios telco-noc"
-echo "    # Then upload via UI Settings page (⚙ icon in header)"
+echo -e "  ${BOLD}Provisioning:${NC}"
+echo "    ./deploy.sh --provision-fabric     # Provision Fabric resources"
+echo "    ./deploy.sh --provision-data       # Load data (Cosmos + AI Search)"
+echo "    ./deploy.sh --provision-agents     # Provision AI agents"
+echo "    ./deploy.sh --provision-all        # Do all of the above"
 echo ""

@@ -1,22 +1,16 @@
 import { useState, useEffect } from 'react';
-import { useScenarioContext } from '../context/ScenarioContext';
 import { DataSourceCard } from './DataSourceCard';
 import type { DataSourceHealth } from './DataSourceCard';
+import { SCENARIO } from '../config';
 
 const QUERY_API = '/query';
 
 export function DataSourceBar() {
-  const { activeScenario } = useScenarioContext();
   const [sources, setSources] = useState<DataSourceHealth[]>([]);
 
   useEffect(() => {
-    if (!activeScenario) {
-      setSources([]);
-      return;
-    }
-
     const check = () =>
-      fetch(`${QUERY_API}/health/sources?scenario=${encodeURIComponent(activeScenario)}`)
+      fetch(`${QUERY_API}/health/sources?scenario=${encodeURIComponent(SCENARIO.name)}`)
         .then((r) => r.json())
         .then((d) => setSources(d.sources || []))
         .catch(() => {});
@@ -24,7 +18,7 @@ export function DataSourceBar() {
     check();
     const iv = setInterval(check, 30_000);
     return () => clearInterval(iv);
-  }, [activeScenario]);
+  }, []);
 
   if (sources.length === 0) return null;
 

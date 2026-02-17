@@ -1,12 +1,11 @@
 interface TabBarProps {
-  activeTab: 'investigate' | 'info' | 'resources';
-  onTabChange: (tab: 'investigate' | 'info' | 'resources') => void;
+  activeTab: 'investigate' | 'resources';
+  onTabChange: (tab: 'investigate' | 'resources') => void;
 }
 
 export function TabBar({ activeTab, onTabChange }: TabBarProps) {
   const tabs = [
     { id: 'investigate' as const, label: '▸ Investigate' },
-    { id: 'info' as const, label: 'ℹ Scenario Info' },
     { id: 'resources' as const, label: '◇ Resources' },
   ];
 

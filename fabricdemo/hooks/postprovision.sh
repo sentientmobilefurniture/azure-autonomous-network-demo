@@ -19,51 +19,42 @@ echo "  RG      : $RG"
 echo "============================================"
 
 # --------------------------------------------------------------------------
-# 0. Wait for RBAC propagation (Storage Blob Data Contributor)
-#    Role assignments created in the same deployment can take minutes to
-#    propagate. Retry the first upload until it succeeds or we give up.
+# 1. Upload runbooks + tickets to blob storage
+#    (RBAC may take a few minutes to propagate after deployment)
 # --------------------------------------------------------------------------
-upload_with_retry() {
-  local container="$1"
-  local source_dir="$2"
-  local max_attempts=6
-  local wait_secs=30
+DATA_DIR="$PROJECT_ROOT/data/scenarios/telco-noc/data"
+MAX_ATTEMPTS=6
+WAIT_SECS=30
 
-  for attempt in $(seq 1 $max_attempts); do
-    echo "  Attempt $attempt/$max_attempts — uploading to '$container'..."
+for container in runbooks tickets; do
+  src_dir="$DATA_DIR/$container"
+  if [ ! -d "$src_dir" ]; then
+    echo "  ⚠ $src_dir not found — skipping $container upload"
+    continue
+  fi
+
+  for attempt in $(seq 1 $MAX_ATTEMPTS); do
+    echo "  Attempt $attempt/$MAX_ATTEMPTS — uploading to '$container'..."
     if az storage blob upload-batch \
         --destination "$container" \
         --account-name "$STORAGE_ACCOUNT" \
-        --source "$source_dir" \
+        --source "$src_dir" \
         --auth-mode login \
         --overwrite \
         --only-show-errors 2>/dev/null; then
       echo "  ✓ $container uploaded"
-      return 0
+      break
     fi
 
-    if [ "$attempt" -lt "$max_attempts" ]; then
-      echo "  ⏳ RBAC not yet propagated — waiting ${wait_secs}s..."
-      sleep "$wait_secs"
+    if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+      echo "  ⏳ RBAC not yet propagated — waiting ${WAIT_SECS}s..."
+      sleep "$WAIT_SECS"
+    else
+      echo "  ✗ Failed to upload '$container' after $MAX_ATTEMPTS attempts."
+      echo "    RBAC may still be propagating. Run: azd hooks run postprovision"
     fi
   done
-
-  echo "  ✗ Failed to upload to '$container' after $max_attempts attempts."
-  echo "    RBAC may still be propagating. Run postprovision manually:"
-  echo "    azd hooks run postprovision"
-  return 1
-}
-
-# --------------------------------------------------------------------------
-# 1. Data uploads — SKIPPED (V8: data loaded via UI scenario upload)
-#    The primary path for all data (graph, telemetry, runbooks, tickets)
-#    is now via the UI Settings page: POST /query/scenario/upload
-#    which handles blob upload + AI Search indexing automatically.
-# --------------------------------------------------------------------------
-echo ""
-echo "Skipping blob uploads — data is loaded via UI Settings page (⚙ → Upload Scenario)"
-echo "  To upload a scenario: tar czf scenario.tar.gz -C data/scenarios <name>"
-echo "  Then upload via the app's Settings modal."
+done
 
 # --------------------------------------------------------------------------
 # 2. Populate azure_config.env for downstream scripts
@@ -126,6 +117,8 @@ EMBEDDING_DIMENSIONS=$EMBED_DIMS
 
 # --- Azure AI Search (AUTO: name from deployment) ---
 AI_SEARCH_NAME=${AZURE_SEARCH_NAME:-}
+RUNBOOKS_INDEX_NAME=${RUNBOOKS_INDEX_NAME:-runbooks-index}
+TICKETS_INDEX_NAME=${TICKETS_INDEX_NAME:-tickets-index}
 
 # --- Azure Storage (AUTO: name from deployment) ---
 STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT
@@ -154,6 +147,8 @@ COSMOS_NOSQL_ENDPOINT=${AZD_COSMOS_NOSQL_ENDPOINT:-${COSMOS_NOSQL_ENDPOINT:-}}
 FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
 FABRIC_GRAPH_MODEL_ID=${FABRIC_GRAPH_MODEL_ID:-}
 FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
+EVENTHOUSE_QUERY_URI=${EVENTHOUSE_QUERY_URI:-}
+FABRIC_KQL_DB_NAME=${FABRIC_KQL_DB_NAME:-}
 EOF
 
 echo "  \u2713 azure_config.env written"

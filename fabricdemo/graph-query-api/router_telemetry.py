@@ -2,7 +2,7 @@
 Router: POST /query/telemetry — KQL queries against Fabric Eventhouse.
 
 Telemetry data is queried via Fabric Eventhouse KQL.
-The target scenario is derived from the X-Graph header via ScenarioContext.
+Uses hardcoded ScenarioContext (no X-Graph header routing).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from config import (
     ScenarioContext,
@@ -40,8 +40,8 @@ router = APIRouter()
 )
 async def query_telemetry(
     req: TelemetryQueryRequest,
-    ctx: ScenarioContext = Depends(get_scenario_context),
 ):
+    ctx = get_scenario_context()
     return await _query_fabric_kql(req, ctx)
 
 

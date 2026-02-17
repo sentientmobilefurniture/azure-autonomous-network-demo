@@ -1,6 +1,8 @@
 import { useCallback } from 'react';
-import { useScenarioContext } from '../context/ScenarioContext';
+import { SCENARIO } from '../config';
 import { COLOR_PALETTE } from '../components/graph/graphConstants';
+
+const scenarioNodeColors = SCENARIO.graphStyles.nodeColors;
 
 function autoColor(label: string): string {
   let hash = 0;
@@ -19,13 +21,11 @@ function autoColor(label: string): string {
  * directly, to avoid stale state after context menu color changes.
  */
 export function useNodeColor(nodeColorOverride: Record<string, string>) {
-  const { scenarioNodeColors } = useScenarioContext();
-
   return useCallback(
     (label: string) =>
       nodeColorOverride[label]
       ?? scenarioNodeColors[label]
       ?? autoColor(label),
-    [nodeColorOverride, scenarioNodeColors],
+    [nodeColorOverride],
   );
 }
