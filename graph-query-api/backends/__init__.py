@@ -71,6 +71,10 @@ class GraphBackend(Protocol):
         """Clean up resources (connections, clients)."""
         ...
 
+    async def ping(self) -> dict:
+        """Health check — returns {"ok": bool, "query": str, "detail": str, "latency_ms": int}."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Backend registry

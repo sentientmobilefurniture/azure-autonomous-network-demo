@@ -125,6 +125,10 @@ export function useScenarioUpload(props: UseScenarioUploadProps) {
       formData.append('scenario_name', name);
       formData.append('backend', selectedBackend);
 
+      // Derive telemetry backend from graph backend selection
+      const telemetryBackend = selectedBackend === 'fabric-gql' ? 'fabric-kql' : 'cosmosdb-nosql';
+      formData.append('telemetry_backend', telemetryBackend);
+
       // For Fabric uploads, resolve active workspace from connection panel
       if (selectedBackend === 'fabric-gql') {
         try {
@@ -166,7 +170,28 @@ export function useScenarioUpload(props: UseScenarioUploadProps) {
           graph_connector: selectedBackend === 'fabric-gql' ? 'fabric-gql' : undefined,
           upload_results: {},
         });
-      } catch (e) {
+      } catch (e: unknown) {
+        // Check for 409 backend conflict
+        const errMsg = e instanceof Error ? e.message : String(e);
+        if (errMsg.includes('409')) {
+          // Try to parse structured detail from the error text
+          try {
+            const jsonMatch = errMsg.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const body = JSON.parse(jsonMatch[0]);
+              const detail = body?.detail || body;
+              setGlobalError(
+                `Backend conflict: ${detail?.message || 'Scenario exists with a different backend.'} ${detail?.suggestion || 'Use a different name.'}`
+              );
+            } else {
+              setGlobalError('Backend conflict: This scenario already exists with a different graph backend. Use a different name (e.g. add "-fabric" suffix).');
+            }
+          } catch {
+            setGlobalError('Backend conflict: This scenario already exists with a different graph backend. Use a different name (e.g. add "-fabric" suffix).');
+          }
+          setModalState('error');
+          return;
+        }
         console.warn('Failed to save scenario metadata:', e);
       }
 

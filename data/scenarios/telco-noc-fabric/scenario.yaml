@@ -56,12 +56,14 @@ data_sources:
     connector: "fabric-gql"
     config:
       workspace_id: "${FABRIC_WORKSPACE_ID}"
-      graph_model_id: "${FABRIC_GRAPH_MODEL_ID}"
+      # graph_model_id resolved at provisioning time from ontology name
     # No schema_file — Fabric Ontology manages the graph schema
 
   telemetry:
-    connector: "cosmosdb-nosql"
+    connector: "fabric-kql"
     config:
+      workspace_id: "${FABRIC_WORKSPACE_ID}"
+      eventhouse_name: "telco-noc-fabric"
       database: "telemetry"
       container_prefix: "telco-noc-fabric"
       containers:
@@ -104,7 +106,7 @@ agents:
   - name: "TelemetryAgent"
     role: "telemetry"
     model: "gpt-4.1"
-    instructions_file: "prompts/foundry_telemetry_agent_v2.md"
+    instructions_file: "prompts/foundry_telemetry_agent_kql.md"
     tools:
       - type: "openapi"
         spec_template: "telemetry"

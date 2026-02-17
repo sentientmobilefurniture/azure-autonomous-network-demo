@@ -303,6 +303,24 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
             </button>
           </div>
 
+          {/* Proactive backend conflict warning */}
+          {selectedBackend === 'fabric-gql' && name && !name.endsWith('-fabric') &&
+           existingNames.includes(name) && (
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-xs">
+              <p className="text-yellow-400 font-medium">⚠ Name Conflict Risk</p>
+              <p className="text-yellow-400/70 mt-1">
+                &quot;{name}&quot; exists as a Cosmos scenario. Fabric scenarios should use a
+                different name to avoid conflicts.
+              </p>
+              <button
+                onClick={() => setName(`${name}-fabric`)}
+                className="mt-2 px-2 py-1 bg-yellow-600/20 rounded text-yellow-300 hover:bg-yellow-600/30"
+              >
+                Use &quot;{name}-fabric&quot; instead
+              </button>
+            </div>
+          )}
+
           {/* Multi-drop zone */}
           <div className="text-xs text-text-muted font-medium uppercase tracking-wider">Upload Data Files</div>
           <div

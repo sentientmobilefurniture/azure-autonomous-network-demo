@@ -70,5 +70,9 @@ class MockGraphBackend:
         """Mock ingest — just return counts without storing."""
         return {"vertices_loaded": len(vertices), "edges_loaded": len(edges), "errors": []}
 
+    async def ping(self) -> dict:
+        """Mock ping — always succeeds."""
+        return {"ok": True, "query": "(mock)", "detail": "Mock backend always healthy", "latency_ms": 0}
+
     def close(self) -> None:
         pass

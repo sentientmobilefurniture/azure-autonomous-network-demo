@@ -115,6 +115,17 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
         </div>
       )}
 
+      {!loading && !error && data.nodes.length === 0 && (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-2">
+            <p className="text-sm text-text-muted">No graph data available</p>
+            <p className="text-xs text-text-muted/60">
+              Upload scenario data or check the active scenario configuration.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 relative">
         <GraphCanvas
           ref={canvasRef}

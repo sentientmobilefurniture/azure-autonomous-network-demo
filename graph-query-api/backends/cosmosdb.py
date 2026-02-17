@@ -458,6 +458,18 @@ class CosmosDBGremlinBackend:
                     pass
                 self._client = None
 
+    async def ping(self) -> dict:
+        """Health check — run a minimal Gremlin count query."""
+        query = "g.V().limit(1).count()"
+        t0 = time.time()
+        try:
+            results = await asyncio.to_thread(self._submit_query, query)
+            latency = int((time.time() - t0) * 1000)
+            return {"ok": True, "query": query, "detail": f"count={results}", "latency_ms": latency}
+        except Exception as e:
+            latency = int((time.time() - t0) * 1000)
+            return {"ok": False, "query": query, "detail": str(e), "latency_ms": latency}
+
     # ------------------------------------------------------------------
     # Connection warm-up & keepalive (Phase 3 — v11c)
     # ------------------------------------------------------------------

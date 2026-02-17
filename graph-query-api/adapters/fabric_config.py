@@ -47,3 +47,25 @@ FABRIC_QUERY_READY = bool(
 
 # Backward compat alias — existing code that imports FABRIC_CONFIGURED is unaffected
 FABRIC_CONFIGURED = FABRIC_QUERY_READY
+
+
+# ---------------------------------------------------------------------------
+# Per-scenario Fabric asset name derivation
+# ---------------------------------------------------------------------------
+
+def fabric_asset_names(scenario_name: str) -> dict:
+    """Derive per-scenario Fabric asset names.
+
+    Falls back to global env var defaults when no scenario_name is provided.
+    """
+    if not scenario_name:
+        return {
+            "lakehouse_name": FABRIC_LAKEHOUSE_NAME,
+            "eventhouse_name": FABRIC_EVENTHOUSE_NAME,
+            "ontology_name": FABRIC_ONTOLOGY_NAME,
+        }
+    return {
+        "lakehouse_name": f"{scenario_name}-lakehouse",
+        "eventhouse_name": f"{scenario_name}-eventhouse",
+        "ontology_name": f"{scenario_name}-ontology",
+    }

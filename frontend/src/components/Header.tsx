@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ScenarioChip } from './ScenarioChip';
 import { AgentBar } from './AgentBar';
+import { DataSourceBar } from './DataSourceBar';
 import { ProvisioningBanner } from './ProvisioningBanner';
 import { FabricConnectionPanel } from './FabricConnectionPanel';
 import { ServiceHealthSummary } from './ServiceHealthSummary';
@@ -47,6 +48,7 @@ export function Header() {
         </div>
       </header>
       <AgentBar />
+      <DataSourceBar />
       <ProvisioningBanner />
       <FabricConnectionPanel
         open={fabricOpen}

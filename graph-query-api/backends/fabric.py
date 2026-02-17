@@ -258,4 +258,18 @@ class FabricGQLBackend:
                 pass
             self._client = None
 
+    async def ping(self) -> dict:
+        """Health check — run a minimal GQL query against Fabric Ontology."""
+        query = "MATCH (n) RETURN n LIMIT 1"
+        import time
+        t0 = time.time()
+        try:
+            result = await self.execute_query(query)
+            latency = int((time.time() - t0) * 1000)
+            count = len(result.get("data", []))
+            return {"ok": True, "query": query, "detail": f"{count} row(s)", "latency_ms": latency}
+        except Exception as e:
+            latency = int((time.time() - t0) * 1000)
+            return {"ok": False, "query": query, "detail": str(e), "latency_ms": latency}
+
 

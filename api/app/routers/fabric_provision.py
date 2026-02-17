@@ -55,6 +55,23 @@ FABRIC_EVENTHOUSE_NAME = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH
 FABRIC_ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
 
 
+def _resolve_asset_name(override: str | None, scenario_name: str, asset_type: str) -> str:
+    """Resolve a Fabric asset name from explicit override, scenario name, or env default.
+
+    Priority: 1) explicit override  2) scenario-derived  3) env var default
+    """
+    if override:
+        return override
+    if scenario_name:
+        return f"{scenario_name}-{asset_type}"
+    env_map = {
+        "lakehouse": FABRIC_LAKEHOUSE_NAME,
+        "eventhouse": FABRIC_EVENTHOUSE_NAME,
+        "ontology": FABRIC_ONTOLOGY_NAME,
+    }
+    return env_map.get(asset_type, f"NetworkTopology{asset_type}")
+
+
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
@@ -1217,14 +1234,18 @@ async def provision_graph_from_tarball(
     file: UploadFile = File(...),
     workspace_id: str = Form(...),
     workspace_name: str = Form(...),
-    lakehouse_name: str = Form("lakehouse"),
-    ontology_name: str = Form("ontology"),
+    lakehouse_name: str = Form(""),
+    ontology_name: str = Form(""),
+    scenario_name: str = Form(""),
 ):
     """Upload a graph tarball and run the full Lakehouse → Ontology → Graph Model pipeline.
 
     Accepts a .tar.gz containing entity CSVs (same layout as data/scenarios/*/entities/).
     Streams SSE progress events.
     """
+    # Resolve asset names: explicit override > scenario-derived > env default
+    lakehouse_name = _resolve_asset_name(lakehouse_name, scenario_name, "lakehouse")
+    ontology_name = _resolve_asset_name(ontology_name, scenario_name, "ontology")
     if not file.filename or not (
         file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")
     ):
@@ -1365,13 +1386,173 @@ async def provision_graph_from_tarball(
                     "pct": 95,
                 })
 
-                # Complete
+                # Complete — include fabric_resources for upstream to persist
                 yield _sse_event("complete", {
                     "lakehouse_id": lakehouse_id,
                     "ontology_id": ontology_id,
                     "graph_model_id": graph_model_id,
                     "tables": uploaded,
+                    "fabric_resources": {
+                        "workspace_id": workspace_id,
+                        "lakehouse_id": lakehouse_id,
+                        "lakehouse_name": lakehouse_name,
+                        "ontology_name": ontology_name,
+                        "graph_model_id": graph_model_id or "",
+                    },
                     "message": "Graph data loaded into Fabric successfully.",
+                })
+
+    return EventSourceResponse(sse_provision_stream(_work))
+
+
+# ---------------------------------------------------------------------------
+# Telemetry tarball → Fabric Eventhouse pipeline (V11E3)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/provision/telemetry")
+async def provision_telemetry_fabric(
+    file: UploadFile = File(...),
+    workspace_id: str = Form(...),
+    workspace_name: str = Form(""),
+    scenario_name: str = Form(""),
+):
+    """Upload a telemetry tarball and provision Eventhouse + KQL tables.
+
+    Accepts a .tar.gz containing telemetry CSVs (AlertStream.csv, LinkTelemetry.csv).
+    Streams SSE progress events.
+    """
+    if not file.filename or not (
+        file.filename.endswith(".tar.gz") or file.filename.endswith(".tgz")
+    ):
+        raise HTTPException(400, "File must be a .tar.gz archive")
+
+    if _fabric_provision_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Fabric provisioning already in progress",
+        )
+
+    content = await file.read()
+    eventhouse_name = _resolve_asset_name("", scenario_name, "eventhouse")
+    logger.info(
+        "Telemetry tarball upload: %s (%d bytes), workspace=%s, eventhouse=%s",
+        file.filename, len(content), workspace_id, eventhouse_name,
+    )
+
+    async def _work(client: AsyncFabricClient):
+        async with _fabric_provision_lock:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmppath = Path(tmpdir)
+
+                # Step 1: Extract tarball
+                yield _sse_event("progress", {
+                    "step": "telemetry", "detail": "Extracting telemetry tarball…", "pct": 5,
+                })
+                with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+                    tar.extractall(tmppath, filter="data")
+
+                # Find telemetry directory containing CSV files
+                telemetry_dir = None
+                for candidate in [
+                    tmppath / "data" / "telemetry",
+                    tmppath / "telemetry",
+                ]:
+                    if candidate.is_dir() and list(candidate.glob("*.csv")):
+                        telemetry_dir = candidate
+                        break
+                # Check one level down (tarball may have a root folder)
+                if telemetry_dir is None:
+                    for sub in tmppath.iterdir():
+                        if sub.is_dir():
+                            for candidate in [
+                                sub / "data" / "telemetry",
+                                sub / "telemetry",
+                            ]:
+                                if candidate.is_dir() and list(candidate.glob("*.csv")):
+                                    telemetry_dir = candidate
+                                    break
+                        if telemetry_dir:
+                            break
+                # Fallback: CSVs at root
+                if telemetry_dir is None:
+                    csv_files = list(tmppath.glob("*.csv"))
+                    if csv_files:
+                        telemetry_dir = tmppath
+                    else:
+                        raise HTTPException(400, "No telemetry CSV files found in tarball")
+
+                csv_count = len(list(telemetry_dir.glob("*.csv")))
+                yield _sse_event("progress", {
+                    "step": "telemetry",
+                    "detail": f"Found {csv_count} telemetry CSV files",
+                    "pct": 10,
+                })
+
+                # Step 2: Find or create Eventhouse
+                yield _sse_event("progress", {
+                    "step": "telemetry", "detail": f"Finding or creating Eventhouse '{eventhouse_name}'…", "pct": 15,
+                })
+                eventhouse_id = await _find_or_create_eventhouse(
+                    client, workspace_id, eventhouse_name,
+                )
+                yield _sse_event("progress", {
+                    "step": "telemetry",
+                    "detail": f"Eventhouse ready: {eventhouse_id}",
+                    "pct": 25,
+                })
+
+                # Step 3: Discover KQL database
+                yield _sse_event("progress", {
+                    "step": "telemetry", "detail": "Discovering KQL database…", "pct": 30,
+                })
+                kql_db = await _discover_kql_database(client, workspace_id, eventhouse_id)
+                db_name = kql_db.get("displayName", "")
+                kql_props = kql_db.get("properties", {})
+                query_uri = kql_props.get("queryServiceUri", "") or kql_props.get("queryUri", "")
+                if not query_uri:
+                    raise HTTPException(500, "Could not discover KQL database query URI")
+                yield _sse_event("progress", {
+                    "step": "telemetry",
+                    "detail": f"KQL database: {db_name}",
+                    "pct": 40,
+                })
+
+                # Step 4: Create KQL tables
+                yield _sse_event("progress", {
+                    "step": "telemetry", "detail": "Creating KQL tables and mappings…", "pct": 45,
+                })
+                await _create_kql_tables(query_uri, db_name)
+                yield _sse_event("progress", {
+                    "step": "telemetry",
+                    "detail": "KQL tables created",
+                    "pct": 55,
+                })
+
+                # Step 5: Ingest telemetry data
+                yield _sse_event("progress", {
+                    "step": "telemetry", "detail": "Ingesting telemetry data into Eventhouse…", "pct": 60,
+                })
+                await _ingest_kql_data(query_uri, db_name, telemetry_dir)
+                yield _sse_event("progress", {
+                    "step": "telemetry",
+                    "detail": "Telemetry data ingested",
+                    "pct": 90,
+                })
+
+                # Complete
+                yield _sse_event("complete", {
+                    "eventhouse_id": eventhouse_id,
+                    "eventhouse_name": eventhouse_name,
+                    "kql_database": db_name,
+                    "query_uri": query_uri,
+                    "fabric_resources": {
+                        "eventhouse_id": eventhouse_id,
+                        "eventhouse_name": eventhouse_name,
+                        "kql_database": db_name,
+                        "query_uri": query_uri,
+                    },
+                    "message": f"Telemetry provisioned to Eventhouse '{eventhouse_name}' successfully.",
                 })
 
     return EventSourceResponse(sse_provision_stream(_work))

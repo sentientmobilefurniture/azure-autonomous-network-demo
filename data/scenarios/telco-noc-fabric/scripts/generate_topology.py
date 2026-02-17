@@ -1,0 +1,1 @@
+../../telco-noc/scripts/generate_topology.py

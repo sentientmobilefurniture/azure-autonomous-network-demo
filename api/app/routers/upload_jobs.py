@@ -116,6 +116,7 @@ def _make_job(
     step_names: list[str],
     *,
     backend: str = "cosmosdb-gremlin",
+    telemetry_backend: str = "cosmosdb-nosql",
     workspace_id: str = "",
     workspace_name: str = "",
 ) -> dict:
@@ -128,6 +129,7 @@ def _make_job(
         "overall_pct": 0,
         "error": None,
         "backend": backend,
+        "telemetry_backend": telemetry_backend,
         "workspace_id": workspace_id,
         "workspace_name": workspace_name,
         "steps": [
@@ -168,6 +170,7 @@ async def _run_upload_job(job_id: str, files: dict[str, Path]):
     job["status"] = "running"
     scenario_name = job["scenario_name"]
     backend = job.get("backend", "cosmosdb-gremlin")
+    telemetry_backend = job.get("telemetry_backend", "cosmosdb-nosql")
     workspace_id = job.get("workspace_id", "")
     workspace_name = job.get("workspace_name", "")
     await _persist_job(job)
@@ -197,8 +200,22 @@ async def _run_upload_job(job_id: str, files: dict[str, Path]):
                             data={
                                 "workspace_id": workspace_id,
                                 "workspace_name": workspace_name,
+                                "scenario_name": scenario_name,
                             },
                             timeout=600,  # Fabric pipeline can take a while
+                        )
+                elif step_name == "telemetry" and telemetry_backend == "fabric-kql":
+                    endpoint = f"{API_SELF}/api/fabric/provision/telemetry"
+                    with open(file_path, "rb") as f:
+                        resp = await client.post(
+                            endpoint,
+                            files={"file": (file_path.name, f, "application/gzip")},
+                            data={
+                                "workspace_id": workspace_id,
+                                "workspace_name": workspace_name,
+                                "scenario_name": scenario_name,
+                            },
+                            timeout=600,
                         )
                 else:
                     # Standard graph-query-api upload
@@ -227,6 +244,7 @@ async def _run_upload_job(job_id: str, files: dict[str, Path]):
                 if resp.status_code == 200:
                     # Parse SSE response for final result
                     detail = "Done"
+                    fabric_resources: dict | None = None
                     for line in resp.text.split("\n"):
                         if line.startswith("data: ") and '"error"' not in line:
                             try:
@@ -236,9 +254,32 @@ async def _run_upload_job(job_id: str, files: dict[str, Path]):
                                 # Capture Fabric completion
                                 if "message" in data and "complete" in resp.text:
                                     detail = data.get("message", detail)
+                                # Capture fabric_resources from provision endpoints
+                                if "fabric_resources" in data:
+                                    fabric_resources = data["fabric_resources"]
                             except Exception:
                                 pass
                     _update_step(job, step_name, "done", detail, 100)
+
+                    # Persist fabric_resources to scenario config store
+                    if fabric_resources and scenario_name:
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as config_client:
+                                # Fetch existing scenario doc from graph-query-api
+                                get_resp = await config_client.get(
+                                    f"{GRAPH_QUERY_API}/query/scenarios/{scenario_name}"
+                                )
+                                existing_doc = get_resp.json() if get_resp.status_code == 200 else {}
+                                # Merge fabric_resources
+                                merged_resources = existing_doc.get("fabric_resources", {})
+                                merged_resources.update(fabric_resources)
+                                # Update via scenario save endpoint
+                                await config_client.put(
+                                    f"{GRAPH_QUERY_API}/query/scenarios/{scenario_name}/fabric-resources",
+                                    json=merged_resources,
+                                )
+                        except Exception as e:
+                            logger.warning("Could not persist fabric_resources for %s: %s", scenario_name, e)
                 else:
                     error_text = resp.text[:200]
                     _update_step(job, step_name, "error", f"HTTP {resp.status_code}: {error_text}")
@@ -277,8 +318,10 @@ async def _run_upload_job(job_id: str, files: dict[str, Path]):
 async def create_upload_job(
     scenario_name: str = Form(...),
     backend: str = Form("cosmosdb-gremlin"),
+    telemetry_backend: str = Form("cosmosdb-nosql"),
     workspace_id: str = Form(""),
     workspace_name: str = Form(""),
+
     graph: UploadFile | None = File(None),
     telemetry: UploadFile | None = File(None),
     runbooks: UploadFile | None = File(None),
@@ -310,6 +353,7 @@ async def create_upload_job(
     job = _make_job(
         scenario_name, step_names,
         backend=backend,
+        telemetry_backend=telemetry_backend,
         workspace_id=workspace_id,
         workspace_name=workspace_name,
     )

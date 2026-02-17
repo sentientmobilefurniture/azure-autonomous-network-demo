@@ -76,6 +76,23 @@ class FabricKQLBackend:
             logger.error("KQL query failed: %s", e)
             return {"error": True, "detail": str(e)}
 
+    async def ping(self) -> dict:
+        """Health check — run a minimal KQL management command."""
+        query = ".show tables | take 1"
+        import time
+        t0 = time.time()
+        try:
+            if not EVENTHOUSE_QUERY_URI:
+                return {"ok": False, "query": query, "detail": "EVENTHOUSE_QUERY_URI not configured", "latency_ms": 0}
+            client = self._get_client()
+            db = FABRIC_KQL_DB_NAME
+            response = await asyncio.to_thread(client.execute, db, query)
+            latency = int((time.time() - t0) * 1000)
+            return {"ok": True, "query": query, "detail": "tables accessible", "latency_ms": latency}
+        except Exception as e:
+            latency = int((time.time() - t0) * 1000)
+            return {"ok": False, "query": query, "detail": str(e), "latency_ms": latency}
+
     def close(self) -> None:
         if self._client:
             self._client = None
