@@ -589,6 +589,19 @@ if $PROVISION_FABRIC; then
   info "5d: Populating Fabric config..."
   (source "$CONFIG_FILE" && uv run python scripts/fabric/populate_fabric_config.py) || warn "Config population failed"
 
+  # 5e: Re-sync newly-discovered Fabric IDs to the Container App
+  # After Fabric provisioning, azure_config.env now has FABRIC_GRAPH_MODEL_ID,
+  # EVENTHOUSE_QUERY_URI, FABRIC_KQL_DB_NAME etc. We need to push these to
+  # the Container App env vars via azd provision (preprovision.sh → Bicep).
+  info "5e: Syncing Fabric config to Container App..."
+  source "$CONFIG_FILE"
+  if azd provision --no-prompt; then
+    ok "Fabric config synced to Container App"
+  else
+    warn "azd provision failed — Container App may have stale Fabric config."
+    warn "Run 'azd provision' manually after verifying azure_config.env."
+  fi
+
   ok "Fabric provisioning complete"
 else
   step "Step 5: Fabric Provisioning (SKIPPED — use --provision-fabric)"
