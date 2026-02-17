@@ -1,0 +1,73 @@
+# ============================================================================
+# Autonomous Network NOC Demo — .gitignore
+# ============================================================================
+
+# --- Secrets & deployment config (contains resource IDs, endpoints) ---
+azure_config.env
+*.env
+!azure_config.env.template
+.env.local
+.env.*.local
+
+# --- Azure Developer CLI ---
+.azure/
+
+# --- Agent IDs (generated per-deployment by provision_agents.py) ---
+scripts/agent_ids.json
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.python-version
+*.egg-info/
+dist/
+build/
+*.whl
+
+# --- uv / pip ---
+uv.lock
+
+# --- IDE / Editor ---
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Testing ---
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# --- Generated data (recreated by scenario scripts) ---
+data/scenarios/*/data/entities/
+data/scenarios/*/data/telemetry/
+data/scenarios/*.tar.gz
+data/network/
+data/telemetry/
+data/cosmosdb/
+
+# --- Azure Functions (local dev artifacts) ---
+mcp_server/.python_packages/
+mcp_server/local.settings.json
+mcp_server/__azurite_db*/
+mcp_server/bin/
+mcp_server/obj/
+
+# --- Frontend (Node/Vite) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- Logs ---
+*.log
+logs/

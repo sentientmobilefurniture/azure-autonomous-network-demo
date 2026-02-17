@@ -1,0 +1,30 @@
+Incident: INC-2025-10-28-0052
+Title: Capacity exhaustion LINK-MEL-ADL-FIBRE-01 — traffic surge
+Severity: P2
+Root Cause: LINK-MEL-ADL-FIBRE-01
+Root Cause Type: CAPACITY_EXHAUSTION
+Created: 2025-10-28T09:00:00Z
+Resolved: 2025-10-28T12:00:00Z
+SLA Breached: No
+
+Description:
+University exam results release drove massive traffic surge from Adelaide campuses. LINK-MEL-ADL-FIBRE-01 hit 92% utilisation. QoS deprioritized residential broadband.
+
+Detection Method:
+Threshold-based alerting on UtilizationPct
+
+Resolution:
+Traffic engineering applied — shifted some Adelaide-bound traffic via SYD-ADL inland route. Peak subsided after 3 hours.
+
+Customer Impact:
+- BB-BUNDLE-ADL-SOUTH
+
+Services Affected: 1
+Alerts Generated: 28
+Alerts Suppressed: 27
+Time to Detect: 30 seconds
+Time to Reroute: 0 seconds
+Time to Resolve: 180 minutes
+
+Lessons Learned:
+SYD-ADL inland route provides useful overflow capacity for MEL-ADL corridor. Consider pre-configured traffic engineering policies for known high-traffic events.

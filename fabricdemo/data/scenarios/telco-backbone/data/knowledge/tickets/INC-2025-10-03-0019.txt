@@ -1,0 +1,31 @@
+Incident: INC-2025-10-03-0019
+Title: Firewall cluster failover FW-PER-01 — firmware bug
+Severity: P2
+Root Cause: FW-PER-01
+Root Cause Type: SOFTWARE_BUG
+Created: 2025-10-03T11:20:00Z
+Resolved: 2025-10-03T12:50:00Z
+SLA Breached: No
+
+Description:
+Known Fortinet firmware bug caused FW-PER-01 active node to crash during deep packet inspection of encrypted traffic. Passive node took over but with 45-second gap in stateful inspection.
+
+Detection Method:
+Firewall health monitoring — heartbeat timeout
+
+Resolution:
+Emergency firmware patch applied (hotfix from vendor). Active/passive roles rebalanced.
+
+Customer Impact:
+- VPN-IRONORE-CORP
+- VPN-WESTGAS-CORP
+
+Services Affected: 2
+Alerts Generated: 156
+Alerts Suppressed: 155
+Time to Detect: 10 seconds
+Time to Reroute: 45 seconds
+Time to Resolve: 90 minutes
+
+Lessons Learned:
+Perth firewall is a single cluster — no geographic redundancy. Consider deploying secondary inspection path via Adelaide firewall for critical mining and energy VPN traffic.

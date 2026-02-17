@@ -1,0 +1,132 @@
+# ============================================================================
+# Scenario Manifest — Hello World
+# ============================================================================
+
+name: hello-world
+display_name: "Hello World — Simple Server Crash"
+description: >
+  A minimal scenario with 7 nodes demonstrating the platform's core
+  capabilities. SRV-ALPHA-01 crashes, taking down APP-WEB-01 and APP-API-01.
+  A GraphExplorerAgent maps the blast radius while a RunbookKBAgent
+  retrieves the recovery procedure.
+version: "1.0"
+domain: infrastructure
+
+# ---------------------------------------------------------------------------
+# Use cases & example questions
+# ---------------------------------------------------------------------------
+
+use_cases:
+  - "Server crash blast radius analysis"
+  - "Application dependency mapping"
+  - "Runbook-guided incident recovery"
+
+example_questions:
+  - "What applications are affected by the SRV-ALPHA-01 crash?"
+  - "Which databases does APP-API-01 connect to?"
+  - "What is the recovery procedure for a server crash?"
+
+# ---------------------------------------------------------------------------
+# Data layout
+# ---------------------------------------------------------------------------
+
+paths:
+  entities: data/entities
+  graph_schema: graph_schema.yaml
+  telemetry: data/telemetry
+  runbooks: data/knowledge/runbooks
+  tickets: data/knowledge/tickets
+  prompts: data/prompts
+  default_alert: data/prompts/alert_storm.md
+
+# ---------------------------------------------------------------------------
+# Data sources
+# ---------------------------------------------------------------------------
+
+data_sources:
+  graph:
+    connector: "fabric-gql"
+    config:
+      database: "networkgraph"
+      graph: "hello-world-topology"
+      partition_key: "/partitionKey"
+    schema_file: "graph_schema.yaml"
+
+  telemetry:
+    connector: "fabric-kql"
+    config:
+      database: "telemetry"
+      container_prefix: "hello-world"
+      containers:
+        - name: AlertStream
+          partition_key: /SourceNodeType
+          csv_file: AlertStream.csv
+          id_field: AlertId
+          numeric_fields: [CPUUtilPct, MemoryUtilPct, DiskUsagePct, ResponseTimeMs]
+
+  search_indexes:
+    runbooks:
+      index_name: "hello-world-runbooks-index"
+      source: "data/knowledge/runbooks"
+      blob_container: "runbooks"
+
+# ---------------------------------------------------------------------------
+# Agents — Minimal: Graph + Runbook + Orchestrator
+# ---------------------------------------------------------------------------
+
+agents:
+  - name: "GraphExplorerAgent"
+    role: "graph_explorer"
+    model: "gpt-4.1"
+    instructions_file: "prompts/graph_explorer/"
+    compose_with_connector: true
+    tools:
+      - type: "openapi"
+        spec_template: "graph"
+        keep_path: "/query/graph"
+
+  - name: "RunbookKBAgent"
+    role: "runbook"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_runbook_kb_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "runbooks"
+
+  - name: "Orchestrator"
+    role: "orchestrator"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_orchestrator_agent.md"
+    is_orchestrator: true
+    connected_agents:
+      - "GraphExplorerAgent"
+      - "RunbookKBAgent"
+
+# ---------------------------------------------------------------------------
+# Graph visualisation hints
+# ---------------------------------------------------------------------------
+
+graph_styles:
+  node_types:
+    Server:      { color: "#3B82F6", size: 28, icon: "server" }
+    Application: { color: "#22C55E", size: 22, icon: "service" }
+    Database:    { color: "#F59E0B", size: 24, icon: "box" }
+
+# ---------------------------------------------------------------------------
+# Telemetry baselines
+# ---------------------------------------------------------------------------
+
+telemetry_baselines:
+  alert_stream:
+    - metric: CPUUtilPct
+      normal: "< 60%"
+      anomalous: "> 90%"
+    - metric: MemoryUtilPct
+      normal: "< 70%"
+      anomalous: "> 90%"
+    - metric: DiskUsagePct
+      normal: "< 60%"
+      anomalous: "> 90%"
+    - metric: ResponseTimeMs
+      normal: "< 200 ms"
+      anomalous: "> 2000 ms"
