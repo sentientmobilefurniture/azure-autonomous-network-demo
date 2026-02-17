@@ -1,8 +1,11 @@
 """
-Fabric-specific environment variable reads.
+Fabric-specific configuration.
 
-Follows the same adapter pattern as cosmos_config.py.
-Imported only by backends/fabric.py — no pollution of shared config.
+Provides Fabric API constants and workspace name conventions.
+Resource IDs (graph model, eventhouse, KQL DB) are discovered at
+runtime by fabric_discovery.py — not read from env vars here.
+
+Imported by backends/fabric.py for API URL and scope constants.
 """
 
 from __future__ import annotations
@@ -17,14 +20,13 @@ FABRIC_API_URL = os.getenv("FABRIC_API_URL", "https://api.fabric.microsoft.com/v
 FABRIC_SCOPE = os.getenv("FABRIC_SCOPE", "https://api.fabric.microsoft.com/.default")
 
 # ---------------------------------------------------------------------------
-# Workspace & Graph Model (required for graph queries)
+# Workspace ID — the only required env var for Fabric
 # ---------------------------------------------------------------------------
 
 FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
-FABRIC_GRAPH_MODEL_ID = os.getenv("FABRIC_GRAPH_MODEL_ID", "")
 
 # ---------------------------------------------------------------------------
-# Provisioning defaults (re-added for Phase B provision pipeline)
+# Provisioning defaults (used by provision scripts, not at runtime)
 # ---------------------------------------------------------------------------
 
 FABRIC_WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
@@ -34,19 +36,22 @@ FABRIC_ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntolog
 FABRIC_CAPACITY_ID = os.getenv("FABRIC_CAPACITY_ID", "")
 
 # ---------------------------------------------------------------------------
-# Readiness checks (two-stage lifecycle)
+# Readiness checks — use fabric_discovery for runtime checks
 # ---------------------------------------------------------------------------
 
 # Stage 1: workspace reachable — enough for discovery endpoints
 FABRIC_WORKSPACE_CONNECTED = bool(os.getenv("FABRIC_WORKSPACE_ID"))
 
-# Stage 2: graph queries ready — workspace + graph model both set
-FABRIC_QUERY_READY = bool(
-    os.getenv("FABRIC_WORKSPACE_ID") and os.getenv("FABRIC_GRAPH_MODEL_ID")
-)
 
-# Backward compat alias — existing code that imports FABRIC_CONFIGURED is unaffected
-FABRIC_CONFIGURED = FABRIC_QUERY_READY
+def is_fabric_configured() -> bool:
+    """Check if Fabric is configured (workspace set, graph model discoverable)."""
+    from fabric_discovery import is_fabric_ready
+    return is_fabric_ready()
+
+
+# Backward compat alias
+FABRIC_CONFIGURED = FABRIC_WORKSPACE_CONNECTED  # lazy check; full check via is_fabric_configured()
+FABRIC_QUERY_READY = FABRIC_WORKSPACE_CONNECTED
 
 
 # ---------------------------------------------------------------------------

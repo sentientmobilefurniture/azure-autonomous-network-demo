@@ -67,12 +67,12 @@ SCENARIO_CONFIG = {
             "type": "fabric_gql",
             "label": "Fabric GQL (telco-noc-topology)",
             "workspace": os.getenv("FABRIC_WORKSPACE_ID", ""),
-            "graph_model": os.getenv("FABRIC_GRAPH_MODEL_ID", ""),
+            "graph_model": "(auto-discovered at runtime)",
         },
         "telemetry": {
             "type": "fabric_kql",
             "label": "Fabric KQL (NetworkTelemetryEH)",
-            "eventhouse": os.getenv("EVENTHOUSE_QUERY_URI", ""),
+            "eventhouse": "(auto-discovered at runtime)",
         },
         "runbooks": {
             "type": "azure_ai_search",

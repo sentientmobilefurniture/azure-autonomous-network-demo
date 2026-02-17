@@ -19,9 +19,6 @@ from config import get_credential
 from adapters.fabric_config import (
     FABRIC_API_URL,
     FABRIC_SCOPE,
-    FABRIC_WORKSPACE_ID,
-    FABRIC_GRAPH_MODEL_ID,
-    FABRIC_CONFIGURED,
 )
 
 logger = logging.getLogger("graph-query-api.fabric")
@@ -84,15 +81,18 @@ used by other backends so routers don't need changes.
 
         We return the normalised: {"columns": [...], "data": [...]}
         """
-        if not FABRIC_CONFIGURED:
+        from fabric_discovery import get_fabric_config, is_fabric_ready
+
+        if not is_fabric_ready():
             raise HTTPException(
                 status_code=503,
                 detail="Fabric backend not configured. Set FABRIC_WORKSPACE_ID "
-                       "and FABRIC_GRAPH_MODEL_ID environment variables.",
+                       "(graph model is discovered automatically).",
             )
 
-        workspace_id = kwargs.get("workspace_id") or FABRIC_WORKSPACE_ID
-        graph_model_id = kwargs.get("graph_model_id") or FABRIC_GRAPH_MODEL_ID
+        cfg = get_fabric_config()
+        workspace_id = kwargs.get("workspace_id") or cfg.workspace_id
+        graph_model_id = kwargs.get("graph_model_id") or cfg.graph_model_id
 
         url = (
             f"{FABRIC_API_URL}/workspaces/{workspace_id}"

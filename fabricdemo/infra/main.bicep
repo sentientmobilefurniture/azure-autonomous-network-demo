@@ -32,15 +32,6 @@ param graphBackend string = 'fabric-gql'
 @description('Fabric workspace ID (set after Fabric provisioning)')
 param fabricWorkspaceId string = ''
 
-@description('Fabric Graph Model ID (set after ontology provisioning)')
-param fabricGraphModelId string = ''
-
-@description('Fabric Eventhouse query URI (set after eventhouse provisioning)')
-param eventhouseQueryUri string = ''
-
-@description('Fabric KQL database name (set after eventhouse provisioning)')
-param fabricKqlDbName string = ''
-
 @description('Fabric capacity SKU (F8 default). Pause when not in use to control cost.')
 @allowed(['F2', 'F4', 'F8', 'F16', 'F32', 'F64', 'F128', 'F256', 'F512', 'F1024', 'F2048'])
 param fabricCapacitySku string = 'F8'
@@ -204,9 +195,6 @@ module app 'modules/container-app.bicep' = {
       { name: 'EMBEDDING_MODEL', value: 'text-embedding-3-small' }
       { name: 'EMBEDDING_DIMENSIONS', value: '1536' }
       { name: 'FABRIC_WORKSPACE_ID', value: fabricWorkspaceId }
-      { name: 'FABRIC_GRAPH_MODEL_ID', value: fabricGraphModelId }
-      { name: 'EVENTHOUSE_QUERY_URI', value: eventhouseQueryUri }
-      { name: 'FABRIC_KQL_DB_NAME', value: fabricKqlDbName }
     ], [])
     secrets: []
   }

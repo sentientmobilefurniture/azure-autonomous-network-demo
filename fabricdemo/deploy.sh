@@ -415,7 +415,7 @@ GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
 
 # --- Azure AI Search (AUTO: name after azd up) ---
 AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
-UNBOOKS_INDEX_NAME=\${RUNBOOKS_INDEX_NAME:-runbooks-index}
+RUNBOOKS_INDEX_NAME=\${RUNBOOKS_INDEX_NAME:-runbooks-index}
 TICKETS_INDEX_NAME=\${TICKETS_INDEX_NAME:-tickets-index}
 # --- Azure Storage (AUTO: name after azd up) ---
 STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
@@ -427,8 +427,8 @@ GRAPH_BACKEND=fabric-gql
 COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
 
 # --- Fabric Resources ---
+# Graph Model ID, Eventhouse URI, and KQL DB name are discovered at runtime.
 FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
-FABRIC_GRAPH_MODEL_ID=${FABRIC_GRAPH_MODEL_ID:-}
 FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
 
 # --- App / CORS ---
@@ -589,18 +589,9 @@ if $PROVISION_FABRIC; then
   info "5d: Populating Fabric config..."
   (source "$CONFIG_FILE" && uv run python scripts/fabric/populate_fabric_config.py) || warn "Config population failed"
 
-  # 5e: Re-sync newly-discovered Fabric IDs to the Container App
-  # After Fabric provisioning, azure_config.env now has FABRIC_GRAPH_MODEL_ID,
-  # EVENTHOUSE_QUERY_URI, FABRIC_KQL_DB_NAME etc. We need to push these to
-  # the Container App env vars via azd provision (preprovision.sh → Bicep).
-  info "5e: Syncing Fabric config to Container App..."
-  source "$CONFIG_FILE"
-  if azd provision --no-prompt; then
-    ok "Fabric config synced to Container App"
-  else
-    warn "azd provision failed — Container App may have stale Fabric config."
-    warn "Run 'azd provision' manually after verifying azure_config.env."
-  fi
+  # NOTE: Graph Model ID, Eventhouse Query URI, and KQL DB name are
+  # discovered at runtime by graph-query-api/fabric_discovery.py.
+  # No need to re-sync these to the Container App via azd provision.
 
   ok "Fabric provisioning complete"
 else
