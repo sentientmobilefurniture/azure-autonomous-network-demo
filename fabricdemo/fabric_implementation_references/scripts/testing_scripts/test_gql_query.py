@@ -2,7 +2,7 @@
 Test GQL (Graph Query Language) queries against a Microsoft Fabric Graph Model.
 
 Uses the Fabric REST API's Execute Query (beta) endpoint:
-  POST https://api.fabric.microsoft.com/v1/workspaces/{workspaceId}/GraphModels/{graphModelId}/executeQuery?beta=True
+  POST https://api.fabric.microsoft.com/v1/workspaces/{workspaceId}/GraphModels/{graphModelId}/executeQuery?beta=true
 
 Prerequisites:
   - Graph Model item exists in the Fabric workspace (created by provision_ontology.py)

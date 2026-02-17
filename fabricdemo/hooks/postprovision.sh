@@ -22,7 +22,7 @@ echo "============================================"
 # 1. Upload runbooks + tickets to blob storage
 #    (RBAC may take a few minutes to propagate after deployment)
 # --------------------------------------------------------------------------
-DATA_DIR="$PROJECT_ROOT/data/scenarios/telco-noc/data"
+DATA_DIR="$PROJECT_ROOT/data/scenarios/telco-noc/data/knowledge"
 MAX_ATTEMPTS=6
 WAIT_SECS=30
 
@@ -88,6 +88,8 @@ EMBED_DIMS="${EMBEDDING_DIMENSIONS:-1536}"
 PREV_CORS="${CORS_ORIGINS:-http://localhost:5173}"
 PREV_GPT_CAPACITY="${GPT_CAPACITY_1K_TPM:-10}"
 PREV_GRAPH_BACKEND="${GRAPH_BACKEND:-fabric-gql}"
+PREV_FABRIC_ADMIN="${AZURE_FABRIC_ADMIN:-}"
+PREV_FABRIC_SKU="${FABRIC_CAPACITY_SKU:-}"
 
 cat > "$CONFIG_FILE" <<EOF
 # ============================================================================
@@ -140,10 +142,15 @@ APP_PRINCIPAL_ID=${AZD_APP_PRINCIPAL_ID:-${APP_PRINCIPAL_ID:-}}
 # GRAPH_QUERY_API_URI points to the same unified container
 GRAPH_QUERY_API_URI=${AZD_GRAPH_QUERY_API_URI:-${APP_URI:-}}
 
-# --- Cosmos DB NoSQL / Metadata (AUTO: from deployment) ---
+# --- Cosmos DB NoSQL / Interactions (AUTO: from deployment) ---
 COSMOS_NOSQL_ENDPOINT=${AZD_COSMOS_NOSQL_ENDPOINT:-${COSMOS_NOSQL_ENDPOINT:-}}
 
+# --- Fabric Admin & Capacity (USER/AUTO: admin auto-detected, SKU user-configurable) ---
+AZURE_FABRIC_ADMIN=${PREV_FABRIC_ADMIN}
+FABRIC_CAPACITY_SKU=${PREV_FABRIC_SKU:-F8}
+
 # --- Fabric Resources ---
+FABRIC_CAPACITY_ID=${FABRIC_CAPACITY_ID:-}
 FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
 FABRIC_GRAPH_MODEL_ID=${FABRIC_GRAPH_MODEL_ID:-}
 FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
@@ -152,6 +159,30 @@ FABRIC_KQL_DB_NAME=${FABRIC_KQL_DB_NAME:-}
 EOF
 
 echo "  \u2713 azure_config.env written"
+
+# --------------------------------------------------------------------------
+# 3. Resolve Fabric capacity GUID (if Bicep provisioned a capacity)
+# --------------------------------------------------------------------------
+FAB_CAP_NAME="${FABRIC_CAPACITY_NAME:-${AZURE_FABRIC_CAPACITY_NAME:-}}"
+if [[ -n "$FAB_CAP_NAME" ]]; then
+  echo ""
+  echo "Resolving Fabric capacity GUID for '$FAB_CAP_NAME'..."
+  CAP_GUID=$(az rest \
+    --url "https://api.fabric.microsoft.com/v1/capacities" \
+    --resource "https://api.fabric.microsoft.com" \
+    --query "value[?displayName=='$FAB_CAP_NAME'].id | [0]" \
+    -o tsv 2>/dev/null || true)
+
+  if [[ -n "$CAP_GUID" && "$CAP_GUID" != "None" ]]; then
+    sed -i "s|^FABRIC_CAPACITY_ID=.*|FABRIC_CAPACITY_ID=$CAP_GUID|" "$CONFIG_FILE"
+    # Add if not present
+    grep -q "^FABRIC_CAPACITY_ID=" "$CONFIG_FILE" || echo "FABRIC_CAPACITY_ID=$CAP_GUID" >> "$CONFIG_FILE"
+    echo "  ✓ FABRIC_CAPACITY_ID=$CAP_GUID"
+  else
+    echo "  ⚠ Could not resolve Fabric capacity GUID — set FABRIC_CAPACITY_ID manually in azure_config.env"
+    echo "    (Fabric portal → Capacity settings → copy the Capacity ID)"
+  fi
+fi
 
 echo ""
 echo "✅ Post-provision complete!"

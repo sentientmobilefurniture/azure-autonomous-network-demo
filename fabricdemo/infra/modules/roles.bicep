@@ -202,6 +202,17 @@ resource userCosmosDbDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlR
   }
 }
 
+// User → DocumentDB Account Contributor (control-plane: create databases/containers during provisioning scripts)
+resource userDocumentDbContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(cosmosNoSqlAccountName)) {
+  name: guid(cosmosNoSqlAccount.id, principalId, 'DocumentDBAccountContributor')
+  scope: cosmosNoSqlAccount
+  properties: {
+    principalId: principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5bd9cd88-fe45-4216-938b-f97437e15450')
+    principalType: 'User'
+  }
+}
+
 // Container App MI → Cosmos DB Built-in Data Contributor on NoSQL account
 // Required for graph-query-api to query telemetry via DefaultAzureCredential
 resource containerAppCosmosDbDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (!empty(cosmosNoSqlAccountName) && !empty(containerAppPrincipalId)) {

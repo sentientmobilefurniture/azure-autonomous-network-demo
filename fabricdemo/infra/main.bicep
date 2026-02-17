@@ -62,7 +62,7 @@ var abbrs = {
   aiFoundryProject: 'proj-'
   search: 'srch-'
   storage: 'st'
-  fabric: 'fc-'
+  fabric: 'fc'
 }
 
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
@@ -191,7 +191,6 @@ module app 'modules/container-app.bicep' = {
       { name: 'AI_FOUNDRY_PROJECT_NAME', value: aiFoundry.outputs.projectName }
       { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
       { name: 'CORS_ORIGINS', value: '*' }
-      { name: 'AGENT_IDS_PATH', value: '/app/scripts/agent_ids.json' }
       { name: 'GRAPH_BACKEND', value: graphBackend }
       { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosNoSql.outputs.cosmosNoSqlEndpoint }
       { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }

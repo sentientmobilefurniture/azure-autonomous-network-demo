@@ -15,6 +15,5 @@ import os
 # ---------------------------------------------------------------------------
 
 COSMOS_NOSQL_ENDPOINT = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
-COSMOS_NOSQL_DATABASE = os.getenv("COSMOS_NOSQL_DATABASE", "telemetry")
 
 

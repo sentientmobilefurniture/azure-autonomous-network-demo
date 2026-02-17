@@ -35,7 +35,8 @@ from _config import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-DATA_DIR = str(PROJECT_ROOT / "data" / "eventhouse")
+SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")
+DATA_DIR = str(PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "data" / "telemetry")
 
 # Table schemas — column name → KQL type
 TABLE_SCHEMAS = {
@@ -374,9 +375,11 @@ def main():
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 3. Enable Python 3.11.7 plugin (manual step)
+    # 3. Python 3.11.7 plugin (must be enabled via Fabric portal)
+    #    The .alter cluster policy sandbox command is NOT supported in
+    #    Fabric Eventhouse — it only works on standalone ADX clusters.
     # ------------------------------------------------------------------
-    print(f"\n--- Python Plugin Check ---")
+    print(f"\n--- Python Plugin (manual step) ---")
     print("  ⚠  The Python 3.11.7 language extension must be enabled on the")
     print("     Eventhouse before the anomaly detector will work.")
     print()
@@ -386,28 +389,20 @@ def main():
     print("    3. Toggle 'Python language extension' to ON")
     print("    4. Select Python 3.11.7 image → click 'Done'")
     print()
-    print("  Note: Enabling the plugin may take a few minutes and consumes")
-    print("        additional compute resources.")
-    print()
-    confirm = input("  Have you enabled the Python 3.11.7 plugin? [y/N/skip]: ").strip().lower()
-    if confirm == "skip":
-        print("  ⚠ Skipping — anomaly detector queries will fail until enabled.")
-    elif confirm not in ("y", "yes"):
-        print("  ✗ Please enable the plugin and re-run this script.")
-        sys.exit(1)
-    else:
-        print("  ✓ Python plugin confirmed.")
+    print("  Note: This cannot be automated via KQL management commands in")
+    print("        Fabric. Provisioning will continue — enable the plugin")
+    print("        when convenient; anomaly detector queries will fail until then.")
 
     # ------------------------------------------------------------------
     # 4. Create KQL tables
     # ------------------------------------------------------------------
-    print(f"\n--- Creating KQL tables ---")
-
     credential = DefaultAzureCredential()
     kcsb = KustoConnectionStringBuilder.with_azure_token_credential(
         query_uri, credential
     )
     kusto_client = KustoClient(kcsb)
+
+    print(f"\n--- Creating KQL tables ---")
 
     create_kql_tables(kusto_client, db_name)
 

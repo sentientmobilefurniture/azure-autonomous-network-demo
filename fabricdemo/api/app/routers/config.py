@@ -12,7 +12,7 @@ import os
 
 from fastapi import APIRouter, Request
 
-from app.paths import PROJECT_ROOT, AGENT_IDS_FILE
+from app.paths import PROJECT_ROOT
 from app.agent_ids import load_agent_ids
 
 logger = logging.getLogger("app.config")
@@ -94,7 +94,7 @@ SCENARIO_CONFIG = {
 
 
 def _load_current_config() -> dict:
-    """Load current config from agent_ids.json + env-var defaults."""
+    """Load current config from Foundry agent discovery + env-var defaults."""
     config = {
         "graph": "telco-noc",
         "runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", "runbooks-index"),
@@ -102,11 +102,12 @@ def _load_current_config() -> dict:
         "agents": None,
     }
 
-    if AGENT_IDS_FILE.exists():
-        try:
-            config["agents"] = load_agent_ids()
-        except Exception:
-            pass
+    try:
+        data = load_agent_ids()
+        if data:
+            config["agents"] = data
+    except Exception:
+        pass
 
     return config
 

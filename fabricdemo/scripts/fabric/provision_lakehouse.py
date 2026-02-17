@@ -39,7 +39,8 @@ from _config import (
 ONELAKE_ACCOUNT = "onelake"
 ONELAKE_URL = f"https://{ONELAKE_ACCOUNT}.dfs.fabric.microsoft.com"
 
-LAKEHOUSE_CSV_DIR = str(DATA_DIR / "lakehouse")
+SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")
+LAKEHOUSE_CSV_DIR = str(DATA_DIR / "scenarios" / SCENARIO / "data" / "entities")
 
 # CSV files to upload to Lakehouse → load as delta tables
 LAKEHOUSE_TABLES = [

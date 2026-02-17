@@ -76,12 +76,12 @@ paths:
   /query/telemetry:
     post:
       operationId: query_telemetry
-      summary: Execute a SQL query against telemetry data in Cosmos DB
+      summary: Execute a KQL query against telemetry data in Fabric Eventhouse
       description: |
-        Submits a Cosmos SQL query to a telemetry container in Azure Cosmos DB NoSQL.
+        Submits a KQL query to a telemetry table in Fabric Eventhouse.
         Returns columns and rows of alert or telemetry data.
-        Containers available: AlertStream (~5000 docs), LinkTelemetry (~8640 docs).
-        Use standard SQL syntax: SELECT, FROM c, WHERE, ORDER BY, TOP, GROUP BY.
+        Tables available: AlertStream (~5000 rows), LinkTelemetry (~8640 rows).
+        Use standard KQL syntax: table | where | project | order by | take.
       parameters:
         - name: X-Graph
           in: header
@@ -104,14 +104,13 @@ paths:
                 query:
                   type: string
                   description: |
-                    A Cosmos SQL query string.
-                    Always use FROM c as the alias.
-                    Example: SELECT c.AlertId, c.Severity, c.Description FROM c WHERE c.Severity = 'CRITICAL' ORDER BY c.Timestamp DESC OFFSET 0 LIMIT 5
+                    A KQL query string.
+                    Example: AlertStream | where Severity == 'CRITICAL' | order by Timestamp desc | take 5
                 container_name:
                   type: string
                   enum: ["AlertStream", "LinkTelemetry"]
                   description: |
-                    The Cosmos DB container to query.
+                    The KQL table to query.
                     Use "AlertStream" for network alerts.
                     Use "LinkTelemetry" for link telemetry readings.
       responses:

@@ -3,7 +3,7 @@ Router: Interaction History — save, list, get, and delete investigation record
 
 Interactions are stored in a dedicated Cosmos NoSQL database: interactions / interactions.
 Each document tracks a completed investigation's query, steps, diagnosis, and metadata.
-The database and container are pre-created by Bicep (infra/modules/cosmos-gremlin.bicep — NoSQL metadata store).
+The database and container are pre-created by Bicep (infra/modules/cosmos-nosql.bicep — NoSQL metadata store).
 
 Endpoints:
   GET    /query/interactions                  — list past interactions (optionally by scenario)

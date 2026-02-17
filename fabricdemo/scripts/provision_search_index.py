@@ -57,12 +57,9 @@ from azure.search.documents.indexes.models import (
     OutputFieldMappingEntry,
     SearchIndexerIndexProjection,
     SearchIndexerIndexProjectionSelector,
-    SearchIndexerIndexProjections,
+    SearchIndexerIndexProjectionsParameters,
     # Indexer
     SearchIndexer,
-    IndexingParameters,
-    IndexingParametersConfiguration,
-    FieldMapping,
 )
 
 # ---------------------------------------------------------------------------
@@ -195,8 +192,15 @@ def _create_index(
     config: dict,
 ) -> None:
     """Create or update search index with vector search and semantic config."""
+    # Delete existing index if it exists (field schema changes require recreation)
+    try:
+        index_client.delete_index(index_name)
+        print(f"    Deleted existing index '{index_name}' (field changes require recreation)")
+    except Exception:
+        pass  # Index doesn't exist yet — that's fine
+
     fields = [
-        SimpleField(name="chunk_id", type=SearchFieldDataType.String, key=True, filterable=True),
+        SearchField(name="chunk_id", type=SearchFieldDataType.String, key=True, filterable=True, analyzer_name="keyword"),
         SimpleField(name="parent_id", type=SearchFieldDataType.String, filterable=True),
         SearchableField(name="chunk", type=SearchFieldDataType.String),
         SearchableField(name="title", type=SearchFieldDataType.String, filterable=True),
@@ -283,7 +287,7 @@ def _create_skillset(
     )
 
     # Index projection: project chunks into the target index
-    index_projections = SearchIndexerIndexProjections(
+    index_projection = SearchIndexerIndexProjection(
         selectors=[
             SearchIndexerIndexProjectionSelector(
                 target_index_name=index_name,
@@ -296,14 +300,16 @@ def _create_skillset(
                 ],
             ),
         ],
+        parameters=SearchIndexerIndexProjectionsParameters(
+            projection_mode="skipIndexingParentDocuments"
+        ),
     )
 
     skillset = SearchIndexerSkillset(
         name=skillset_name,
         description=f"Chunking and embedding for {index_name}",
         skills=[split_skill, embedding_skill],
-        cognitive_services_account={"@odata.type": "#Microsoft.Azure.Search.AIServicesByIdentity", "subdomainUrl": f"https://{AI_FOUNDRY_NAME}.cognitiveservices.azure.com", "identity": None},
-        index_projections=index_projections,
+        index_projection=index_projection,
     )
 
     indexer_client.create_or_update_skillset(skillset)
@@ -326,14 +332,6 @@ def _create_indexer(
         data_source_name=data_source_name,
         skillset_name=skillset_name,
         target_index_name=index_name,
-        parameters=IndexingParameters(
-            configuration=IndexingParametersConfiguration(
-                parsing_mode="default",
-            ),
-        ),
-        field_mappings=[
-            FieldMapping(source_field_name="metadata_storage_path", target_field_name="chunk_id"),
-        ],
     )
 
     indexer_client.create_or_update_indexer(indexer)
@@ -433,6 +431,16 @@ def run(args: argparse.Namespace) -> None:
         print(f"  {'-' * 50}")
 
         try:
+            # Clean up existing pipeline (indexer → skillset → index must be deleted in order)
+            for resource_name, delete_fn in [
+                (f"{index_name}-indexer", indexer_client.delete_indexer),
+                (f"{index_name}-skillset", indexer_client.delete_skillset),
+            ]:
+                try:
+                    delete_fn(resource_name)
+                except Exception:
+                    pass
+
             # Optional: upload files to blob storage
             if args.upload_files:
                 print("  Uploading files to blob storage...")

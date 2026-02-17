@@ -1,61 +1,180 @@
 """
-Unified agent_ids.json reader with file-mtime caching.
+Runtime agent discovery via AI Foundry.
+
+Queries the Foundry project's agent listing API to discover provisioned
+agents by their known names, replacing the old agent_ids.json file
+dependency.  Results are cached with a configurable TTL.
 
 All modules that need agent IDs, names, or agent lists should import
-from here instead of independently reading and parsing the file.
+from here instead of independently querying Foundry.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
-
-from app.paths import AGENT_IDS_FILE
+import os
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Mtime-based cache
+# Known agent names — must match what agent_provisioner.py creates
+# ---------------------------------------------------------------------------
+
+AGENT_NAMES = {
+    "GraphExplorerAgent",
+    "TelemetryAgent",
+    "RunbookKBAgent",
+    "HistoricalTicketAgent",
+    "Orchestrator",
+}
+
+# ---------------------------------------------------------------------------
+# TTL-based cache (thread-safe)
 # ---------------------------------------------------------------------------
 
 _cache: dict | None = None
-_cache_mtime: float = 0.0
+_cache_time: float = 0.0
+_cache_lock = threading.Lock()
+_CACHE_TTL = float(os.getenv("AGENT_DISCOVERY_TTL", "300"))  # 5 min default
+
+# Cached credential singleton
+_credential = None
 
 
-def _read_agent_ids() -> dict:
-    """Read and parse agent_ids.json with file-mtime caching."""
-    global _cache, _cache_mtime
-    if not AGENT_IDS_FILE.exists():
+def _get_credential():
+    global _credential
+    if _credential is None:
+        from azure.identity import DefaultAzureCredential
+        _credential = DefaultAzureCredential()
+    return _credential
+
+
+def _get_project_client():
+    """Create an AIProjectClient for the current project."""
+    from azure.ai.projects import AIProjectClient
+
+    base_endpoint = os.environ.get("PROJECT_ENDPOINT", "").rstrip("/")
+    project_name = os.environ.get("AI_FOUNDRY_PROJECT_NAME", "")
+    if not base_endpoint or not project_name:
+        return None
+    endpoint = f"{base_endpoint}/api/projects/{project_name}"
+    return AIProjectClient(endpoint=endpoint, credential=_get_credential())
+
+
+def _discover_agents() -> dict:
+    """Query AI Foundry and return an agent_ids-compatible dict.
+
+    Returns the same structure that agent_ids.json used to provide::
+
+        {
+            "orchestrator": {"id": "...", "name": "Orchestrator", ...},
+            "sub_agents": {
+                "GraphExplorerAgent": {"id": "...", ...},
+                ...
+            }
+        }
+
+    If duplicates exist, picks the newest by created_at.
+    """
+    client = _get_project_client()
+    if client is None:
+        logger.warning(
+            "Cannot discover agents: PROJECT_ENDPOINT or "
+            "AI_FOUNDRY_PROJECT_NAME not set"
+        )
         return {}
-    mtime = AGENT_IDS_FILE.stat().st_mtime
-    if _cache is not None and mtime == _cache_mtime:
-        return _cache
+
     try:
-        _cache = json.loads(AGENT_IDS_FILE.read_text())
-        _cache_mtime = mtime
-        return _cache
+        all_agents = list(client.agents.list_agents(limit=100))
     except Exception as e:
-        logger.warning("Failed to read %s: %s", AGENT_IDS_FILE, e)
+        logger.error("Failed to list agents from Foundry: %s", e)
         return {}
+
+    # Filter to known names; if duplicates, keep the newest
+    by_name: dict = {}
+    for agent in all_agents:
+        if agent.name in AGENT_NAMES:
+            if (
+                agent.name not in by_name
+                or agent.created_at > by_name[agent.name].created_at
+            ):
+                by_name[agent.name] = agent
+
+    # Build agent_ids-compatible structure
+    sub_agents: dict = {}
+    for name in (
+        "GraphExplorerAgent",
+        "TelemetryAgent",
+        "RunbookKBAgent",
+        "HistoricalTicketAgent",
+    ):
+        if name in by_name:
+            a = by_name[name]
+            sub_agents[name] = {
+                "id": a.id,
+                "name": a.name,
+                "model": a.model,
+                "is_orchestrator": False,
+                "tools": [],
+                "connected_agents": [],
+            }
+
+    result: dict = {}
+    orchestrator = by_name.get("Orchestrator")
+    if orchestrator:
+        result["orchestrator"] = {
+            "id": orchestrator.id,
+            "name": orchestrator.name,
+            "model": orchestrator.model,
+            "is_orchestrator": True,
+            "tools": [],
+            "connected_agents": list(sub_agents.keys()),
+        }
+    result["sub_agents"] = sub_agents
+    return result
+
+
+def _get_cached() -> dict:
+    """Return cached discovery result, refreshing if TTL expired."""
+    global _cache, _cache_time
+    with _cache_lock:
+        now = time.time()
+        if _cache is not None and (now - _cache_time) < _CACHE_TTL:
+            return _cache
+    # Refresh outside the lock (network call)
+    result = _discover_agents()
+    with _cache_lock:
+        _cache = result
+        _cache_time = time.time()
+    return result
+
+
+def invalidate_cache() -> None:
+    """Force the next call to re-query Foundry."""
+    global _cache, _cache_time
+    with _cache_lock:
+        _cache = None
+        _cache_time = 0.0
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — same signatures as the old file-based implementation
 # ---------------------------------------------------------------------------
 
 
 def load_agent_ids() -> dict:
-    """Return the full parsed agent_ids.json dict (cached by mtime)."""
-    return _read_agent_ids()
+    """Return the full agent discovery dict (cached with TTL)."""
+    return _get_cached()
 
 
 def get_agent_names() -> dict[str, str]:
-    """Return {agent_id: agent_name} mapping from agent_ids.json.
+    """Return {agent_id: agent_name} mapping.
 
     Handles both flat and nested (sub_agents) structures.
     """
-    data = _read_agent_ids()
+    data = _get_cached()
     names: dict[str, str] = {}
     for key, val in data.items():
         if isinstance(val, dict) and "id" in val:
@@ -68,7 +187,7 @@ def get_agent_names() -> dict[str, str]:
 
 
 def _make_agent_stub(role: str, entry: dict) -> dict:
-    """Build a single agent stub from an agent_ids.json entry."""
+    """Build a single agent stub from a discovery entry."""
     agent = {
         "id": entry["id"],
         "name": entry.get("name", role),
@@ -90,16 +209,14 @@ def get_agent_list() -> list[dict]:
 
     Handles both flat and nested (sub_agents) structures.
     """
-    data = _read_agent_ids()
+    data = _get_cached()
     if not data:
         return []
     agents = []
     for key, val in data.items():
         if isinstance(val, dict) and "id" in val:
-            # Top-level agent (e.g. "orchestrator")
             agents.append(_make_agent_stub(key, val))
         elif isinstance(val, dict):
-            # Nested container (e.g. "sub_agents")
             for sub_key, sub_val in val.items():
                 if isinstance(sub_val, dict) and "id" in sub_val:
                     agents.append(_make_agent_stub(sub_key, sub_val))

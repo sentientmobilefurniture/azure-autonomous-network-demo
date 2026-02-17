@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.orchestrator import is_configured, run_orchestrator
-from app.paths import AGENT_IDS_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +34,11 @@ class AlertRequest(BaseModel):
 
 
 def _load_stub_agent_names() -> list[str]:
-    """Read agent names from agent_ids.json; fall back to generic placeholders."""
+    """Read agent names via Foundry discovery; fall back to generic placeholders."""
     try:
-        from app.agent_ids import load_agent_ids
-        data = load_agent_ids()
-        # agent_ids.json has {role: {id, name}} — extract role names
-        return [role for role in data if role.lower() != "orchestrator"]
+        from app.agent_ids import get_agent_list
+        agents = get_agent_list()
+        return [a["name"] for a in agents if not a.get("is_orchestrator")]
     except (FileNotFoundError, json.JSONDecodeError):
         return ["Agent1", "Agent2"]
 
@@ -82,7 +80,7 @@ async def _stub_event_generator(alert_text: str):
                 "## Incident Summary\n\n"
                 "**Alert:** " + alert_text + "\n\n"
                 "This is a **stub response**. The real orchestrator is not configured.\n\n"
-                "Run `provision_agents.py` and ensure `scripts/agent_ids.json` exists."
+                "Run `provision_agents.py` to create agents in AI Foundry."
             ),
         }),
     }

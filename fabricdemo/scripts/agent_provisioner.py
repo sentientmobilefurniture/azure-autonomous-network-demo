@@ -30,7 +30,6 @@ logger = logging.getLogger("agent-provisioner")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OPENAPI_DIR = PROJECT_ROOT / "graph-query-api" / "openapi"
-AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
 
 AI_SEARCH_CONNECTION_NAME = "aisearch-connection"
 
@@ -43,18 +42,6 @@ OPENAPI_TEMPLATE_DIR = OPENAPI_DIR / "templates"
 # Connector-specific variable expansions for OpenAPI template placeholders.
 # Used by _load_openapi_spec() when rendering templates.
 CONNECTOR_OPENAPI_VARS: dict[str, dict[str, str]] = {
-    "cosmosdb": {
-        "query_language_description": (
-            "Submits a Gremlin traversal query to Azure Cosmos DB for Apache Gremlin. "
-            "Send Gremlin queries as plain text strings (no bytecode, no lambdas). "
-            "Cosmos DB only supports string-based Gremlin."
-        ),
-        "telemetry_query_language_description": (
-            "Submits a Cosmos SQL query to a telemetry container in Azure Cosmos DB NoSQL. "
-            "Use standard SQL syntax: SELECT, FROM c, WHERE, ORDER BY, TOP, GROUP BY. "
-            "Always use FROM c as the alias."
-        ),
-    },
     "mock": {
         "query_language_description": (
             "Sends a query to the mock graph backend, which returns static network "
@@ -126,7 +113,7 @@ def _load_openapi_spec(
     If spec_template is provided (e.g. "graph", "telemetry"), loads from
     openapi/templates/{spec_template}.yaml and injects connector-specific
     descriptions. Otherwise falls back to the per-backend spec files
-    (openapi/cosmosdb.yaml, openapi/mock.yaml) for backward compatibility.
+    (openapi/mock.yaml) for backward compatibility.
     """
     if spec_template:
         template_file = OPENAPI_TEMPLATE_DIR / f"{spec_template}.yaml"
@@ -185,7 +172,7 @@ class AgentProvisioner:
         client = self._get_client()
         agents_client = client.agents
         deleted = 0
-        for agent in agents_client.list_agents():
+        for agent in agents_client.list_agents(limit=100):
             if agent.name in AGENT_NAMES:
                 logger.info("Deleting %s (%s)", agent.name, agent.id)
                 agents_client.delete_agent(agent.id)
@@ -202,10 +189,12 @@ class AgentProvisioner:
         runbooks_index: str,
         tickets_index: str,
         search_connection_id: str,
-        force: bool = True,
         on_progress: callable | None = None,
     ) -> dict:
         """Provision all 5 agents and return agent_ids structure.
+
+        Always cleans up existing agents with matching names first
+        to guarantee idempotent provisioning (no duplicates).
 
         Args:
             model: Model deployment name (e.g. "gpt-4.1")
@@ -217,11 +206,10 @@ class AgentProvisioner:
             runbooks_index: AI Search index name for RunbookKB
             tickets_index: AI Search index name for HistoricalTicket
             search_connection_id: Foundry connection ID for AI Search
-            force: Delete existing agents before creating
             on_progress: Optional callback(step: str, detail: str)
 
         Returns:
-            Dict matching agent_ids.json structure
+            Dict matching agent_ids structure
         """
         def emit(step: str, detail: str):
             logger.info("[%s] %s", step, detail)
@@ -231,9 +219,10 @@ class AgentProvisioner:
         client = self._get_client()
         agents_client = client.agents
 
-        if force:
-            emit("cleanup", "Deleting existing agents...")
-            self.cleanup_existing()
+        emit("cleanup", "Deleting existing agents with matching names...")
+        deleted = self.cleanup_existing()
+        if deleted:
+            emit("cleanup", f"Deleted {deleted} existing agent(s)")
 
         # Create sub-agents
         sub_agents = []
@@ -242,7 +231,7 @@ class AgentProvisioner:
         emit("graph_explorer", "Creating GraphExplorerAgent...")
         ge_tools = []
         if graph_query_api_uri:
-            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/graph", graph_name=graph_name)
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/graph", graph_name=graph_name, spec_template="graph")
             tool = OpenApiTool(
                 name="query_graph",
                 spec=spec,
@@ -264,7 +253,7 @@ class AgentProvisioner:
         emit("telemetry", "Creating TelemetryAgent...")
         tel_tools = []
         if graph_query_api_uri:
-            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/telemetry", graph_name=graph_name)
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/telemetry", graph_name=graph_name, spec_template="telemetry")
             tool = OpenApiTool(
                 name="query_telemetry",
                 spec=spec,
@@ -356,13 +345,6 @@ class AgentProvisioner:
                 for sa in sub_agents
             },
         }
-
-        # Save to file as well (for backwards compat)
-        try:
-            AGENT_IDS_FILE.write_text(json.dumps(result, indent=2) + "\n")
-            emit("save", f"Agent IDs saved to {AGENT_IDS_FILE.name}")
-        except Exception as e:
-            logger.warning("Failed to save agent_ids.json: %s", e)
 
         return result
 

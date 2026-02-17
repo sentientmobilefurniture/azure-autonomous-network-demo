@@ -47,17 +47,25 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   name: 'default'
 }
 
-resource telemetryDataContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource networkDataContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
-  name: 'telemetry-data'
+  name: 'network-data'
   properties: {
     publicAccess: 'None'
   }
 }
 
-resource networkDataContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource runbooksContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
-  name: 'network-data'
+  name: 'runbooks'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource ticketsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'tickets'
   properties: {
     publicAccess: 'None'
   }

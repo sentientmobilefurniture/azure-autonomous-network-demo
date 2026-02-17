@@ -30,7 +30,14 @@ from azure.ai.agents.models import AgentEventHandler
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(PROJECT_ROOT / "azure_config.env", override=True)
 
-AGENT_IDS_FILE = PROJECT_ROOT / "scripts" / "agent_ids.json"
+# Known agent names (must match what provisioner creates)
+AGENT_NAMES = {
+    "GraphExplorerAgent",
+    "TelemetryAgent",
+    "RunbookKBAgent",
+    "HistoricalTicketAgent",
+    "Orchestrator",
+}
 
 DEFAULT_ALERT = (
     "14:31:14.259 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION "
@@ -48,30 +55,24 @@ C_RESET = "\033[0m"
 
 
 def load_orchestrator_id() -> str:
-    """Load the Orchestrator agent ID from agent_ids.json."""
-    if not AGENT_IDS_FILE.exists():
-        print(f"ERROR: {AGENT_IDS_FILE.name} not found. Run provision_agents.py first.")
-        sys.exit(1)
-
-    data = json.loads(AGENT_IDS_FILE.read_text())
-    agent_id = data.get("orchestrator", {}).get("id")
-    if not agent_id:
-        print("ERROR: No orchestrator ID in agent_ids.json.")
-        sys.exit(1)
-
-    return agent_id
+    """Discover the Orchestrator agent ID from AI Foundry."""
+    client = get_project_client()
+    agents = list(client.agents.list_agents(limit=100))
+    for a in agents:
+        if a.name == "Orchestrator":
+            return a.id
+    print("ERROR: No Orchestrator agent found in Foundry. Run provision_agents.py first.")
+    sys.exit(1)
 
 
 def load_agent_names() -> dict[str, str]:
-    """Load a map of agent_id -> name from agent_ids.json."""
-    data = json.loads(AGENT_IDS_FILE.read_text())
+    """Discover agent_id -> name map from AI Foundry."""
+    client = get_project_client()
+    agents = list(client.agents.list_agents(limit=100))
     names = {}
-    orch = data.get("orchestrator", {})
-    if orch.get("id"):
-        names[orch["id"]] = orch.get("name", "Orchestrator")
-    for sa in data.get("sub_agents", {}).values():
-        if sa.get("id"):
-            names[sa["id"]] = sa.get("name", sa["id"])
+    for a in agents:
+        if a.name in AGENT_NAMES:
+            names[a.id] = a.name
     return names
 
 

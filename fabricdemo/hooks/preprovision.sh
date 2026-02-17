@@ -22,7 +22,7 @@ if [ -f "$CONFIG_FILE" ]; then
 
   # Sync selected variables to azd env for Bicep
   # (POSIX-compatible — no associative arrays)
-  for var_name in AZURE_LOCATION GPT_CAPACITY_1K_TPM GRAPH_BACKEND FABRIC_WORKSPACE_ID FABRIC_GRAPH_MODEL_ID EVENTHOUSE_QUERY_URI FABRIC_KQL_DB_NAME; do
+  for var_name in AZURE_LOCATION GPT_CAPACITY_1K_TPM GRAPH_BACKEND FABRIC_WORKSPACE_ID FABRIC_GRAPH_MODEL_ID EVENTHOUSE_QUERY_URI FABRIC_KQL_DB_NAME AZURE_FABRIC_ADMIN FABRIC_CAPACITY_SKU; do
     value=""
     case "$var_name" in
       AZURE_LOCATION)        value="${AZURE_LOCATION:-}" ;;
@@ -32,6 +32,8 @@ if [ -f "$CONFIG_FILE" ]; then
       FABRIC_GRAPH_MODEL_ID) value="${FABRIC_GRAPH_MODEL_ID:-}" ;;
       EVENTHOUSE_QUERY_URI)  value="${EVENTHOUSE_QUERY_URI:-}" ;;
       FABRIC_KQL_DB_NAME)    value="${FABRIC_KQL_DB_NAME:-}" ;;
+      AZURE_FABRIC_ADMIN)    value="${AZURE_FABRIC_ADMIN:-}" ;;
+      FABRIC_CAPACITY_SKU)   value="${FABRIC_CAPACITY_SKU:-}" ;;
     esac
     if [ -n "$value" ]; then
       azd env set "$var_name" "$value"
@@ -53,4 +55,21 @@ if [ -z "${AZURE_PRINCIPAL_ID:-}" ]; then
   echo "  → Set AZURE_PRINCIPAL_ID=$PRINCIPAL_ID"
 else
   echo "  → AZURE_PRINCIPAL_ID already set: $AZURE_PRINCIPAL_ID"
+fi
+
+# --------------------------------------------------------------------------
+# 3. Auto-detect AZURE_FABRIC_ADMIN if not set (enables Fabric capacity)
+# --------------------------------------------------------------------------
+if [ -z "${AZURE_FABRIC_ADMIN:-}" ]; then
+  echo "AZURE_FABRIC_ADMIN not set — resolving from signed-in user..."
+  FABRIC_ADMIN=$(az ad signed-in-user show --query userPrincipalName -o tsv 2>/dev/null || true)
+  if [ -n "$FABRIC_ADMIN" ]; then
+    azd env set AZURE_FABRIC_ADMIN "$FABRIC_ADMIN"
+    echo "  → Set AZURE_FABRIC_ADMIN=$FABRIC_ADMIN"
+  else
+    echo "  ⚠ Could not resolve user email — Fabric capacity will NOT be provisioned."
+    echo "    Set AZURE_FABRIC_ADMIN manually in azure_config.env to enable it."
+  fi
+else
+  echo "  → AZURE_FABRIC_ADMIN already set: $AZURE_FABRIC_ADMIN"
 fi

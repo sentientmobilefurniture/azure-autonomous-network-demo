@@ -50,8 +50,6 @@ COPY api/app/ ./app/
 # Copy scripts needed at runtime
 RUN mkdir -p /app/scripts
 COPY scripts/agent_provisioner.py /app/scripts/
-# agent_ids.json is created post-deploy by provision_agents.py (CLI or UI)
-# The API falls back to stub responses when it doesn't exist
 
 # ── Frontend static files ─────────────────────────────────────────
 COPY --from=frontend-build /build/dist /usr/share/nginx/html
@@ -64,7 +62,6 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # ── Environment ───────────────────────────────────────────────────
-ENV AGENT_IDS_PATH=/app/scripts/agent_ids.json
 
 EXPOSE 80
 

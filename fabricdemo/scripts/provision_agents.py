@@ -4,11 +4,11 @@ provision_agents.py — CLI wrapper for agent provisioning.
 Thin CLI that loads config + prompts from disk and delegates to
 AgentProvisioner (agent_provisioner.py) for all Foundry API calls.
 
-Usage:
-    uv run python provision_agents.py [--force]
+Provisioning is idempotent: existing agents with matching names are
+always deleted before creating new ones.
 
-Options:
-    --force   Delete any existing agents with matching names before creating
+Usage:
+    uv run python provision_agents.py
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from dotenv import load_dotenv
 
 from agent_provisioner import (
     AgentProvisioner,
-    AGENT_IDS_FILE,
     _build_connection_id,
     AI_SEARCH_CONNECTION_NAME,
 )
@@ -29,7 +28,8 @@ from agent_provisioner import (
 # ── Paths ─────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PROMPTS_DIR = PROJECT_ROOT / "data" / "prompts"
+SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")
+PROMPTS_DIR = PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "data" / "prompts"
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
 
 LANGUAGE_FILE_MAP = {
@@ -79,7 +79,8 @@ def _load_config() -> dict:
         "foundry_name": os.environ["AI_FOUNDRY_NAME"],
         "project_name": project_name,
         "graph_query_api_uri": graph_query_api_uri,
-        "graph_backend": os.environ.get("GRAPH_BACKEND", "fabric-gql").lower(),
+        # Normalise: agent_provisioner uses "fabric" or "mock", not "fabric-gql"
+        "graph_backend": "fabric" if "fabric" in os.environ.get("GRAPH_BACKEND", "fabric-gql").lower() else "mock",
         "graph_name": os.environ.get("DEFAULT_SCENARIO", "telco-noc"),
     }
 
@@ -127,8 +128,6 @@ def _load_all_prompts(config: dict) -> dict[str, str]:
 
 
 def main():
-    force = "--force" in sys.argv
-
     print("=" * 72)
     print("  Autonomous Network NOC Demo — Agent Provisioning")
     print("=" * 72)
@@ -161,7 +160,6 @@ def main():
         runbooks_index=config["runbooks_index"],
         tickets_index=config["tickets_index"],
         search_connection_id=search_conn_id,
-        force=force,
         on_progress=lambda step, detail: print(f"  [{step}] {detail}"),
     )
 
@@ -169,8 +167,8 @@ def main():
     print("  Provisioning complete!")
     print("=" * 72)
     print(f"\n  Orchestrator ID: {result['orchestrator']['id']}")
-    print(f"  Agent IDs saved to: {AGENT_IDS_FILE}")
-    print(f"\n  To test: uv run python test_orchestrator.py")
+    print(f"\n  Container app will discover agents automatically at runtime.")
+    print(f"  To test: uv run python testing_scripts/test_orchestrator.py")
     print()
 
 

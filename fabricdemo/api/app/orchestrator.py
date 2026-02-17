@@ -9,7 +9,7 @@ The Azure AI Agents SDK uses a synchronous callback-based streaming API
   3. Yielding from the queue in an async generator for EventSourceResponse
 
 Falls back to stub responses when the orchestrator isn't configured
-(no agent_ids.json or missing env vars).
+(missing env vars or no agents provisioned in Foundry).
 """
 
 import asyncio
@@ -24,7 +24,7 @@ from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 
-from app.paths import PROJECT_ROOT, CONFIG_FILE, AGENT_IDS_FILE
+from app.paths import PROJECT_ROOT, CONFIG_FILE
 from app.agent_ids import load_agent_ids, get_agent_names, get_agent_list
 
 logger = logging.getLogger(__name__)
@@ -48,8 +48,6 @@ def _get_credential():
 
 def is_configured() -> bool:
     """Check whether the Foundry orchestrator is ready to use."""
-    if not AGENT_IDS_FILE.exists():
-        return False
     if not os.environ.get("PROJECT_ENDPOINT"):
         return False
     if not os.environ.get("AI_FOUNDRY_PROJECT_NAME"):
@@ -58,7 +56,7 @@ def is_configured() -> bool:
         data = load_agent_ids()
         if not data.get("orchestrator", {}).get("id"):
             return False
-    except (json.JSONDecodeError, KeyError):
+    except Exception:
         return False
     return True
 
@@ -83,7 +81,7 @@ def _get_project_client():
 
 
 def load_agents_from_file() -> list[dict] | None:
-    """Load agent list from agent_ids.json. Returns None if unavailable."""
+    """Load agent list via Foundry discovery. Returns None if unavailable."""
     agents = get_agent_list()
     return agents if agents else None
 

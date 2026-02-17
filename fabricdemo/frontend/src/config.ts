@@ -5,8 +5,8 @@ export const SCENARIO = {
   name: "telco-noc",
   displayName: "Australian Telco NOC — Fibre Cut Incident",
   graph: "telco-noc-topology",
-  runbooksIndex: "telco-noc-runbooks-index",
-  ticketsIndex: "telco-noc-tickets-index",
+  runbooksIndex: "runbooks-index",
+  ticketsIndex: "tickets-index",
   description:
     "A fibre cut on the Sydney-Melbourne corridor triggers a cascading alert " +
     "storm affecting enterprise VPNs, broadband, and mobile services. The AI " +

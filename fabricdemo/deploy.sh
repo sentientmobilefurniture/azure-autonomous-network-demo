@@ -4,7 +4,7 @@
 # ============================================================================
 #
 # Deploys the full pipeline:
-#   1. Azure infrastructure (AI Foundry, AI Search, Storage, Cosmos DB, Container Apps)
+#   1. Azure infrastructure (AI Foundry, AI Search, Storage, Cosmos DB (interactions), Container Apps)
 #   2. Unified Container App deployment (nginx + API + graph-query-api)
 #   3. Local services (optional — all services deployed to Azure)
 #
@@ -18,7 +18,7 @@
 #   --skip-infra         Skip azd up (reuse existing Azure resources)
 #   --skip-local         Skip starting local API + frontend
 #   --provision-fabric   Run Fabric provisioning (lakehouse, eventhouse, ontology)
-#   --provision-data     Run data provisioning (Cosmos + AI Search)
+#   --provision-data     Run data provisioning (AI Search indexes)
 #   --provision-agents   Run agent provisioning
 #   --provision-all      Run all provisioning steps (fabric + data + agents)
 #   --env NAME           Use a specific azd environment name
@@ -92,7 +92,6 @@ PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
 CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
-AGENT_IDS_FILE="$PROJECT_ROOT/scripts/agent_ids.json"
 
 # ── Helper: prompt user ────────────────────────────────────────────
 
@@ -416,7 +415,8 @@ GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
 
 # --- Azure AI Search (AUTO: name after azd up) ---
 AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
-
+UNBOOKS_INDEX_NAME=\${RUNBOOKS_INDEX_NAME:-runbooks-index}
+TICKETS_INDEX_NAME=\${TICKETS_INDEX_NAME:-tickets-index}
 # --- Azure Storage (AUTO: name after azd up) ---
 STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
 
@@ -458,7 +458,7 @@ else
   echo "   • AI Foundry (account + project + GPT-4.1 deployment)"
   echo "   • Azure AI Search"
   echo "   • Storage Account"
-  echo "   • Cosmos DB NoSQL (metadata stores)"
+  echo "   • Cosmos DB NoSQL (interactions store)"
   echo "   • Container Apps Environment (ACR + Log Analytics)"
   echo "   • Unified Container App (nginx + API + graph-query-api)"
   echo ""
@@ -599,10 +599,7 @@ fi
 if $PROVISION_DATA; then
   step "Step 6: Provisioning data"
 
-  info "6a: Loading telemetry into Cosmos DB..."
-  (source "$CONFIG_FILE" && uv run python scripts/provision_cosmos.py) || warn "Cosmos provisioning failed"
-
-  info "6b: Creating AI Search indexes..."
+  info "6a: Creating AI Search indexes..."
   (source "$CONFIG_FILE" && uv run python scripts/provision_search_index.py --upload-files) || warn "Search index provisioning failed"
 
   ok "Data provisioning complete"
@@ -617,7 +614,7 @@ if $PROVISION_AGENTS; then
 
   (source "$CONFIG_FILE" && uv run python scripts/provision_agents.py) || warn "Agent provisioning failed"
 
-  ok "Agent provisioning complete"
+  ok "Agent provisioning complete — container app will discover agents at runtime"
 else
   step "Step 7: Agent Provisioning (SKIPPED — use --provision-agents)"
 fi
@@ -690,6 +687,17 @@ else
   info "Installing frontend dependencies..."
   (cd frontend && npm install --silent 2>&1 | tail -3) || true
 
+  # Ensure API venv is synced (recreate if shebang points to stale path)
+  info "Syncing API dependencies..."
+  if [[ -f "$PROJECT_ROOT/api/.venv/bin/uvicorn" ]]; then
+    SHEBANG_PYTHON=$(head -1 "$PROJECT_ROOT/api/.venv/bin/uvicorn" | sed 's/^#!//')
+    if [[ ! -x "$SHEBANG_PYTHON" ]]; then
+      warn "Stale API venv detected (python not found at $SHEBANG_PYTHON) — recreating..."
+      rm -rf "$PROJECT_ROOT/api/.venv"
+    fi
+  fi
+  (cd "$PROJECT_ROOT/api" && uv sync --quiet 2>&1) || true
+
   # Start API in background
   info "Starting API on port 8000..."
   (cd "$PROJECT_ROOT/api" && source "$CONFIG_FILE" && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload) &
@@ -752,18 +760,11 @@ echo "    Cosmos DB (NoSQL): ${COSMOS_NOSQL_ENDPOINT:-<pending>}"
 echo "    App URL:          ${APP_URI:-<pending>}"
 echo ""
 
-if [[ -f "$AGENT_IDS_FILE" ]]; then
-  echo -e "  ${BOLD}Agents:${NC}"
-  python3 -c "
-import json
-with open('$AGENT_IDS_FILE') as f:
-    data = json.load(f)
-print(f\"    Orchestrator:           {data['orchestrator']['id']}\")
-for name, info in data.get('sub_agents', {}).items():
-    print(f\"    {name:26s} {info['id']}\")
-" 2>/dev/null || echo "    (could not read agent_ids.json)"
-  echo ""
-fi
+echo -e "  ${BOLD}Agents:${NC}"
+echo "    Agents are discovered from AI Foundry at runtime (no agent_ids.json needed)."
+echo "    Provisioned agents: GraphExplorerAgent, TelemetryAgent, RunbookKBAgent,"
+echo "                        HistoricalTicketAgent, Orchestrator"
+echo ""
 
 if ! $SKIP_LOCAL; then
   echo -e "  ${BOLD}Local Services:${NC}"
@@ -789,7 +790,7 @@ echo "    azd down --force --purge           # Tear down all Azure resources"
 echo ""
 echo -e "  ${BOLD}Provisioning:${NC}"
 echo "    ./deploy.sh --provision-fabric     # Provision Fabric resources"
-echo "    ./deploy.sh --provision-data       # Load data (Cosmos + AI Search)"
+echo "    ./deploy.sh --provision-data       # Provision AI Search indexes"
 echo "    ./deploy.sh --provision-agents     # Provision AI agents"
 echo "    ./deploy.sh --provision-all        # Do all of the above"
 echo ""

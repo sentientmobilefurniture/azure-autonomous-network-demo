@@ -1,6 +1,6 @@
 # ============================================================================
 # API Service — FastAPI backend for Autonomous Network NOC Demo
-# Build context: parent directory (..) so we can copy scripts/agent_ids.json
+# Build context: parent directory (..)
 # ============================================================================
 FROM python:3.11-slim
 
@@ -15,13 +15,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
 COPY api/app ./app
-
-# Copy agent_ids.json (may not exist on first deploy — that's OK)
-RUN mkdir -p /app/scripts
-COPY scripts/agent_ids.json* /app/scripts/
-
-# The container reads agent_ids from AGENT_IDS_PATH env var
-ENV AGENT_IDS_PATH=/app/scripts/agent_ids.json
 
 EXPOSE 8000
 

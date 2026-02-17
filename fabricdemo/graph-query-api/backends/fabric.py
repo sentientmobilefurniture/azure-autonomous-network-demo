@@ -77,7 +77,7 @@ used by other backends so routers don't need changes.
         Example: MATCH (r:CoreRouter) RETURN r.RouterId, r.Hostname
 
         Endpoint:
-            POST /workspaces/{id}/GraphModels/{model_id}/executeQuery?beta=True
+            POST /workspaces/{id}/GraphModels/{model_id}/executeQuery?beta=true
 
         Response shape (Fabric):
             {"status": {...}, "result": {"columns": [...], "data": [...]}}
@@ -96,7 +96,7 @@ used by other backends so routers don't need changes.
 
         url = (
             f"{FABRIC_API_URL}/workspaces/{workspace_id}"
-            f"/GraphModels/{graph_model_id}/executeQuery?beta=True"
+            f"/GraphModels/{graph_model_id}/executeQuery?beta=true"
         )
         token = await self._get_token()
         client = self._get_client()

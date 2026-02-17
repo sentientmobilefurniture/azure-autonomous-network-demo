@@ -263,7 +263,7 @@ class FabricGQLBackend:
         # Token acquired via DefaultAzureCredential(scope=FABRIC_SCOPE)
 
     async def execute_query(self, query: str, **kwargs) -> dict:
-        # POST to /workspaces/{ws}/GraphModels/{gm}/executeQuery?beta=True
+        # POST to /workspaces/{ws}/GraphModels/{gm}/executeQuery?beta=true
         # Body: {"commands": query}
         # Retry: 429 → 15s × attempt backoff, up to 5 retries
         # Token re-acquired between retries
