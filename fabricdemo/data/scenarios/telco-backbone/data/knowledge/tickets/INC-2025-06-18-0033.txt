@@ -1,0 +1,32 @@
+Incident: INC-2025-06-18-0033
+Title: Submarine cable partial degradation ADL-PER — anchor drag
+Severity: P1
+Root Cause: LINK-ADL-PER-SUBMARINE-01
+Root Cause Type: SUBMARINE_CABLE_DAMAGE
+Created: 2025-06-18T05:42:00Z
+Resolved: 2025-07-02T05:42:00Z
+SLA Breached: Yes
+
+Description:
+Fishing trawler anchor drag on the Great Australian Bight submarine cable caused partial fibre strand damage. Signal degradation over 2 hours before automatic failover to microwave backup.
+
+Detection Method:
+Anomaly detection on optical power time-series — gradual decay pattern
+
+Resolution:
+Traffic rerouted to LINK-ADL-PER-MICROWAVE-01 (10G backup). Cable repair vessel dispatched — full repair in 14 days.
+
+Customer Impact:
+- VPN-IRONORE-CORP
+- VPN-WESTGAS-CORP
+- BB-BUNDLE-PER-CENTRAL
+
+Services Affected: 3
+Alerts Generated: 1245
+Alerts Suppressed: 1243
+Time to Detect: 180 seconds
+Time to Reroute: 120 seconds
+Time to Resolve: 20160 minutes
+
+Lessons Learned:
+Microwave backup (10G) insufficient for full submarine cable load (40G). Perth services were degraded for 14 days during cable repair. Need to establish emergency satellite backhaul or negotiate lit fibre from alternate carrier.

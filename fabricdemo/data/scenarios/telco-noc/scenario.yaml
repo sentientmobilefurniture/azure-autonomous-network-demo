@@ -1,0 +1,186 @@
+# ============================================================================
+# Scenario Manifest — Telco NOC (Fibre Cut)
+# ============================================================================
+
+name: telco-noc
+display_name: "Australian Telco NOC — Fibre Cut Incident"
+description: >
+  A fibre cut on the Sydney-Melbourne corridor triggers a cascading alert
+  storm affecting enterprise VPNs, broadband, and mobile services. The AI
+  investigates root cause, blast radius, and remediation.
+version: "2.0"
+domain: telecommunications
+
+# ---------------------------------------------------------------------------
+# Use cases & example questions (surfaced in Scenario Info tab)
+# ---------------------------------------------------------------------------
+
+use_cases:
+  - "Fibre cut incident investigation and root cause correlation"
+  - "MPLS path failover analysis and traffic rerouting assessment"
+  - "Enterprise service impact mapping across BGP sessions"
+  - "Alert storm triage and deduplication across transport links"
+  - "SLA breach risk assessment for affected customers"
+
+example_questions:
+  - "What caused the alert storm on the Sydney-Melbourne corridor?"
+  - "Which enterprise services are affected by the fibre cut?"
+  - "How are MPLS paths rerouting around the failed transport link?"
+  - "What BGP sessions are down and what's their blast radius?"
+  - "Which SLA policies are at risk of being breached?"
+  - "Show me the correlation between optical power drops and service degradation"
+
+# ---------------------------------------------------------------------------
+# Data layout — paths relative to this file's parent directory
+# ---------------------------------------------------------------------------
+
+paths:
+  entities: data/entities
+  graph_schema: graph_schema.yaml
+  telemetry: data/telemetry
+  runbooks: data/knowledge/runbooks
+  tickets: data/knowledge/tickets
+  prompts: data/prompts
+  default_alert: data/prompts/alert_storm.md
+
+# ---------------------------------------------------------------------------
+# Data sources — defines all Azure resources this scenario needs
+# ---------------------------------------------------------------------------
+
+data_sources:
+  graph:
+    connector: "fabric-gql"
+    config:
+      database: "networkgraph"
+      graph: "telco-noc-topology"
+      partition_key: "/partitionKey"
+    schema_file: "graph_schema.yaml"
+
+  telemetry:
+    connector: "fabric-kql"
+    config:
+      database: "telemetry"
+      container_prefix: "telco-noc"
+      containers:
+        - name: AlertStream
+          partition_key: /SourceNodeType
+          csv_file: AlertStream.csv
+          id_field: AlertId
+          numeric_fields: [OpticalPowerDbm, BitErrorRate, CPUUtilPct, PacketLossPct]
+        - name: LinkTelemetry
+          partition_key: /LinkId
+          csv_file: LinkTelemetry.csv
+          id_field: null
+          numeric_fields: [UtilizationPct, OpticalPowerDbm, BitErrorRate, LatencyMs]
+
+  search_indexes:
+    runbooks:
+      index_name: "telco-noc-runbooks-index"
+      source: "data/knowledge/runbooks"
+      blob_container: "runbooks"
+    tickets:
+      index_name: "telco-noc-tickets-index"
+      source: "data/knowledge/tickets"
+      blob_container: "tickets"
+
+# ---------------------------------------------------------------------------
+# Agents — defines the complete agent topology for this scenario
+# ---------------------------------------------------------------------------
+
+agents:
+  - name: "GraphExplorerAgent"
+    role: "graph_explorer"
+    model: "gpt-4.1"
+    instructions_file: "prompts/graph_explorer/"
+    compose_with_connector: true
+    tools:
+      - type: "openapi"
+        spec_template: "graph"
+        keep_path: "/query/graph"
+
+  - name: "TelemetryAgent"
+    role: "telemetry"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_telemetry_agent_v2.md"
+    tools:
+      - type: "openapi"
+        spec_template: "telemetry"
+        keep_path: "/query/telemetry"
+
+  - name: "RunbookKBAgent"
+    role: "runbook"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_runbook_kb_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "runbooks"
+
+  - name: "HistoricalTicketAgent"
+    role: "ticket"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_historical_ticket_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "tickets"
+
+  - name: "Orchestrator"
+    role: "orchestrator"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_orchestrator_agent.md"
+    is_orchestrator: true
+    connected_agents:
+      - "GraphExplorerAgent"
+      - "TelemetryAgent"
+      - "RunbookKBAgent"
+      - "HistoricalTicketAgent"
+
+# ---------------------------------------------------------------------------
+# Graph visualisation hints (frontend node styling)
+# ---------------------------------------------------------------------------
+
+graph_styles:
+  node_types:
+    CoreRouter:    { color: "#38BDF8", size: 28, icon: "router" }
+    AggSwitch:     { color: "#FB923C", size: 22, icon: "switch" }
+    BaseStation:   { color: "#A78BFA", size: 18, icon: "antenna" }
+    TransportLink: { color: "#3B82F6", size: 16, icon: "link" }
+    MPLSPath:      { color: "#C084FC", size: 14, icon: "path" }
+    Service:       { color: "#CA8A04", size: 20, icon: "service" }
+    SLAPolicy:     { color: "#FB7185", size: 12, icon: "policy" }
+    BGPSession:    { color: "#F472B6", size: 14, icon: "session" }
+
+# ---------------------------------------------------------------------------
+# Telemetry baselines (used to generate prompt sections)
+# ---------------------------------------------------------------------------
+
+telemetry_baselines:
+  link_telemetry:
+    - metric: LatencyMs
+      normal: "2–15 ms"
+      degraded: "> 50 ms"
+      down: "9999 ms"
+    - metric: OpticalPowerDbm
+      normal: "-8 to -12 dBm"
+      degraded: "< -20 dBm"
+      down: "< -30 dBm"
+    - metric: BitErrorRate
+      normal: "< 1e-9"
+      degraded: "> 1e-6"
+      down: "≈ 1"
+    - metric: UtilizationPct
+      normal: "20–70%"
+      degraded: "> 80%"
+      down: "0% (with other down indicators)"
+  alert_stream:
+    - metric: PacketLossPct
+      normal: "< 1%"
+      anomalous: "> 2%"
+    - metric: CPUUtilPct
+      normal: "< 70%"
+      anomalous: "> 85%"
+    - metric: OpticalPowerDbm
+      normal: "-8 to -12 dBm"
+      anomalous: "< -20 dBm"
+    - metric: BitErrorRate
+      normal: "< 1e-9"
+      anomalous: "> 1e-6"

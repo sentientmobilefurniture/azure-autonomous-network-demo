@@ -1,0 +1,76 @@
+openapi: "3.0.3"
+info:
+  title: Telemetry Query API
+  version: "0.5.0"
+  description: |
+    Micro-API for executing SQL queries against telemetry data.
+    Used by Foundry agents via OpenApiTool.
+# NOTE: Template placeholders ({base_url}, {graph_name}, {query_language_description})
+# are substituted at runtime by agent_provisioner.py.
+servers:
+  - url: "{base_url}"
+    description: Deployed Container App
+
+paths:
+  /query/telemetry:
+    post:
+      operationId: query_telemetry
+      summary: Execute a SQL query against telemetry data
+      description: |
+        {query_language_description}
+        Returns columns and rows of alert or telemetry data.
+      parameters:
+        - name: X-Graph
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: ["{graph_name}"]
+          description: |
+            The graph name to route this request to. Always use the value shown.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+                - container_name
+              properties:
+                query:
+                  type: string
+                  description: |
+                    {query_language_description}
+                container_name:
+                  type: string
+                  description: |
+                    The container (table) to query. Available containers depend
+                    on the scenario configuration.
+      responses:
+        "200":
+          description: Query results (check 'error' field for query failures)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                  error:
+                    type: string
+                    nullable: true
+                    description: |
+                      If present, the query failed. Contains the error message.
+                      Read the message, fix your query, and retry.

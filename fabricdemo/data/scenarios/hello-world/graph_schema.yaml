@@ -1,0 +1,59 @@
+# ============================================================================
+# Graph Schema Manifest — Hello World Topology
+# ============================================================================
+# Minimal graph: 3 vertex types, 2 edge types, 7 total nodes.
+# ============================================================================
+
+data_dir: data/entities
+
+# ---------------------------------------------------------------------------
+# Vertices
+# ---------------------------------------------------------------------------
+
+vertices:
+  - label: Server
+    csv_file: DimServer.csv
+    id_column: ServerId
+    partition_key: server
+    properties: [ServerId, Hostname, OS, CPUCores, MemoryGB]
+
+  - label: Application
+    csv_file: DimApplication.csv
+    id_column: AppId
+    partition_key: application
+    properties: [AppId, AppName, AppType, ServerId, DatabaseId]
+
+  - label: Database
+    csv_file: DimDatabase.csv
+    id_column: DatabaseId
+    partition_key: database
+    properties: [DatabaseId, DatabaseName, Engine, SizeGB]
+
+# ---------------------------------------------------------------------------
+# Edges
+# ---------------------------------------------------------------------------
+
+edges:
+  # Server → hosts → Application
+  - label: hosts
+    csv_file: DimApplication.csv
+    source:
+      label: Server
+      property: ServerId
+      column: ServerId
+    target:
+      label: Application
+      property: AppId
+      column: AppId
+
+  # Application → connects_to → Database
+  - label: connects_to
+    csv_file: DimApplication.csv
+    source:
+      label: Application
+      property: AppId
+      column: AppId
+    target:
+      label: Database
+      property: DatabaseId
+      column: DatabaseId

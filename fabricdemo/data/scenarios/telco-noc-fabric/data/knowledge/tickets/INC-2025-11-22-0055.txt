@@ -1,0 +1,33 @@
+Incident: INC-2025-11-22-0055
+Title: Fibre cut SYD-MEL corridor - storm damage
+Severity: P1
+Root Cause: LINK-SYD-MEL-FIBRE-01
+Root Cause Type: FIBRE_CUT
+Created: 2025-11-22T14:05:00Z
+Resolved: 2025-11-23T08:05:00Z
+SLA Breached: Yes
+
+Description:
+Severe thunderstorm caused tree fall on aerial fibre section near Goulburn. Both FIBRE-01 and FIBRE-02 impacted (same conduit route). No alternate direct path available.
+
+Detection Method:
+Automated alert storm detection
+
+Resolution:
+Emergency traffic rerouted via SYD-BNE-MEL indirect path (higher latency). Physical repair took 18 hours due to access issues.
+
+Customer Impact:
+- VPN-ACME-CORP
+- VPN-BIGBANK
+- BB-BUNDLE-SYD-NORTH
+- BB-BUNDLE-MEL-EAST
+
+Services Affected: 4
+Alerts Generated: 3241
+Alerts Suppressed: 3239
+Time to Detect: 6 seconds
+Time to Reroute: 180 seconds
+Time to Resolve: 1080 minutes
+
+Lessons Learned:
+Both SYD-MEL fibre pairs share a common conduit for 12km near Goulburn. Diversely routed third path required for true redundancy. REDUNDANT_PAIR relationship in ontology should include route-diversity metadata.

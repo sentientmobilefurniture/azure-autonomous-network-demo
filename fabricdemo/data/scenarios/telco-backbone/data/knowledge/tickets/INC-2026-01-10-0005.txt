@@ -1,0 +1,30 @@
+Incident: INC-2026-01-10-0005
+Title: Compound failure drill — simulated submarine cable + power loss
+Severity: P2
+Root Cause: LINK-ADL-PER-SUBMARINE-01
+Root Cause Type: PLANNED_DRILL
+Created: 2026-01-10T02:00:00Z
+Resolved: 2026-01-10T06:00:00Z
+SLA Breached: No
+
+Description:
+Planned disaster recovery drill simulating simultaneous submarine cable failure and Adelaide datacenter power loss. Drill exposed that microwave backup cannot sustain Perth traffic and that no automated failover path exists to bypass Adelaide.
+
+Detection Method:
+Planned event — change management system
+
+Resolution:
+Drill completed. Findings documented: (1) microwave backup insufficient, (2) no automated SYD→PER bypass, (3) Adelaide N+1 power is a single point of failure.
+
+Customer Impact:
+(None)
+
+Services Affected: 0
+Alerts Generated: 0
+Alerts Suppressed: 0
+Time to Detect: 0 seconds
+Time to Reroute: 0 seconds
+Time to Resolve: 240 minutes
+
+Lessons Learned:
+CRITICAL FINDING: Compound failure of ADL-PER submarine cable + DC-ADL-01 power would isolate Perth with no adequate backup. Microwave at 10G cannot absorb 40G demand. Recommend: (1) emergency satellite uplink for Perth, (2) upgrade DC-ADL-01 to 2N power, (3) pre-provision traffic engineering for SYD→MEL→ADL→PER via microwave with strict QoS.
