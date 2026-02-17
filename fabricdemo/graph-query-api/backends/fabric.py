@@ -101,12 +101,17 @@ used by other backends so routers don't need changes.
         token = await self._get_token()
         client = self._get_client()
 
-        # Retry with exponential backoff for 429s
-        max_retries = 5
+        # Retry loop — handles 429, cold start (02000), and ColdStartTimeout
+        max_retries = 8
+        continuation_token: str | None = None
         for attempt in range(max_retries):
+            payload: dict = {"query": query}
+            if continuation_token:
+                payload["continuationToken"] = continuation_token
+
             response = await client.post(
                 url,
-                json={"query": query},
+                json=payload,
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
@@ -120,9 +125,22 @@ used by other backends so routers don't need changes.
                     wait, attempt + 1, max_retries,
                 )
                 await asyncio.sleep(wait)
-                # Re-acquire token in case it expired during wait
                 token = await self._get_token()
                 continue
+
+            # ColdStartTimeout — Fabric graph engine still warming up
+            if response.status_code == 500:
+                body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+                if body.get("errorCode") == "ColdStartTimeout":
+                    wait = 15 * (attempt + 1)
+                    logger.warning(
+                        "Fabric GQL ColdStartTimeout — retrying in %ds (attempt %d/%d)",
+                        wait, attempt + 1, max_retries,
+                    )
+                    continuation_token = None
+                    await asyncio.sleep(wait)
+                    token = await self._get_token()
+                    continue
 
             if response.status_code != 200:
                 detail = response.text[:500]
@@ -132,15 +150,32 @@ used by other backends so routers don't need changes.
                 )
 
             body = response.json()
+            status_code = body.get("status", {}).get("code", "")
             result = body.get("result", body)
+
+            # Status 02000 = "No data available, retry with continuation token"
+            # This happens during graph engine cold start — data is loading.
+            if status_code == "02000" and result.get("nextPage"):
+                continuation_token = result["nextPage"]
+                wait = 10
+                logger.info(
+                    "Fabric GQL cold start (status 02000) — retrying with "
+                    "continuation token in %ds (attempt %d/%d)",
+                    wait, attempt + 1, max_retries,
+                )
+                await asyncio.sleep(wait)
+                token = await self._get_token()
+                continue
+
             return {
                 "columns": result.get("columns", []),
                 "data": result.get("data", []),
             }
 
         raise HTTPException(
-            status_code=429,
-            detail="Fabric API rate limit — retries exhausted",
+            status_code=503,
+            detail="Fabric GQL engine cold start — retries exhausted. "
+                   "The graph model is warming up. Please try again in a minute.",
         )
 
     # ------------------------------------------------------------------
