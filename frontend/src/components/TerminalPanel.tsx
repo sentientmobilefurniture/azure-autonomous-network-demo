@@ -7,7 +7,7 @@ import { TabbedLogStream } from './TabbedLogStream';
  * Tabs:
  *   API       — orchestrator, config, provisioning logs
  *   Graph API — query service, topology, backend logs
- *   Data Ops  — merged from both services: Cosmos, blob, search, ingest, Fabric
+ *   Data Ops  — merged from both services: Cosmos, blob, search, ingest
  */
 
 const LOG_STREAMS = [

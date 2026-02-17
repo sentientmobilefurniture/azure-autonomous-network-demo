@@ -33,7 +33,6 @@ async def _ping_graph_backend(connector: str, config: dict, graph_name: str) -> 
     """Ping a graph backend by connector type."""
     backend_type = {
         "cosmosdb-gremlin": "cosmosdb",
-        "fabric-gql": "fabric-gql",
         "mock": "mock",
     }.get(connector, connector)
 
@@ -46,14 +45,6 @@ async def _ping_graph_backend(connector: str, config: dict, graph_name: str) -> 
 
 async def _ping_telemetry_backend(connector: str, config: dict) -> dict:
     """Ping a telemetry backend by connector type."""
-    if connector == "fabric-kql":
-        try:
-            from backends.fabric_kql import FabricKQLBackend
-            backend = FabricKQLBackend()
-            return await backend.ping()
-        except Exception as e:
-            return {"ok": False, "query": "(failed to create backend)", "detail": str(e), "latency_ms": 0}
-
     # Default: cosmosdb-nosql — simple reachability check
     return {"ok": True, "query": "(cosmos nosql — no active ping)", "detail": "Cosmos NoSQL assumed reachable", "latency_ms": 0}
 

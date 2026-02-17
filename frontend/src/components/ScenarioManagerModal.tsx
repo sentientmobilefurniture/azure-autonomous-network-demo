@@ -9,14 +9,13 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onNewScenario: () => void;
-  onFabricSetup: () => void;
 }
 
 /**
  * Scenario list + management modal.
  * Opened from ScenarioChip's "⊞ Manage scenarios…" menu item.
  */
-export function ScenarioManagerModal({ open, onClose, onNewScenario, onFabricSetup }: Props) {
+export function ScenarioManagerModal({ open, onClose, onNewScenario }: Props) {
   const { setProvisioningStatus } = useScenarioContext();
   const { savedScenarios, selectScenario, deleteSavedScenario } = useScenarios();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -47,14 +46,7 @@ export function ScenarioManagerModal({ open, onClose, onNewScenario, onFabricSet
     }
   };
 
-  const handleFabricReprovision = () => {
-    setMenuOpen(null);
-    onClose();
-    onFabricSetup();
-  };
-
   const backendBadge = (connector?: string) => {
-    if (connector === 'fabric-gql') return { label: 'Fabric', color: 'text-cyan-400 bg-cyan-400/10 border-cyan-400/30' };
     if (connector === 'mock') return { label: 'Mock', color: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30' };
     return { label: 'Cosmos', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' };
   };
@@ -86,7 +78,6 @@ export function ScenarioManagerModal({ open, onClose, onNewScenario, onFabricSet
         <div className="space-y-1">
           {savedScenarios.map((s) => {
             const badge = backendBadge(s.graph_connector);
-            const isFabric = s.graph_connector === 'fabric-gql';
             return (
               <div
                 key={s.id}
@@ -120,12 +111,6 @@ export function ScenarioManagerModal({ open, onClose, onNewScenario, onFabricSet
                         className="w-full text-left px-3 py-2 text-xs text-text-primary hover:bg-white/5">
                         Re-provision agents
                       </button>
-                      {isFabric && (
-                        <button onClick={handleFabricReprovision}
-                          className="w-full text-left px-3 py-2 text-xs text-cyan-400 hover:bg-cyan-400/10">
-                          Re-provision Fabric resources
-                        </button>
-                      )}
                       <div className="border-t border-white/10" />
                       <button onClick={() => handleDelete(s.id)}
                         className="w-full text-left px-3 py-2 text-xs text-status-error hover:bg-status-error/10">

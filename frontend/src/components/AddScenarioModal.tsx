@@ -65,7 +65,7 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [selectedBackend, setSelectedBackend] = useState<'cosmosdb-gremlin' | 'fabric-gql'>('cosmosdb-gremlin');
+  const selectedBackend = 'cosmosdb-gremlin' as const;
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -96,7 +96,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
       setDisplayName('');
       setDescription('');
       setShowAdvanced(false);
-      setSelectedBackend('cosmosdb-gremlin');
     }
   }, [open]);
 
@@ -272,55 +271,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
             </div>
           )}
 
-          {/* Backend chooser (D2) */}
-          <div className="text-xs text-text-muted font-medium uppercase tracking-wider">Graph Backend</div>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => setSelectedBackend('cosmosdb-gremlin')}
-              disabled={modalState !== 'idle'}
-              className={`text-left p-3 rounded-lg border transition-colors ${
-                selectedBackend === 'cosmosdb-gremlin'
-                  ? 'border-brand/40 bg-brand/10'
-                  : 'border-white/10 bg-neutral-bg1 hover:bg-white/5'
-              }`}
-            >
-              <p className="text-xs font-medium text-text-primary">Azure CosmosDB</p>
-              <p className="text-[10px] text-text-muted mt-0.5">Gremlin graph database</p>
-              <p className="text-[10px] text-text-muted">Upload graph via tarball</p>
-            </button>
-            <button
-              onClick={() => setSelectedBackend('fabric-gql')}
-              disabled={modalState !== 'idle'}
-              className={`text-left p-3 rounded-lg border transition-colors ${
-                selectedBackend === 'fabric-gql'
-                  ? 'border-cyan-400/40 bg-cyan-400/10'
-                  : 'border-white/10 bg-neutral-bg1 hover:bg-white/5'
-              }`}
-            >
-              <p className="text-xs font-medium text-text-primary">Microsoft Fabric</p>
-              <p className="text-[10px] text-text-muted mt-0.5">GQL via Ontology</p>
-              <p className="text-[10px] text-text-muted">Graph managed by Fabric</p>
-            </button>
-          </div>
-
-          {/* Proactive backend conflict warning */}
-          {selectedBackend === 'fabric-gql' && name && !name.endsWith('-fabric') &&
-           existingNames.includes(name) && (
-            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-xs">
-              <p className="text-yellow-400 font-medium">⚠ Name Conflict Risk</p>
-              <p className="text-yellow-400/70 mt-1">
-                &quot;{name}&quot; exists as a Cosmos scenario. Fabric scenarios should use a
-                different name to avoid conflicts.
-              </p>
-              <button
-                onClick={() => setName(`${name}-fabric`)}
-                className="mt-2 px-2 py-1 bg-yellow-600/20 rounded text-yellow-300 hover:bg-yellow-600/30"
-              >
-                Use &quot;{name}-fabric&quot; instead
-              </button>
-            </div>
-          )}
-
           {/* Multi-drop zone */}
           <div className="text-xs text-text-muted font-medium uppercase tracking-wider">Upload Data Files</div>
           <div
@@ -353,15 +303,10 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
           <div className="grid grid-cols-2 gap-3">
             {SLOT_DEFS.map((def) => {
               const slot = slots[def.key];
-              // For Fabric scenarios, show different label on graph slot
-              const fabricGraph = def.key === 'graph' && selectedBackend === 'fabric-gql';
-              const slotDef = fabricGraph
-                ? { ...def, label: 'Graph Data (Fabric)', icon: '🔗' }
-                : def;
               return (
                 <FileSlot
                   key={def.key}
-                  def={slotDef}
+                  def={def}
                   slot={slot}
                   disabled={modalState !== 'idle'}
                   onFile={(file) => handleSlotFile(def.key, file)}
@@ -371,20 +316,6 @@ export function AddScenarioModal({ open, onClose, onSaved, existingNames, saveSc
               );
             })}
           </div>
-
-          {/* Fabric backend info */}
-          {selectedBackend === 'fabric-gql' && modalState === 'idle' && (
-            <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-3 flex items-start gap-2">
-              <span className="text-cyan-400 text-sm leading-none mt-0.5">⬡</span>
-              <div>
-                <p className="text-xs font-medium text-cyan-300">Fabric Graph Backend Selected</p>
-                <p className="text-[11px] text-cyan-400/70 mt-0.5">
-                  Graph data will be provisioned via Microsoft Fabric using the active workspace
-                  connection. Ensure a workspace is configured in Settings → Fabric Connections.
-                </p>
-              </div>
-            </div>
-          )}
 
           {/* Submitting indicator */}
           {modalState === 'uploading' && (

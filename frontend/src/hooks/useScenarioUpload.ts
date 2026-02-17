@@ -25,7 +25,7 @@ export interface UseScenarioUploadProps {
   displayName: string;
   description: string;
   existingNames: string[];
-  selectedBackend: 'cosmosdb-gremlin' | 'fabric-gql';
+  selectedBackend: 'cosmosdb-gremlin';
   saveScenarioMeta: (meta: {
     name: string;
     display_name?: string;
@@ -125,26 +125,8 @@ export function useScenarioUpload(props: UseScenarioUploadProps) {
       formData.append('scenario_name', name);
       formData.append('backend', selectedBackend);
 
-      // Derive telemetry backend from graph backend selection
-      const telemetryBackend = selectedBackend === 'fabric-gql' ? 'fabric-kql' : 'cosmosdb-nosql';
-      formData.append('telemetry_backend', telemetryBackend);
-
-      // For Fabric uploads, resolve active workspace from connection panel
-      if (selectedBackend === 'fabric-gql') {
-        try {
-          const connResp = await fetch('/query/fabric/connections');
-          if (connResp.ok) {
-            const connData = await connResp.json();
-            const active = (connData.connections || []).find((c: { active: boolean }) => c.active);
-            if (active) {
-              formData.append('workspace_id', active.workspace_id || '');
-              formData.append('workspace_name', active.workspace_name || '');
-            }
-          }
-        } catch {
-          // Best-effort — job will proceed without workspace info
-        }
-      }
+      // Telemetry backend is always cosmosdb-nosql
+      formData.append('telemetry_backend', 'cosmosdb-nosql');
 
       // Append each staged file
       for (const def of SLOT_DEFS) {
@@ -167,7 +149,6 @@ export function useScenarioUpload(props: UseScenarioUploadProps) {
           name,
           display_name: displayName || undefined,
           description: description || undefined,
-          graph_connector: selectedBackend === 'fabric-gql' ? 'fabric-gql' : undefined,
           upload_results: {},
         });
       } catch (e: unknown) {
@@ -184,10 +165,10 @@ export function useScenarioUpload(props: UseScenarioUploadProps) {
                 `Backend conflict: ${detail?.message || 'Scenario exists with a different backend.'} ${detail?.suggestion || 'Use a different name.'}`
               );
             } else {
-              setGlobalError('Backend conflict: This scenario already exists with a different graph backend. Use a different name (e.g. add "-fabric" suffix).');
+              setGlobalError('Backend conflict: This scenario already exists with a different graph backend. Use a different name.');
             }
           } catch {
-            setGlobalError('Backend conflict: This scenario already exists with a different graph backend. Use a different name (e.g. add "-fabric" suffix).');
+            setGlobalError('Backend conflict: This scenario already exists with a different graph backend. Use a different name.');
           }
           setModalState('error');
           return;

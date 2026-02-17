@@ -33,7 +33,6 @@ export function ScenarioChip() {
 
   // Resolve backend badge for a scenario
   const backendBadge = (connector?: string) => {
-    if (connector === 'fabric-gql') return { label: 'Fabric', color: 'text-cyan-400 bg-cyan-400/10 border-cyan-400/30' };
     if (connector === 'mock') return { label: 'Mock', color: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30' };
     return { label: 'Cosmos', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30' };
   };

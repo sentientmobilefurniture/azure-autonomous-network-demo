@@ -74,11 +74,7 @@ class ScenarioContext:
     prompts_database: str            # "prompts" (shared DB, pre-created by Bicep)
     prompts_container: str           # "cloud-outage" (per-scenario container name)
     backend_type: str
-    telemetry_backend_type: str  # "cosmosdb-nosql" or "fabric-kql"
-    # Per-scenario Fabric routing (populated from config store's fabric_resources)
-    fabric_workspace_id: str = ""
-    fabric_graph_model_id: str = ""
-    fabric_eventhouse_id: str = ""
+    telemetry_backend_type: str  # "cosmosdb-nosql"
 
 
 # ---------------------------------------------------------------------------
@@ -87,13 +83,11 @@ class ScenarioContext:
 
 CONNECTOR_TO_BACKEND: dict[str, str] = {
     "cosmosdb-gremlin": "cosmosdb",
-    "fabric-gql": "fabric-gql",
     "mock": "mock",
 }
 
 TELEMETRY_CONNECTOR_MAP: dict[str, str] = {
     "cosmosdb-nosql": "cosmosdb-nosql",
-    "fabric-kql": "fabric-kql",
 }
 
 
@@ -121,10 +115,6 @@ async def get_scenario_context(
     # Per-scenario backend resolution: check config store for connector type
     backend_type = GRAPH_BACKEND  # default
     telemetry_backend_type = "cosmosdb-nosql"  # default
-    # Fabric per-scenario resource IDs (populated by provisioning pipeline)
-    fabric_workspace_id = ""
-    fabric_graph_model_id = ""
-    fabric_eventhouse_id = ""
 
     try:
         from config_store import fetch_scenario_config
@@ -143,14 +133,6 @@ async def get_scenario_context(
         )
         if tel_connector:
             telemetry_backend_type = TELEMETRY_CONNECTOR_MAP.get(tel_connector, "cosmosdb-nosql")
-
-        # Extract per-scenario Fabric resource IDs
-        fabric_resources = config.get("fabric_resources", {})
-        if fabric_resources:
-            from adapters.fabric_config import FABRIC_WORKSPACE_ID as _FW, FABRIC_GRAPH_MODEL_ID as _FG
-            fabric_workspace_id = fabric_resources.get("workspace_id", _FW)
-            fabric_graph_model_id = fabric_resources.get("graph_model_id", _FG)
-            fabric_eventhouse_id = fabric_resources.get("eventhouse_id", "")
     except Exception:
         logger.warning(
             "Config store lookup failed for prefix=%s, backend_type=%s — using env defaults",
@@ -167,9 +149,6 @@ async def get_scenario_context(
         prompts_container=prefix,                  # scenario container name
         backend_type=backend_type,
         telemetry_backend_type=telemetry_backend_type,
-        fabric_workspace_id=fabric_workspace_id,
-        fabric_graph_model_id=fabric_graph_model_id,
-        fabric_eventhouse_id=fabric_eventhouse_id,
     )
 
 # ---------------------------------------------------------------------------
@@ -181,7 +160,6 @@ BACKEND_REQUIRED_VARS: dict[str, tuple[str, ...]] = {
         "COSMOS_GREMLIN_ENDPOINT",
         "COSMOS_GREMLIN_PRIMARY_KEY",
     ),
-    "fabric-gql": ("FABRIC_WORKSPACE_ID", "FABRIC_GRAPH_MODEL_ID"),
     "mock": (),
 }
 

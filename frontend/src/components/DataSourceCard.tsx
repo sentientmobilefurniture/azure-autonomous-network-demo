@@ -14,8 +14,6 @@ function connectorLabel(connector: string): string {
   const labels: Record<string, string> = {
     'cosmosdb-gremlin': 'CosmosDB Gremlin',
     'cosmosdb-nosql': 'CosmosDB NoSQL',
-    'fabric-gql': 'Fabric Ontology',
-    'fabric-kql': 'Fabric Eventhouse',
     'azure-ai-search': 'AI Search',
     'mock': 'Mock',
   };

@@ -28,7 +28,7 @@ logging.getLogger().addHandler(_handler)
 
 
 # ---------------------------------------------------------------------------
-# Data-ops broadcaster (Fabric provisioning + agent config only)
+# Data-ops broadcaster (agent config only)
 # ---------------------------------------------------------------------------
 
 _data_ops_broadcaster = LogBroadcaster(max_buffer=200, max_queue=500)
@@ -36,7 +36,7 @@ _data_ops_broadcaster = LogBroadcaster(max_buffer=200, max_queue=500)
 _data_ops_handler = _data_ops_broadcaster.get_handler(level=logging.DEBUG)
 _data_ops_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 _data_ops_handler.addFilter(
-    lambda r: r.name.startswith(("app.fabric", "api.config"))
+    lambda r: r.name.startswith(("api.config",))
 )
 logging.getLogger().addHandler(_data_ops_handler)
 
@@ -61,6 +61,6 @@ async def stream_logs():
 
 @router.get("/logs/data-ops")
 async def stream_data_ops_logs():
-    """SSE endpoint that streams only data-operation logs (Fabric, config)."""
+    """SSE endpoint that streams only data-operation logs (config)."""
     return _sse_response(_data_ops_broadcaster)
 

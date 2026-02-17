@@ -34,11 +34,9 @@ const STATUS_COLOR: Record<string, string> = {
 export function ServiceHealthPopover({
   open,
   onClose,
-  onFabricSetup,
 }: {
   open: boolean;
   onClose: () => void;
-  onFabricSetup: () => void;
 }) {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
@@ -91,14 +89,6 @@ export function ServiceHealthPopover({
               </div>
               {svc.details && (
                 <p className="text-[10px] text-text-muted pl-2">{svc.details}</p>
-              )}
-              {svc.name === 'Microsoft Fabric' && svc.status === 'partial' && (
-                <button
-                  onClick={() => { onClose(); onFabricSetup(); }}
-                  className="text-[10px] text-brand hover:text-brand/80 pl-2"
-                >
-                  → Set up Fabric
-                </button>
               )}
             </div>
           ))}

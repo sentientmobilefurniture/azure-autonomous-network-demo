@@ -3,7 +3,7 @@ import { useScenarioContext } from '../context/ScenarioContext';
 import { DataSourceCard } from './DataSourceCard';
 import type { DataSourceHealth } from './DataSourceCard';
 
-const QUERY_API = import.meta.env.VITE_GRAPH_QUERY_API || '/query';
+const QUERY_API = '/query';
 
 export function DataSourceBar() {
   const { activeScenario } = useScenarioContext();

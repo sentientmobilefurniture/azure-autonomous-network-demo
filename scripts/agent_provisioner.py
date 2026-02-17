@@ -69,26 +69,11 @@ CONNECTOR_OPENAPI_VARS: dict[str, dict[str, str]] = {
             "Returns sample telemetry data for offline demonstrations."
         ),
     },
-    "fabric": {
-        "query_language_description": (
-            "GQL (ISO Graph Query Language). Uses MATCH/RETURN syntax. "
-            "Example: MATCH (r:CoreRouter) RETURN r.RouterId, r.Hostname. "
-            "Do NOT use GraphQL syntax \u2014 GQL is a different language. "
-            "Relationships use arrow syntax: MATCH (a)-[r:connects_to]->(b). "
-            "Filter with WHERE: MATCH (r:CoreRouter) WHERE r.Region = 'Sydney' "
-            "RETURN r.RouterId."
-        ),
-        "telemetry_query_language_description": (
-            "Submits a KQL query against telemetry data stored in "
-            "Microsoft Fabric Eventhouse."
-        ),
-    },
 }
 
 GRAPH_TOOL_DESCRIPTIONS = {
     "cosmosdb": "Execute a Gremlin query against Azure Cosmos DB to explore topology and relationships.",
     "mock": "Query the topology graph (offline mock mode).",
-    "fabric": "Execute a GQL query against Microsoft Fabric Graph Model to explore topology and relationships.",
 }
 
 AGENT_NAMES = [

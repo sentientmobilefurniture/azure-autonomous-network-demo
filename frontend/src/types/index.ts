@@ -48,7 +48,7 @@ export interface SavedScenario {
   use_cases?: string[];
   example_questions?: string[];
   domain?: string;
-  /** Graph backend connector type — "cosmosdb-gremlin" | "fabric-gql" | "mock" */
+  /** Graph backend connector type — "cosmosdb-gremlin" | "mock" */
   graph_connector?: string;
 }
 
@@ -153,15 +153,4 @@ export interface TopologyMeta {
   edge_count: number;
   query_time_ms: number;
   labels: string[];
-}
-
-// ---------------------------------------------------------------------------
-// Fabric discovery types (V11)
-// ---------------------------------------------------------------------------
-
-export interface FabricItem {
-  id: string;
-  display_name: string;
-  type: string;
-  description: string;
 }

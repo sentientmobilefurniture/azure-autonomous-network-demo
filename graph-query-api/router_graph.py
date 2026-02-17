@@ -53,8 +53,6 @@ async def query_graph(
     try:
         result = await backend.execute_query(
             req.query,
-            workspace_id=ctx.fabric_workspace_id or None,
-            graph_model_id=ctx.fabric_graph_model_id or None,
         )
     except NotImplementedError as e:
         logger.warning("Graph backend not implemented (returning 200 with error body): %s", e)

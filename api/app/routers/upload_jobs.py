@@ -32,7 +32,6 @@ _tasks: dict[str, asyncio.Task] = {}
 _cosmos_loaded = False  # whether we've loaded jobs from Cosmos at least once
 
 GRAPH_QUERY_API = os.getenv("GRAPH_QUERY_API_URL", "http://127.0.0.1:8100")
-API_SELF = "http://127.0.0.1:8000"  # local api service for Fabric endpoint
 
 
 def _now() -> str:
@@ -189,97 +188,43 @@ async def _run_upload_job(job_id: str, files: dict[str, Path]):
             await _persist_job(job)
 
             try:
-                # Determine endpoint — Fabric routing for graph step
-                if step_name == "graph" and backend == "fabric-gql":
-                    endpoint = f"{API_SELF}/api/fabric/provision/graph"
-                    # Fabric graph endpoint needs multipart with workspace params
-                    with open(file_path, "rb") as f:
-                        resp = await client.post(
-                            endpoint,
-                            files={"file": (file_path.name, f, "application/gzip")},
-                            data={
-                                "workspace_id": workspace_id,
-                                "workspace_name": workspace_name,
-                                "scenario_name": scenario_name,
-                            },
-                            timeout=600,  # Fabric pipeline can take a while
-                        )
-                elif step_name == "telemetry" and telemetry_backend == "fabric-kql":
-                    endpoint = f"{API_SELF}/api/fabric/provision/telemetry"
-                    with open(file_path, "rb") as f:
-                        resp = await client.post(
-                            endpoint,
-                            files={"file": (file_path.name, f, "application/gzip")},
-                            data={
-                                "workspace_id": workspace_id,
-                                "workspace_name": workspace_name,
-                                "scenario_name": scenario_name,
-                            },
-                            timeout=600,
-                        )
+                # Determine endpoint
+                if step_name == "graph":
+                    endpoint = f"{GRAPH_QUERY_API}/query/upload/graph"
+                elif step_name == "telemetry":
+                    endpoint = f"{GRAPH_QUERY_API}/query/upload/telemetry"
+                elif step_name == "runbooks":
+                    endpoint = f"{GRAPH_QUERY_API}/query/upload/runbooks"
+                elif step_name == "tickets":
+                    endpoint = f"{GRAPH_QUERY_API}/query/upload/tickets"
+                elif step_name == "prompts":
+                    endpoint = f"{GRAPH_QUERY_API}/query/upload/prompts"
                 else:
-                    # Standard graph-query-api upload
-                    if step_name == "graph":
-                        endpoint = f"{GRAPH_QUERY_API}/query/upload/graph"
-                    elif step_name == "telemetry":
-                        endpoint = f"{GRAPH_QUERY_API}/query/upload/telemetry"
-                    elif step_name == "runbooks":
-                        endpoint = f"{GRAPH_QUERY_API}/query/upload/runbooks"
-                    elif step_name == "tickets":
-                        endpoint = f"{GRAPH_QUERY_API}/query/upload/tickets"
-                    elif step_name == "prompts":
-                        endpoint = f"{GRAPH_QUERY_API}/query/upload/prompts"
-                    else:
-                        _update_step(job, step_name, "error", f"Unknown step: {step_name}")
-                        await _persist_job(job)
-                        continue
+                    _update_step(job, step_name, "error", f"Unknown step: {step_name}")
+                    await _persist_job(job)
+                    continue
 
-                    with open(file_path, "rb") as f:
-                        resp = await client.post(
-                            endpoint,
-                            files={"file": (file_path.name, f, "application/gzip")},
-                            params={"scenario_name": scenario_name},
-                        )
+                with open(file_path, "rb") as f:
+                    resp = await client.post(
+                        endpoint,
+                        files={"file": (file_path.name, f, "application/gzip")},
+                        params={"scenario_name": scenario_name},
+                    )
 
                 if resp.status_code == 200:
                     # Parse SSE response for final result
                     detail = "Done"
-                    fabric_resources: dict | None = None
                     for line in resp.text.split("\n"):
                         if line.startswith("data: ") and '"error"' not in line:
                             try:
                                 data = json.loads(line[6:])
                                 if "graph" in data or "index" in data or "prompts_stored" in data:
                                     detail = json.dumps(data)[:100]
-                                # Capture Fabric completion
                                 if "message" in data and "complete" in resp.text:
                                     detail = data.get("message", detail)
-                                # Capture fabric_resources from provision endpoints
-                                if "fabric_resources" in data:
-                                    fabric_resources = data["fabric_resources"]
                             except Exception:
                                 pass
                     _update_step(job, step_name, "done", detail, 100)
-
-                    # Persist fabric_resources to scenario config store
-                    if fabric_resources and scenario_name:
-                        try:
-                            async with httpx.AsyncClient(timeout=10.0) as config_client:
-                                # Fetch existing scenario doc from graph-query-api
-                                get_resp = await config_client.get(
-                                    f"{GRAPH_QUERY_API}/query/scenarios/{scenario_name}"
-                                )
-                                existing_doc = get_resp.json() if get_resp.status_code == 200 else {}
-                                # Merge fabric_resources
-                                merged_resources = existing_doc.get("fabric_resources", {})
-                                merged_resources.update(fabric_resources)
-                                # Update via scenario save endpoint
-                                await config_client.put(
-                                    f"{GRAPH_QUERY_API}/query/scenarios/{scenario_name}/fabric-resources",
-                                    json=merged_resources,
-                                )
-                        except Exception as e:
-                            logger.warning("Could not persist fabric_resources for %s: %s", scenario_name, e)
                 else:
                     error_text = resp.text[:200]
                     _update_step(job, step_name, "error", f"HTTP {resp.status_code}: {error_text}")

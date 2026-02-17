@@ -127,7 +127,7 @@ class ScenarioSaveRequest(BaseModel):
     example_questions: list[str] | None = None
     graph_styles: dict | None = None
     domain: str | None = None
-    graph_connector: str | None = None  # e.g. "cosmosdb-gremlin", "fabric-gql"
+    graph_connector: str | None = None  # e.g. "cosmosdb-gremlin"
     upload_results: dict = {}
     config: dict | None = None  # full scenario config (data_sources, agents, etc.)
 
@@ -217,12 +217,11 @@ async def save_scenario(req: ScenarioSaveRequest):
             # Backend conflict check — prevent cross-backend overwrite
             existing_connector = existing.get("graph_connector", "cosmosdb-gremlin")
             if existing_connector != graph_connector:
-                suggested = f"{name}-fabric" if graph_connector == "fabric-gql" else f"{name}-cosmos"
                 raise HTTPException(
                     409,
                     detail={
                         "message": f"Scenario '{name}' already exists with backend '{existing_connector}'.",
-                        "suggestion": f"Use a different name (e.g. '{suggested}') or delete the existing scenario first.",
+                        "suggestion": f"Use a different name or delete the existing scenario first.",
                         "existing_backend": existing_connector,
                         "requested_backend": graph_connector,
                     }
@@ -258,37 +257,6 @@ async def delete_saved_scenario(name: str):
     logger.info("Deleted scenario record: %s", name)
     invalidate_scenarios_cache()
     return {"name": name, "status": "deleted"}
-
-
-@router.put("/scenarios/{name}/fabric-resources", summary="Update Fabric resource IDs for a scenario")
-async def update_fabric_resources(name: str, body: dict):
-    """Merge Fabric resource IDs (workspace_id, lakehouse_id, etc.) into the scenario document.
-
-    Called by upload_jobs after Fabric provisioning completes to persist
-    provisioned asset IDs so queries can route to the correct assets.
-    """
-    _validate_scenario_name(name)
-    store = _get_store()
-
-    try:
-        existing = await store.get(name, partition_key=name)
-        if not existing:
-            raise HTTPException(404, f"Scenario '{name}' not found")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(404, f"Scenario '{name}' not found")
-
-    # Merge fabric_resources
-    existing_resources = existing.get("fabric_resources", {})
-    existing_resources.update(body)
-    existing["fabric_resources"] = existing_resources
-    existing["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-    await store.upsert(existing)
-    logger.info("Updated fabric_resources for scenario %s: %s", name, list(body.keys()))
-    invalidate_scenarios_cache()
-    return {"name": name, "fabric_resources": existing_resources}
 
 
 # ---------------------------------------------------------------------------
