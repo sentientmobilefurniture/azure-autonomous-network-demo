@@ -894,9 +894,9 @@ This section is a **step-by-step, idiot-proof implementation guide** for an agen
 
 > **Prerequisites:** The current deployed `telco-noc` scenario is working. All changes below are **additive** — nothing is deleted or renamed.
 
-### Phase 1: Graph Data Expansion
+### Phase 1: Data & Schema Expansion
 
-All data files live under `data/scenarios/telco-noc/data/entities/`. Phase 1 creates new CSV files, updates the graph schema, and updates the agent prompt. No code changes.
+All data files live under `data/scenarios/telco-noc/data/entities/`. Phase 1 creates new CSV files, updates the graph schema, updates the agent prompt, and adds new example questions. Provisioning script changes are in Phase 2.
 
 ---
 
@@ -1019,12 +1019,13 @@ AMP-MEL-BNE-GRAFTON,LINK-MEL-BNE-FIBRE-01,1
 ```csv
 AdvisoryId,VendorName,BugId,AffectedVersions,Severity,Title,Description
 ADV-CISCO-2025-001,Cisco,CSCwi82345,IOS-XR-7.9.1|IOS-XR-7.9.2,HIGH,OSPF adjacency flap under high BGP churn,OSPF adjacency may drop when BGP table exceeds 500K prefixes during reconvergence. Affects ASR-9000 series running IOS-XR 7.9.x. Fixed in IOS-XR-7.10.1.
-ADV-CISCO-2025-002,Cisco,CSCwi93456,IOS-XR-7.8.1|IOS-XR-7.9.1,MEDIUM,BFD session timeout false positive on 100GE interfaces,BFD may report false link-down on 100GE interfaces under high utilisation (>90%). Affects ASR-9000 series. Workaround: increase BFD interval to 300ms.
+ADV-CISCO-2025-002,Cisco,CSCwi93456,IOS-XR-7.8.1|IOS-XR-7.9.1|IOS-XR-7.9.2,MEDIUM,BFD session timeout false positive on 100GE interfaces,BFD may report false link-down on 100GE interfaces under high utilisation (>90%). Affects ASR-9000 series. Workaround: increase BFD interval to 300ms.
 ADV-JUNIPER-2025-001,Juniper,PR1789012,JUNOS-23.4R1|JUNOS-23.4R2,HIGH,MPLS LDP session reset during ECMP rebalancing,LDP sessions may reset when ECMP path count changes from 2 to 1 during link failure. Affects MX10000 series. Fixed in JUNOS-24.1R1.
 ```
 
 **Rationale:** These advisories are chosen to correlate with the existing scenario:
 - ADV-CISCO-2025-001 affects `IOS-XR-7.9.2` which runs on CORE-SYD-01 and CORE-MEL-01 — explains OSPF flaps seen during the fibre cut reconvergence.
+- ADV-CISCO-2025-002 also affects `IOS-XR-7.9.2` (added to AffectedVersions) on CORE-SYD-01 and CORE-MEL-01 — explains potential BFD false positives during high link utilisation.
 - ADV-JUNIPER-2025-001 affects `JUNOS-23.4R1` which runs on CORE-BNE-01 — explains potential issues on the tertiary SYD-MEL-VIA-BNE path.
 
 **Verify:** `wc -l` returns 4 (header + 3 data rows). Column count matches: 7 columns per row.
@@ -1041,8 +1042,8 @@ ADV-JUNIPER-2025-001,Juniper,PR1789012,JUNOS-23.4R1|JUNOS-23.4R2,HIGH,MPLS LDP s
 AdvisoryId,RouterId,MatchReason
 ADV-CISCO-2025-001,CORE-SYD-01,Router runs IOS-XR-7.9.2 which matches affected version IOS-XR-7.9.2
 ADV-CISCO-2025-001,CORE-MEL-01,Router runs IOS-XR-7.9.2 which matches affected version IOS-XR-7.9.2
-ADV-CISCO-2025-002,CORE-SYD-01,Router runs IOS-XR-7.9.2 — version 7.9.x in affected range
-ADV-CISCO-2025-002,CORE-MEL-01,Router runs IOS-XR-7.9.2 — version 7.9.x in affected range
+ADV-CISCO-2025-002,CORE-SYD-01,Router runs IOS-XR-7.9.2 which matches affected version IOS-XR-7.9.2
+ADV-CISCO-2025-002,CORE-MEL-01,Router runs IOS-XR-7.9.2 which matches affected version IOS-XR-7.9.2
 ADV-JUNIPER-2025-001,CORE-BNE-01,Router runs JUNOS-23.4R1 which matches affected version JUNOS-23.4R1
 ```
 
@@ -1224,6 +1225,8 @@ Vendor security/bug advisories that affect specific firmware versions running on
 | ADV-CISCO-2025-001 | Cisco | HIGH | OSPF adjacency flap under high BGP churn | CORE-SYD-01, CORE-MEL-01 (both run IOS-XR-7.9.2) |
 | ADV-CISCO-2025-002 | Cisco | MEDIUM | BFD session timeout false positive on 100GE | CORE-SYD-01, CORE-MEL-01 |
 | ADV-JUNIPER-2025-001 | Juniper | HIGH | MPLS LDP session reset during ECMP rebalancing | CORE-BNE-01 (runs JUNOS-23.4R1) |
+
+<!-- Note: "Affected Routers" in the table above is derived from FactAdvisoryMapping joins, not a column in DimAdvisory.csv -->
 ````
 
 **Add these relationship descriptions to the `## Relationships` section at the bottom:**
@@ -1298,7 +1301,35 @@ A vendor advisory affects a router running a vulnerable firmware version. Pre-ma
 
 ---
 
-#### Step 1.12 — Verification Checklist (Phase 1)
+#### Step 1.12 — Update `exampleQuestions`
+
+**Files:**
+- `data/scenarios/telco-noc/scenario.yaml` (authoritative — loaded at runtime)
+- `frontend/src/config.ts` (fallback defaults for dev/mock mode)
+
+**Action:** Add 3 new example questions so users can discover the new entity types from the chat sidebar.
+
+**In `scenario.yaml`, append to the `example_questions:` list:**
+
+```yaml
+  - "Do our 'redundant' SYD-MEL fibres share a physical conduit?"
+  - "Which amplifiers service the SYD-MEL fibre and when were they last calibrated?"
+  - "Are any routers running firmware affected by known vendor advisories?"
+```
+
+**In `frontend/src/config.ts`, append to the `exampleQuestions` array:**
+
+```typescript
+    "Do our 'redundant' SYD-MEL fibres share a physical conduit?",
+    "Which amplifiers service the SYD-MEL fibre and when were they last calibrated?",
+    "Are any routers running firmware affected by known vendor advisories?",
+```
+
+**Verify:** `grep -c '^\s*-' data/scenarios/telco-noc/scenario.yaml` in the `example_questions:` block shows **9** entries (6 original + 3 new). `exampleQuestions` in `config.ts` has **9** entries.
+
+---
+
+#### Step 1.13 — Verification Checklist (Phase 1)
 
 Run these checks before proceeding to Phase 2:
 
@@ -1308,26 +1339,301 @@ Run these checks before proceeding to Phase 2:
 | 2 | DimCoreRouter has FirmwareVersion | `head -1 data/scenarios/telco-noc/data/entities/DimCoreRouter.csv` | Header includes `FirmwareVersion` |
 | 3 | FIBRE-01 and FIBRE-02 share conduit | `grep CONDUIT-SYD-MEL-INLAND data/scenarios/telco-noc/data/entities/FactConduitMapping.csv \| wc -l` | **2** (both fibres) |
 | 4 | Advisory affects correct routers | `grep CORE-SYD-01 data/scenarios/telco-noc/data/entities/FactAdvisoryMapping.csv \| wc -l` | **2** (two advisories affect SYD-01) |
-| 5 | graph_schema.yaml vertex count | `grep -c 'label:' data/scenarios/telco-noc/graph_schema.yaml` (in vertices section) | **11** vertex types |
+| 5 | graph_schema.yaml vertex count | `awk '/^vertices:/,/^edges:/{if (/^  - label:/) c++} END{print c}' data/scenarios/telco-noc/graph_schema.yaml` | **11** |
 | 6 | core_schema.md has new types | `grep -c '### PhysicalConduit\|### AmplifierSite\|### Advisory' data/scenarios/telco-noc/data/prompts/graph_explorer/core_schema.md` | **3** |
-| 7 | core_schema.md has new relationships | `grep -c 'routed_through\|amplifies\|affects_version' data/scenarios/telco-noc/data/prompts/graph_explorer/core_schema.md` | **3+** |
+| 7 | core_schema.md has new rels | `grep -c 'routed_through\|amplifies\|affects_version' data/scenarios/telco-noc/data/prompts/graph_explorer/core_schema.md` | **3+** |
 | 8 | scenario.yaml has 11 node styles | `grep -c 'color:' data/scenarios/telco-noc/scenario.yaml` | **11** |
-| 9 | config.ts has 11 node colors | `grep -c ':' frontend/src/config.ts` in nodeColors block | **11** entries |
+| 9 | config.ts nodeColors count | `grep -A15 'nodeColors' frontend/src/config.ts \| grep -c ':'` | **11** |
+| 10 | exampleQuestions count | `grep -c '^\s*-' data/scenarios/telco-noc/scenario.yaml` under `example_questions:` | **9** |
 
 ---
 
-### Phase 2: Code Changes
+### Phase 2: Code Changes, Provisioning Scripts & Deploy
 
-All of the code changes are in response to the new data. The graph ingest pipeline is **data-driven** from `graph_schema.yaml` — it requires no code changes to support new vertex/edge types.
+Phase 2 covers the changes needed to make the new data actually work in the deployed system:
 
-> **Key insight:** Because the pipeline reads `graph_schema.yaml` and generically creates vertices/edges from CSV files, the only code changes needed are:
-> 1. Knowledge source additions (new runbook + advisory documents for AI Search)
-> 2. New prompt files for new scenarios
-> 3. Frontend rebuild (if you did Step 1.11)
+1. **Provisioning script updates** — `provision_lakehouse.py` and `provision_ontology.py` are hardcoded and must be updated for new entity/relationship types
+2. **Knowledge documents** for AI Search (new runbooks auto-discovered by the indexer)
+3. **Demo scenario prompts** for new investigative flows
+4. **Frontend rebuild** (if Step 1.11 was done)
+5. **Deployment** with correct pipeline sequence
+
+> **Important:** The topology generator (`generate_topology_json.py`) is fully generic and reads `graph_schema.yaml` declaratively — it needs no code changes. `deploy.sh` Step 2b auto-runs it. However, the **Fabric provisioning scripts** (`provision_lakehouse.py` and `provision_ontology.py`) are entirely hardcoded and must be manually updated to register new entity types, properties, relationships, data bindings, and contextualizations.
 
 ---
 
-#### Step 2.1 — Create advisory knowledge documents for AI Search
+#### Step 2.1 — Update `provision_lakehouse.py` LAKEHOUSE_TABLES
+
+**File:** `scripts/fabric/provision_lakehouse.py`
+
+**Action:** Add 6 new entries to the `LAKEHOUSE_TABLES` list (line 46). This list controls which CSV files are uploaded to OneLake and created as managed delta Lakehouse tables.
+
+**Current content:**
+
+```python
+LAKEHOUSE_TABLES = [
+    "DimCoreRouter", "DimTransportLink", "DimAggSwitch", "DimBaseStation",
+    "DimBGPSession", "DimMPLSPath", "DimService", "DimSLAPolicy",
+    "FactMPLSPathHops", "FactServiceDependency",
+]
+```
+
+**New content:**
+
+```python
+LAKEHOUSE_TABLES = [
+    "DimCoreRouter", "DimTransportLink", "DimAggSwitch", "DimBaseStation",
+    "DimBGPSession", "DimMPLSPath", "DimService", "DimSLAPolicy",
+    "FactMPLSPathHops", "FactServiceDependency",
+    # V12 — New entity types + junction tables
+    "DimPhysicalConduit", "DimAmplifierSite", "DimAdvisory",
+    "FactConduitMapping", "FactAmplifierMapping", "FactAdvisoryMapping",
+]
+```
+
+**Why this matters:** Without this change, the 6 new CSV files will sit in the `entities/` directory but never be uploaded to OneLake or created as Lakehouse tables. The graph will have no data for the new types.
+
+**Verify:** `grep -c '"Dim\|"Fact' scripts/fabric/provision_lakehouse.py` returns **16** (was 10).
+
+---
+
+#### Step 2.2 — Update `provision_ontology.py`
+
+**File:** `scripts/fabric/provision_ontology.py`
+
+This is the most labor-intensive code change (~150-200 lines of additions). The file defines the entire Fabric IQ Ontology in hardcoded Python constants. You must add new IDs, entity type definitions, relationship type definitions, data bindings, and contextualizations following the existing patterns exactly.
+
+**Change A — Add entity type ID constants** (after `ET_SLA_POLICY = 1000000000008`, ~line 117):
+
+```python
+# V12 — New entity types
+ET_PHYSICAL_CONDUIT = 1000000000009
+ET_AMPLIFIER_SITE = 1000000000010
+ET_ADVISORY = 1000000000011
+```
+
+**Change B — Add FirmwareVersion property ID for CoreRouter** (after `P_ROUTER_MODEL = 2000000000006`, ~line 125):
+
+```python
+P_ROUTER_FIRMWARE = 2000000000007
+```
+
+**Change C — Add property ID constants for new entity types** (after `P_SLA_TIER = 2000000000086`, ~line 175):
+
+```python
+# Property IDs — PhysicalConduit (V12)
+P_CONDUIT_ID = 2000000000091
+P_CONDUIT_ROUTE_DESC = 2000000000092
+P_CONDUIT_MATERIAL = 2000000000093
+P_CONDUIT_INSTALLED_YEAR = 2000000000094
+
+# Property IDs — AmplifierSite (V12)
+P_AMP_SITE_ID = 2000000000101
+P_AMP_LOCATION = 2000000000102
+P_AMP_INSTALLED_YEAR = 2000000000103
+P_AMP_LAST_CALIBRATION = 2000000000104
+
+# Property IDs — Advisory (V12)
+P_ADVISORY_ID = 2000000000111
+P_ADVISORY_VENDOR = 2000000000112
+P_ADVISORY_BUG_ID = 2000000000113
+P_ADVISORY_AFFECTED_VERSIONS = 2000000000114
+P_ADVISORY_SEVERITY = 2000000000115
+P_ADVISORY_TITLE = 2000000000116
+P_ADVISORY_DESCRIPTION = 2000000000117
+```
+
+> **ID allocation convention:** Entity type IDs use the `1000000000xxx` range. Property IDs use `2000000000xxx` with gaps between entity types (CoreRouter 001-006, TransportLink 011-022, AggSwitch 031-034, BaseStation 041-045, BGPSession 051-055, MPLSPath 061-063, Service 071-076, SLAPolicy 081-086, now PhysicalConduit 091-094, AmplifierSite 101-104, Advisory 111-117). Relationship type IDs use `3000000000xxx`.
+
+**Change D — Add relationship type ID constants** (after `R_PEERS_OVER = 3000000000007`, ~line 183):
+
+```python
+# V12 — New relationships
+R_ROUTED_THROUGH = 3000000000008
+R_AMPLIFIES = 3000000000009
+R_AFFECTS_VERSION = 3000000000010
+```
+
+**Change E — Add `FirmwareVersion` property to CoreRouter entity type definition** (in the CoreRouter entry of `ENTITY_TYPES`, after `prop(P_ROUTER_MODEL, "Model"),`):
+
+```python
+            prop(P_ROUTER_FIRMWARE, "FirmwareVersion"),
+```
+
+**Change F — Add 3 new entity type definitions** (append to `ENTITY_TYPES` list, before the closing `]`):
+
+```python
+    # V12 — New entity types
+    {
+        "id": str(ET_PHYSICAL_CONDUIT),
+        "namespace": "usertypes",
+        "baseEntityTypeId": None,
+        "name": "PhysicalConduit",
+        "entityIdParts": [str(P_CONDUIT_ID)],
+        "displayNamePropertyId": str(P_CONDUIT_ID),
+        "namespaceType": "Custom",
+        "visibility": "Visible",
+        "properties": [
+            prop(P_CONDUIT_ID, "ConduitId"),
+            prop(P_CONDUIT_ROUTE_DESC, "RouteDescription"),
+            prop(P_CONDUIT_MATERIAL, "MaterialType"),
+            prop(P_CONDUIT_INSTALLED_YEAR, "InstalledYear", "BigInt"),
+        ],
+        "timeseriesProperties": [],
+    },
+    {
+        "id": str(ET_AMPLIFIER_SITE),
+        "namespace": "usertypes",
+        "baseEntityTypeId": None,
+        "name": "AmplifierSite",
+        "entityIdParts": [str(P_AMP_SITE_ID)],
+        "displayNamePropertyId": str(P_AMP_SITE_ID),
+        "namespaceType": "Custom",
+        "visibility": "Visible",
+        "properties": [
+            prop(P_AMP_SITE_ID, "SiteId"),
+            prop(P_AMP_LOCATION, "Location"),
+            prop(P_AMP_INSTALLED_YEAR, "InstalledYear", "BigInt"),
+            prop(P_AMP_LAST_CALIBRATION, "LastCalibration"),
+        ],
+        "timeseriesProperties": [],
+    },
+    {
+        "id": str(ET_ADVISORY),
+        "namespace": "usertypes",
+        "baseEntityTypeId": None,
+        "name": "Advisory",
+        "entityIdParts": [str(P_ADVISORY_ID)],
+        "displayNamePropertyId": str(P_ADVISORY_ID),
+        "namespaceType": "Custom",
+        "visibility": "Visible",
+        "properties": [
+            prop(P_ADVISORY_ID, "AdvisoryId"),
+            prop(P_ADVISORY_VENDOR, "VendorName"),
+            prop(P_ADVISORY_BUG_ID, "BugId"),
+            prop(P_ADVISORY_AFFECTED_VERSIONS, "AffectedVersions"),
+            prop(P_ADVISORY_SEVERITY, "Severity"),
+            prop(P_ADVISORY_TITLE, "Title"),
+            prop(P_ADVISORY_DESCRIPTION, "Description"),
+        ],
+        "timeseriesProperties": [],
+    },
+```
+
+**Change G — Add 3 new relationship type definitions** (append to `RELATIONSHIP_TYPES` list, before the closing `]`):
+
+```python
+    # V12 — New relationships
+    {
+        "id": str(R_ROUTED_THROUGH),
+        "namespace": "usertypes",
+        "name": "routed_through",
+        "namespaceType": "Custom",
+        "source": {"entityTypeId": str(ET_TRANSPORT_LINK)},
+        "target": {"entityTypeId": str(ET_PHYSICAL_CONDUIT)},
+    },
+    {
+        "id": str(R_AMPLIFIES),
+        "namespace": "usertypes",
+        "name": "amplifies",
+        "namespaceType": "Custom",
+        "source": {"entityTypeId": str(ET_AMPLIFIER_SITE)},
+        "target": {"entityTypeId": str(ET_TRANSPORT_LINK)},
+    },
+    {
+        "id": str(R_AFFECTS_VERSION),
+        "namespace": "usertypes",
+        "name": "affects_version",
+        "namespaceType": "Custom",
+        "source": {"entityTypeId": str(ET_ADVISORY)},
+        "target": {"entityTypeId": str(ET_CORE_ROUTER)},
+    },
+```
+
+**Change H — Add `FirmwareVersion` to CoreRouter static binding** (in `build_static_bindings()`, add to the CoreRouter binding list, after `("Model", P_ROUTER_MODEL),`):
+
+```python
+                ("FirmwareVersion", P_ROUTER_FIRMWARE),
+```
+
+**Change I — Add 3 new entity type bindings** (append to the `build_static_bindings()` return dict, before the closing `}`):
+
+```python
+        # V12 — New entity types
+        ET_PHYSICAL_CONDUIT: [
+            lakehouse_binding("PhysicalConduit-static", "DimPhysicalConduit", [
+                ("ConduitId", P_CONDUIT_ID),
+                ("RouteDescription", P_CONDUIT_ROUTE_DESC),
+                ("MaterialType", P_CONDUIT_MATERIAL),
+                ("InstalledYear", P_CONDUIT_INSTALLED_YEAR),
+            ]),
+        ],
+        ET_AMPLIFIER_SITE: [
+            lakehouse_binding("AmplifierSite-static", "DimAmplifierSite", [
+                ("SiteId", P_AMP_SITE_ID),
+                ("Location", P_AMP_LOCATION),
+                ("InstalledYear", P_AMP_INSTALLED_YEAR),
+                ("LastCalibration", P_AMP_LAST_CALIBRATION),
+            ]),
+        ],
+        ET_ADVISORY: [
+            lakehouse_binding("Advisory-static", "DimAdvisory", [
+                ("AdvisoryId", P_ADVISORY_ID),
+                ("VendorName", P_ADVISORY_VENDOR),
+                ("BugId", P_ADVISORY_BUG_ID),
+                ("AffectedVersions", P_ADVISORY_AFFECTED_VERSIONS),
+                ("Severity", P_ADVISORY_SEVERITY),
+                ("Title", P_ADVISORY_TITLE),
+                ("Description", P_ADVISORY_DESCRIPTION),
+            ]),
+        ],
+```
+
+**Change J — Add 3 new contextualizations** (append to the `build_contextualizations()` return dict, before the closing `}`):
+
+```python
+        # V12 — New relationships
+        # routed_through: TransportLink → PhysicalConduit (via FactConduitMapping)
+        R_ROUTED_THROUGH: [
+            ctx("routed_through", "FactConduitMapping",
+                [("LinkId", P_LINK_ID)],
+                [("ConduitId", P_CONDUIT_ID)]),
+        ],
+        # amplifies: AmplifierSite → TransportLink (via FactAmplifierMapping)
+        R_AMPLIFIES: [
+            ctx("amplifies", "FactAmplifierMapping",
+                [("SiteId", P_AMP_SITE_ID)],
+                [("LinkId", P_LINK_ID)]),
+        ],
+        # affects_version: Advisory → CoreRouter (via FactAdvisoryMapping)
+        R_AFFECTS_VERSION: [
+            ctx("affects_version", "FactAdvisoryMapping",
+                [("AdvisoryId", P_ADVISORY_ID)],
+                [("RouterId", P_ROUTER_ID)]),
+        ],
+```
+
+**Summary of changes to `provision_ontology.py`:**
+
+| What | Lines Added | Where |
+|---|---|---|
+| 3 entity type IDs | 4 | After `ET_SLA_POLICY` |
+| 1 property ID (FirmwareVersion) | 1 | After `P_ROUTER_MODEL` |
+| 15 property IDs (3 new entity types) | 19 | After `P_SLA_TIER` |
+| 3 relationship type IDs | 4 | After `R_PEERS_OVER` |
+| 1 property to CoreRouter | 1 | In CoreRouter `properties` |
+| 3 entity type definitions | 55 | End of `ENTITY_TYPES` |
+| 3 relationship type definitions | 22 | End of `RELATIONSHIP_TYPES` |
+| 1 binding to CoreRouter | 1 | In CoreRouter binding |
+| 3 entity type bindings | 25 | End of `build_static_bindings()` |
+| 3 contextualizations | 17 | End of `build_contextualizations()` |
+| **Total** | **~150** | |
+
+**Verify:** After editing, run `python -c "import scripts.fabric.provision_ontology"` to confirm no syntax errors. Count entity types: `grep -c 'ET_.*=' scripts/fabric/provision_ontology.py` → **11**. Count relationship types: `grep -c 'R_.*=' scripts/fabric/provision_ontology.py` → **10**.
+
+---
+
+#### Step 2.3 — Create advisory knowledge documents for AI Search
 
 **Directory:** `data/scenarios/telco-noc/data/knowledge/runbooks/`
 
@@ -1430,13 +1736,15 @@ Guide the firmware upgrade process when a vendor advisory identifies a bug affec
 
 ---
 
-#### Step 2.2 — Create new scenario prompt files
+#### Step 2.4 — Create demo scenario prompt files
 
-**Directory:** `data/scenarios/telco-noc/data/prompts/`
+**Directory:** `data/scenarios/telco-noc/data/prompts/demo_scenarios/` (subdirectory to distinguish from agent system prompts)
 
-**Action:** Create prompt files for the new scenarios. These are the initial prompts that seed the Orchestrator with a problem statement.
+**Action:** Create prompt files for the new demo scenarios. These are **NOT** loaded by `provision_agents.py` — they are **demo starters** meant to be copy-pasted into the chat sidebar to launch a specific investigative flow. The agent system prompts (e.g., `foundry_orchestrator_agent.md`) remain in the parent `prompts/` directory.
 
-**File:** `data/scenarios/telco-noc/data/prompts/planned_maintenance.md` (NEW)
+> **Note:** `provision_agents.py` loads only the 5 named agent prompt files. These demo scenario files are reference material for the operator — paste them into the chat to kick off a guided investigation.
+
+**File:** `data/scenarios/telco-noc/data/prompts/demo_scenarios/planned_maintenance.md` (NEW)
 
 ```markdown
 # Planned Maintenance Risk Assessment
@@ -1456,7 +1764,7 @@ Your task:
 6. Produce a risk assessment with: affected services, SLA exposure, backup path readiness, and recommended safeguards
 ```
 
-**File:** `data/scenarios/telco-noc/data/prompts/conduit_correlation.md` (NEW)
+**File:** `data/scenarios/telco-noc/data/prompts/demo_scenarios/conduit_correlation.md` (NEW)
 
 ```markdown
 # Dual-Fibre Failure — Conduit Shared Risk Investigation
@@ -1476,7 +1784,7 @@ Your task:
 7. Recommend: immediate reroute to tertiary + long-term recommendation for conduit route diversity.
 ```
 
-**File:** `data/scenarios/telco-noc/data/prompts/predictive_degradation.md` (NEW)
+**File:** `data/scenarios/telco-noc/data/prompts/demo_scenarios/predictive_degradation.md` (NEW)
 
 ```markdown
 # Predictive Degradation — Optical Amplifier Aging
@@ -1501,7 +1809,7 @@ Your task:
 7. Recommend: proactive maintenance before failure occurs, with priority based on predicted time-to-failure
 ```
 
-**File:** `data/scenarios/telco-noc/data/prompts/firmware_advisory_correlation.md` (NEW)
+**File:** `data/scenarios/telco-noc/data/prompts/demo_scenarios/firmware_advisory_correlation.md` (NEW)
 
 ```markdown
 # Firmware Advisory Correlation — OSPF Flap Investigation
@@ -1520,13 +1828,13 @@ The operator suspects a software bug. Your task:
 7. Recommend: upgrade schedule, considering SLA windows and traffic rerouting requirements
 ```
 
-**Verify:** `ls data/scenarios/telco-noc/data/prompts/*.md | wc -l` returns at least **7** (original prompts + 4 new ones).
+**Verify:** `ls data/scenarios/telco-noc/data/prompts/demo_scenarios/*.md | wc -l` returns **4**.
 
 ---
 
-#### Step 2.3 — Rebuild the frontend
+#### Step 2.5 — Rebuild the frontend
 
-**Action:** Only required if you performed Step 1.11 (updating `config.ts`).
+**Action:** Only required if you performed Step 1.11 or Step 1.12 (updating `config.ts`).
 
 ```bash
 cd frontend && npm run build
@@ -1536,19 +1844,44 @@ cd frontend && npm run build
 
 ---
 
-#### Step 2.4 — Redeploy
+#### Step 2.6 — Deploy
 
-**Action:** Redeploy the application so the new data, prompts, and runbooks are picked up.
+**Action:** Redeploy the application so the new data, provisioning changes, prompts, and runbooks are picked up.
+
+**Option A — Full deploy (recommended):**
 
 ```bash
+./deploy.sh
+```
+
+This runs the complete pipeline: topology.json generation (Step 2b) → infrastructure (Step 3) → Fabric provisioning including lakehouse tables + ontology (Step 5) → data provisioning including search index (Step 6) → agent provisioning (Step 7) → health check (Step 8).
+
+**Option B — Targeted update (if infrastructure is already provisioned):**
+
+```bash
+# 1. Regenerate topology.json from updated graph_schema.yaml
+uv run python scripts/generate_topology_json.py --scenario telco-noc
+
+# 2. Upload new runbook blobs to Azure Blob Storage
+bash hooks/postprovision.sh
+
+# 3. Re-create/run AI Search indexer to process new runbooks
+uv run python scripts/provision_search_index.py
+
+# 4. Upload CSVs + rebuild Lakehouse tables (picks up new LAKEHOUSE_TABLES entries)
+uv run python scripts/fabric/provision_lakehouse.py
+
+# 5. Re-create ontology with new entity/relationship types
+uv run python scripts/fabric/provision_ontology.py
+
+# 6. Rebuild frontend (only if Step 1.11 was done)
+cd frontend && npm run build && cd ..
+
+# 7. Deploy app code
 azd deploy app --no-prompt
 ```
 
-Then re-run the post-provision hook to upload the new runbooks to AI Search:
-
-```bash
-bash hooks/postprovision.sh
-```
+> **WARNING:** Do NOT run only `azd deploy app` and `bash hooks/postprovision.sh` — this skips the Fabric provisioning scripts and the AI Search indexer. The new entity types would not appear in the graph, and new runbooks would sit in blob storage without being indexed.
 
 **Verify:** After deployment:
 1. The graph topology in the UI should now show PhysicalConduit, AmplifierSite, and Advisory nodes
@@ -1558,263 +1891,67 @@ bash hooks/postprovision.sh
 
 ---
 
-#### Step 2.5 — Verification Checklist (Phase 2)
+#### Step 2.7 — Verification Checklist (Phase 2)
 
 | # | Check | How | Expected |
 |---|---|---|---|
 | 1 | Runbook count | `ls data/scenarios/telco-noc/data/knowledge/runbooks/*.md \| wc -l` | **8** |
-| 2 | Prompt count | `ls data/scenarios/telco-noc/data/prompts/*.md \| wc -l` | **7+** |
+| 2 | Demo prompt count | `ls data/scenarios/telco-noc/data/prompts/demo_scenarios/*.md \| wc -l` | **4** |
 | 3 | Graph has PhysicalConduit nodes | Query in UI: "Show me all physical conduits" | Returns 3 conduits |
 | 4 | Shared conduit insight works | Query: "Do FIBRE-01 and FIBRE-02 share a physical conduit?" | AI identifies CONDUIT-SYD-MEL-INLAND |
 | 5 | Advisory correlation works | Query: "What firmware advisories affect our Cisco routers?" | AI finds ADV-CISCO-2025-001 affecting SYD-01 and MEL-01 |
 | 6 | Amplifier query works | Query: "Which amplifiers service the SYD-MEL fibre?" | AI returns Goulburn and Albury sites |
-| 7 | Conduit prompt works | Load `conduit_correlation.md` prompt | Orchestrator investigates dual-fibre failure |
+| 7 | Conduit prompt works | Copy-paste `conduit_correlation.md` into chat | Orchestrator investigates dual-fibre failure |
 | 8 | Color wheel works for new types | Click color dot next to PhysicalConduit in legend | Color wheel popover opens |
+| 9 | Lakehouse tables provisioned | Check Fabric Lakehouse has 16 tables | **16** (was 10) |
+| 10 | Ontology has new entity types | Check Fabric IQ Ontology for 11 entity types | **11** (was 8) |
 
 ---
 
 ### Summary — Total Files Changed or Created
 
-| Action | File | Phase |
-|---|---|---|
-| **MODIFIED** | `data/scenarios/telco-noc/data/entities/DimCoreRouter.csv` | 1 |
-| **CREATED** | `data/scenarios/telco-noc/data/entities/DimPhysicalConduit.csv` | 1 |
-| **CREATED** | `data/scenarios/telco-noc/data/entities/FactConduitMapping.csv` | 1 |
-| **CREATED** | `data/scenarios/telco-noc/data/entities/DimAmplifierSite.csv` | 1 |
-| **CREATED** | `data/scenarios/telco-noc/data/entities/FactAmplifierMapping.csv` | 1 |
-| **CREATED** | `data/scenarios/telco-noc/data/entities/DimAdvisory.csv` | 1 |
-| **CREATED** | `data/scenarios/telco-noc/data/entities/FactAdvisoryMapping.csv` | 1 |
-| **MODIFIED** | `data/scenarios/telco-noc/graph_schema.yaml` | 1 |
-| **MODIFIED** | `data/scenarios/telco-noc/data/prompts/graph_explorer/core_schema.md` | 1 |
-| **MODIFIED** | `data/scenarios/telco-noc/scenario.yaml` | 1 |
-| **MODIFIED** | `frontend/src/config.ts` (optional) | 1 |
-| **CREATED** | `data/scenarios/telco-noc/data/knowledge/runbooks/conduit_shared_risk_assessment.md` | 2 |
-| **CREATED** | `data/scenarios/telco-noc/data/knowledge/runbooks/amplifier_maintenance.md` | 2 |
-| **CREATED** | `data/scenarios/telco-noc/data/knowledge/runbooks/firmware_upgrade_procedure.md` | 2 |
-| **CREATED** | `data/scenarios/telco-noc/data/prompts/planned_maintenance.md` | 2 |
-| **CREATED** | `data/scenarios/telco-noc/data/prompts/conduit_correlation.md` | 2 |
-| **CREATED** | `data/scenarios/telco-noc/data/prompts/predictive_degradation.md` | 2 |
-| **CREATED** | `data/scenarios/telco-noc/data/prompts/firmware_advisory_correlation.md` | 2 |
-| **Total** | **4 modified + 13 created = 17 files** | |
-
----
-
-## 15. Plan Vetting — Issues Found
-
-> **Methodology:** Systematic top-to-bottom review of Section 14, cross-referenced against every script and config file in the actual codebase. Each issue is tagged by severity.
-
-### 15.1 CRITICAL — Plan Claims Pipeline Is Data-Driven; It Is Not
-
-The plan repeatedly states:
-
-> *"The graph ingest pipeline is **data-driven** from `graph_schema.yaml` — it requires no code changes to support new vertex/edge types."*
-
-**This is only true for one script** (`scripts/generate_topology_json.py`, the mock/topology JSON builder). The actual Fabric provisioning pipeline is **entirely hardcoded** in two files:
-
-#### Issue 1: `provision_lakehouse.py` — Hardcoded Table List
-
-[scripts/fabric/provision_lakehouse.py](../scripts/fabric/provision_lakehouse.py#L46) has:
-
-```python
-LAKEHOUSE_TABLES = [
-    "DimCoreRouter", "DimTransportLink", "DimAggSwitch", "DimBaseStation",
-    "DimBGPSession", "DimMPLSPath", "DimService", "DimSLAPolicy",
-    "FactMPLSPathHops", "FactServiceDependency",
-]
-```
-
-The 6 new CSV base names **must** be added here:
-
-```python
-    "DimPhysicalConduit", "DimAmplifierSite", "DimAdvisory",
-    "FactConduitMapping", "FactAmplifierMapping", "FactAdvisoryMapping",
-```
-
-Without this, the CSVs will sit in the `entities/` directory but never be uploaded to OneLake or loaded as delta Lakehouse tables. The graph will have no data for the new types.
-
-#### Issue 2: `provision_ontology.py` — 985 Lines of Hardcoded Ontology
-
-[scripts/fabric/provision_ontology.py](../scripts/fabric/provision_ontology.py) defines the **entire** Fabric Graph ontology in hardcoded Python constants:
-
-| What | Where | Lines |
-|---|---|---|
-| Entity type ID constants | `ET_CORE_ROUTER` through `ET_SLA_POLICY` | 110–117 |
-| Property ID constants | `P_ROUTER_ID` through `P_SLA_TIER` | 120–175 |
-| Relationship type ID constants | `R_CONNECTS_TO` through `R_PEERS_OVER` | 177–183 |
-| Entity type definitions | `ENTITY_TYPES` list (8 entries) | 188–480 |
-| Relationship type definitions | `RELATIONSHIP_TYPES` list (7 entries) | 484–540 |
-| Static data bindings | `build_static_bindings()` | ~550–650 |
-| Contextualizations (junction tables) | `build_contextualizations()` | ~650–750 |
-
-**To support the plan's 3 new entity types + 3 new relationships + 1 new property, you must add:**
-
-1. **3 new entity type ID constants:** `ET_PHYSICAL_CONDUIT`, `ET_AMPLIFIER_SITE`, `ET_ADVISORY` (continuing from 1000000000009)
-2. **~15 new property ID constants** for all properties of the 3 new types (ConduitId, RouteDescription, MaterialType, InstalledYear, SiteId, Location, LastCalibration, AdvisoryId, VendorName, BugId, AffectedVersions, Severity, Title, Description) plus `P_FIRMWARE_VERSION` for CoreRouter
-3. **3 new relationship type ID constants:** `R_ROUTED_THROUGH`, `R_AMPLIFIES`, `R_AFFECTS_VERSION` (continuing from 3000000000008)
-4. **3 new entity type definitions** in `ENTITY_TYPES` (following the existing pattern)
-5. **`FirmwareVersion` property** added to the existing CoreRouter entity type definition
-6. **3 new relationship type definitions** in `RELATIONSHIP_TYPES`
-7. **3+ new static data bindings** mapping Lakehouse tables to entity properties
-8. **3 new contextualizations** binding the new relationship types to their junction CSV tables
-
-This is approximately **150–200 lines of Python** that the plan completely omits. **The plan must add a new Step 1.8.5 (or expand Step 1.8) with exact content for these changes.**
-
----
-
-### 15.2 HIGH — Steps That Will Silently Fail or Produce Wrong Results
-
-#### Issue 3: ADV-CISCO-2025-002 Data Mismatch
-
-In Step 1.6 (DimAdvisory.csv):
-```
-ADV-CISCO-2025-002  →  AffectedVersions: IOS-XR-7.8.1|IOS-XR-7.9.1
-```
-
-In Step 1.7 (FactAdvisoryMapping.csv):
-```
-ADV-CISCO-2025-002,CORE-SYD-01,Router runs IOS-XR-7.9.2 — version 7.9.x in affected range
-ADV-CISCO-2025-002,CORE-MEL-01,Router runs IOS-XR-7.9.2 — version 7.9.x in affected range
-```
-
-**Problem:** CORE-SYD-01 and CORE-MEL-01 run `IOS-XR-7.9.2`, but 7.9.2 is NOT in the explicit `AffectedVersions` list (only 7.8.1 and 7.9.1 are). The MatchReason claims "7.9.x in affected range" but this is a loose interpretation that contradicts the data.
-
-**Fix (pick one):**
-- **(a)** Add `|IOS-XR-7.9.2` to AffectedVersions in DimAdvisory.csv → makes the data consistent
-- **(b)** Remove the ADV-CISCO-2025-002 rows from FactAdvisoryMapping for CORE-SYD-01 / CORE-MEL-01 → advisory doesn't affect these routers
-- **(c)** Keep the mapping but change MatchReason to: `"Router runs IOS-XR-7.9.2 — advisory targets 7.9.x family; BFD workaround still applicable"` → explains the partial applicability
-
-**Recommendation:** Option (a) is simplest and makes the demo cleaner.
-
-#### Issue 4: Step 2.4 — `postprovision.sh` Does NOT Index Into AI Search
-
-The plan says:
-> *"Then re-run the post-provision hook to upload the new runbooks to AI Search"*
-
-**This is wrong.** [hooks/postprovision.sh](../hooks/postprovision.sh) only uploads blobs to Azure Blob Storage (line 26–60). It does NOT create or trigger the AI Search indexer.
-
-The indexing pipeline lives in [scripts/provision_search_index.py](../scripts/provision_search_index.py), which:
-1. Creates the blob data source connection
-2. Creates the search index with HNSW vector config
-3. Creates the skillset (chunking + embedding)
-4. Creates the indexer and runs it
-
-**After adding new runbooks, the correct sequence is:**
-```bash
-# 1. Upload blobs to storage
-bash hooks/postprovision.sh
-# 2. Re-run indexer to process new blobs
-uv run python scripts/provision_search_index.py
-```
-
-Without step 2, the 3 new runbooks will sit in blob storage but be invisible to the `RunbookKBAgent`.
-
-#### Issue 5: `generate_topology_json.py` Must Be Re-Run
-
-[scripts/generate_topology_json.py](../scripts/generate_topology_json.py) is the **only** script that reads `graph_schema.yaml` generically. It produces `graph-query-api/backends/fixtures/topology.json` for the mock backend and the frontend's initial topology visualization.
-
-The plan updates `graph_schema.yaml` (Step 1.8) but never mentions running:
-```bash
-uv run python scripts/generate_topology_json.py --scenario telco-noc
-```
-
-If the mock backend is active (`GRAPH_BACKEND=mock`), the new node/edge types will NOT appear without regenerating `topology.json`. **Add this as a step after Step 1.8.**
-
-#### Issue 6: Step 2.2 Prompt Files Have No Integration Point
-
-Step 2.2 creates 4 new `.md` files in `data/scenarios/telco-noc/data/prompts/`:
-- `planned_maintenance.md`
-- `conduit_correlation.md`
-- `predictive_degradation.md`
-- `firmware_advisory_correlation.md`
-
-**These files are NOT loaded by anything.**
-
-[scripts/provision_agents.py](../scripts/provision_agents.py#L120) loads only these specific prompt files:
-- `foundry_orchestrator_agent.md`
-- `graph_explorer/core_instructions.md` + `graph_explorer/core_schema.md` + `graph_explorer/language_gql.md`
-- `foundry_telemetry_agent_v2.md`
-- `foundry_runbook_kb_agent.md`
-- `foundry_historical_ticket_agent.md`
-
-The new files sit on disk with no consumer. The plan should clarify their purpose:
-- **If demo starting prompts:** Add a note saying "copy-paste these into the chat to launch a demo scenario"
-- **If UI-selectable:** Add corresponding entries to `exampleQuestions` in `config.ts` and/or `example_questions` in `scenario.yaml`
-
-#### Issue 7: `exampleQuestions` Not Updated for New Capabilities
-
-Neither [frontend/src/config.ts](../frontend/src/config.ts#L47) `exampleQuestions` nor [scenario.yaml](../data/scenarios/telco-noc/scenario.yaml#L28) `example_questions` are updated.
-
-Users won't discover the new conduit/amplifier/advisory capabilities unless they know to ask. **Add:**
-
-```typescript
-// config.ts exampleQuestions — append:
-"Do our 'redundant' SYD-MEL fibres share a physical conduit?",
-"Which amplifiers service the SYD-MEL fibre and when were they last calibrated?",
-"Are any routers running firmware affected by known vendor advisories?",
-```
-
-```yaml
-# scenario.yaml example_questions — append:
-- "Do our 'redundant' SYD-MEL fibres share a physical conduit?"
-- "Which amplifiers service the SYD-MEL fibre and when were they last calibrated?"
-- "Are any routers running firmware affected by known vendor advisories?"
-```
-
----
-
-### 15.3 MEDIUM — Incorrect Verification Commands
-
-#### Issue 8: Step 1.12 Check #5 — Wrong `grep` for Vertex Count
-
-The plan says:
-> `grep -c 'label:' data/scenarios/telco-noc/graph_schema.yaml` (in vertices section) → **11**
-
-`grep -c 'label:'` counts ALL occurrences in the file, including edges (which have `label:` in the edge definition AND `label:` inside `source:` and `target:` sub-keys). The actual count will be ~40+, not 11.
-
-**Fix:** Use `awk` to count only vertex labels:
-```bash
-awk '/^vertices:/,/^edges:/{if (/^  - label:/) count++} END{print count}' graph_schema.yaml
-```
-
-#### Issue 9: Step 1.12 Check #9 — Overly Broad `grep`
-
-The plan says:
-> `grep -c ':' frontend/src/config.ts` in nodeColors block → **11**
-
-Grepping for `:` matches every line in the file. This should be:
-```bash
-grep -A20 'nodeColors' frontend/src/config.ts | grep -c ':'
-```
-Or better: just visually confirm 11 entries in the `nodeColors` object.
-
----
-
-### 15.4 LOW — Polish and Documentation Notes
-
-#### Issue 10: `core_schema.md` Advisory Table Uses Derived Column
-
-The "All instances" table for Advisory in Step 1.9 includes an `Affected Routers` column that does not exist in the CSV. This is useful for the agent prompt but could confuse an implementer who expects `Affected Routers` as a CSV column. Add a comment: `<!-- Affected Routers is derived from FactAdvisoryMapping, not a CSV column -->`.
-
-#### Issue 11: New Prompt Files Coexist with Agent System Prompts
-
-The 4 new prompt files (Step 2.2) are placed in the same directory (`data/scenarios/telco-noc/data/prompts/`) as the 5 agent system prompts. There's no naming convention to distinguish demo scenario prompts from agent instructions. Consider prefixing demo prompts with `demo_` or placing them in a subdirectory (`prompts/demo_scenarios/`).
-
----
-
-### 15.5 Summary — Required Corrections Before Implementation
-
-| # | Severity | Issue | Section |
+| Action | File | Phase | Step |
 |---|---|---|---|
-| 1 | **CRITICAL** | Add 6 new entries to `LAKEHOUSE_TABLES` in `provision_lakehouse.py` | New step after 1.8 |
-| 2 | **CRITICAL** | Add ~150-200 lines to `provision_ontology.py` (entity/property/relationship IDs, definitions, bindings, contextualizations) | New step after 1.8 |
-| 3 | **HIGH** | Fix ADV-CISCO-2025-002 `AffectedVersions` — add `IOS-XR-7.9.2` | Step 1.6 |
-| 4 | **HIGH** | Add `uv run python scripts/provision_search_index.py` to reindexing step | Step 2.4 |
-| 5 | **HIGH** | Add `uv run python scripts/generate_topology_json.py` step | After Step 1.8 |
-| 6 | **HIGH** | Clarify purpose of new prompt files + add integration point | Step 2.2 |
-| 7 | **HIGH** | Add new `exampleQuestions` to `config.ts` and `scenario.yaml` | New step |
-| 8 | **MEDIUM** | Fix vertex-count grep command in verification checklist | Step 1.12 |
-| 9 | **MEDIUM** | Fix nodeColors grep command in verification checklist | Step 1.12 |
-| 10 | **LOW** | Note that Advisory "Affected Routers" column is derived | Step 1.9 |
-| 11 | **LOW** | Consider separating demo prompts from agent system prompts | Step 2.2 |
+| **MODIFIED** | `data/scenarios/telco-noc/data/entities/DimCoreRouter.csv` | 1 | 1.1 |
+| **CREATED** | `data/scenarios/telco-noc/data/entities/DimPhysicalConduit.csv` | 1 | 1.2 |
+| **CREATED** | `data/scenarios/telco-noc/data/entities/FactConduitMapping.csv` | 1 | 1.3 |
+| **CREATED** | `data/scenarios/telco-noc/data/entities/DimAmplifierSite.csv` | 1 | 1.4 |
+| **CREATED** | `data/scenarios/telco-noc/data/entities/FactAmplifierMapping.csv` | 1 | 1.5 |
+| **CREATED** | `data/scenarios/telco-noc/data/entities/DimAdvisory.csv` | 1 | 1.6 |
+| **CREATED** | `data/scenarios/telco-noc/data/entities/FactAdvisoryMapping.csv` | 1 | 1.7 |
+| **MODIFIED** | `data/scenarios/telco-noc/graph_schema.yaml` | 1 | 1.8 |
+| **MODIFIED** | `data/scenarios/telco-noc/data/prompts/graph_explorer/core_schema.md` | 1 | 1.9 |
+| **MODIFIED** | `data/scenarios/telco-noc/scenario.yaml` | 1 | 1.10, 1.12 |
+| **MODIFIED** | `frontend/src/config.ts` (optional) | 1 | 1.11, 1.12 |
+| **MODIFIED** | `scripts/fabric/provision_lakehouse.py` | 2 | 2.1 |
+| **MODIFIED** | `scripts/fabric/provision_ontology.py` | 2 | 2.2 |
+| **CREATED** | `data/scenarios/telco-noc/data/knowledge/runbooks/conduit_shared_risk_assessment.md` | 2 | 2.3 |
+| **CREATED** | `data/scenarios/telco-noc/data/knowledge/runbooks/amplifier_maintenance.md` | 2 | 2.3 |
+| **CREATED** | `data/scenarios/telco-noc/data/knowledge/runbooks/firmware_upgrade_procedure.md` | 2 | 2.3 |
+| **CREATED** | `data/scenarios/telco-noc/data/prompts/demo_scenarios/planned_maintenance.md` | 2 | 2.4 |
+| **CREATED** | `data/scenarios/telco-noc/data/prompts/demo_scenarios/conduit_correlation.md` | 2 | 2.4 |
+| **CREATED** | `data/scenarios/telco-noc/data/prompts/demo_scenarios/predictive_degradation.md` | 2 | 2.4 |
+| **CREATED** | `data/scenarios/telco-noc/data/prompts/demo_scenarios/firmware_advisory_correlation.md` | 2 | 2.4 |
+| **Total** | **6 modified + 14 created = 20 files** | |
 
-> **Bottom line:** The plan is directionally correct for data files (CSVs, schema YAML, core_schema.md, runbooks) but **misses the two most labor-intensive code files** (`provision_lakehouse.py` and `provision_ontology.py`) that must be updated for the new graph types to actually appear in the Fabric environment. An implementer following the plan as-is would create all the data files, deploy, and find zero new nodes in the graph.
+---
+
+## 15. Plan Vetting — Resolution Summary
+
+> **Original vetting (v1)** identified 11 issues across CRITICAL/HIGH/MEDIUM/LOW severity. All issues have been incorporated into the revised Section 14 (v2). This section provides a cross-reference.
+
+| # | Severity | Issue | Resolution | Step |
+|---|---|---|---|---|
+| 1 | **CRITICAL** | `provision_lakehouse.py` missing 6 new table entries | Added Step 2.1 with exact code | 2.1 |
+| 2 | **CRITICAL** | `provision_ontology.py` missing ~150 lines (IDs, entity types, bindings, contextualizations) | Added Step 2.2 with all 10 sub-changes (A through J) | 2.2 |
+| 3 | **HIGH** | ADV-CISCO-2025-002 `AffectedVersions` missing `IOS-XR-7.9.2` | Fixed in Step 1.6 CSV content | 1.6 |
+| 4 | **HIGH** | Deploy step missing `provision_search_index.py` re-run | Step 2.6 Deploy now shows full pipeline (Option A: `./deploy.sh`, Option B: manual sequence including indexer) | 2.6 |
+| 5 | **HIGH** | `generate_topology_json.py` not re-run after schema changes | Noted that `deploy.sh` Step 2b auto-runs it; also included in Option B manual sequence | 2.6 |
+| 6 | **HIGH** | New prompt files have no consumer / integration point | Step 2.4 clarifies they are "demo starters" for copy-paste, placed in `demo_scenarios/` subdirectory | 2.4 |
+| 7 | **HIGH** | `exampleQuestions` not updated for new capabilities | Added Step 1.12 with 3 new questions for both `scenario.yaml` and `config.ts` | 1.12 |
+| 8 | **MEDIUM** | Vertex-count `grep` wrong (counts all `label:` in file) | Step 1.13 Check #5 now uses `awk` to count only vertex labels | 1.13 |
+| 9 | **MEDIUM** | nodeColors `grep` too broad (matches every `:` in file) | Step 1.13 Check #9 now uses `grep -A15 'nodeColors' \| grep -c ':'` | 1.13 |
+| 10 | **LOW** | Advisory "Affected Routers" column is derived, could confuse implementer | Added HTML comment note in Step 1.9 | 1.9 |
+| 11 | **LOW** | Demo prompt files mixed with agent system prompts | Step 2.4 now uses `prompts/demo_scenarios/` subdirectory | 2.4 |
+
+> **All 11 issues resolved.** The plan is now implementation-ready. Phase 1 (Steps 1.1–1.13) covers data, schema, prompt, and config changes. Phase 2 (Steps 2.1–2.7) covers provisioning script updates, knowledge documents, demo prompts, frontend rebuild, deployment, and verification.
