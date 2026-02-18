@@ -4,13 +4,10 @@ export function HealthDot({ label }: { label?: string }) {
   const [ok, setOk] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const check = () =>
-      fetch('/health')
-        .then((r) => setOk(r.ok))
-        .catch(() => setOk(false));
-    check();
-    const interval = setInterval(check, 15_000);
-    return () => clearInterval(interval);
+    // Single check on mount — no polling (health buttons handle ongoing checks)
+    fetch('/health')
+      .then((r) => setOk(r.ok))
+      .catch(() => setOk(false));
   }, []);
 
   return (

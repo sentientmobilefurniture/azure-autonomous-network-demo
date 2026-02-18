@@ -136,3 +136,24 @@ async def health_check_sources(scenario: str = Query(default=SCENARIO_NAME, desc
         })
 
     return {"sources": results, "checked_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.post("/health/rediscover")
+async def rediscover_fabric():
+    """Invalidate Fabric discovery cache and re-discover workspace items."""
+    from fabric_discovery import invalidate_cache, get_fabric_config, is_fabric_ready, is_kql_ready
+
+    invalidate_cache()
+    cfg = get_fabric_config()   # triggers re-discovery
+
+    return {
+        "ok": True,
+        "source": cfg.source,
+        "workspace_id": cfg.workspace_id or None,
+        "graph_model_id": cfg.graph_model_id or None,
+        "eventhouse_query_uri": cfg.eventhouse_query_uri or None,
+        "kql_db_name": cfg.kql_db_name or None,
+        "fabric_ready": is_fabric_ready(),
+        "kql_ready": is_kql_ready(),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }

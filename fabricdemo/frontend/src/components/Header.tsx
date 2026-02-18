@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { AgentBar } from './AgentBar';
-import { DataSourceBar } from './DataSourceBar';
-import { ServiceHealthSummary } from './ServiceHealthSummary';
+import { HealthButtonBar } from './HealthButtonBar';
 import { ServiceHealthPopover } from './ServiceHealthPopover';
 import { useScenario } from '../ScenarioContext';
 
@@ -25,7 +24,13 @@ export function Header() {
           </span>
         </div>
         <div className="flex items-center gap-2 relative">
-          <ServiceHealthSummary onClick={() => setHealthOpen(!healthOpen)} />
+          <button
+            onClick={() => setHealthOpen(!healthOpen)}
+            className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-neutral-bg3 transition-colors text-text-muted"
+            title="Detailed service health"
+          >
+            ⚙ Services
+          </button>
           <ServiceHealthPopover
             open={healthOpen}
             onClose={() => setHealthOpen(false)}
@@ -33,7 +38,7 @@ export function Header() {
         </div>
       </header>
       <AgentBar />
-      <DataSourceBar />
+      <HealthButtonBar />
     </>
   );
 }
