@@ -146,7 +146,7 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
         {/* Paused indicator */}
         {isPaused && (
           <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full
-                         bg-white/10 backdrop-blur-sm text-text-muted text-[10px]
+                         bg-neutral-bg4 text-text-muted text-[10px]
                          transition-opacity duration-100">
             ⏸ Paused
           </div>

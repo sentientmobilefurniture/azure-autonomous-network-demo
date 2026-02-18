@@ -131,7 +131,7 @@ export default function App() {
                   >
                     {/* Zone 2: Metrics bar — draggable bottom edge */}
                     <Panel defaultSize={30} minSize={15}>
-                      <div className="h-full border-b border-white/10">
+                      <div className="h-full border-b border-border">
                         <MetricsBar />
                       </div>
                     </Panel>

@@ -16,7 +16,7 @@ export function ResourceTooltip({ tooltip }: ResourceTooltipProps) {
     <AnimatePresence>
       {tooltip && (
         <motion.div
-          className="fixed z-50 bg-neutral-bg3 border border-white/15 rounded-lg shadow-xl
+          className="fixed z-50 bg-neutral-bg3 border border-border-strong rounded-lg shadow-xl
                      px-3 py-2 pointer-events-none max-w-xs"
           style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}
           initial={{ opacity: 0, scale: 0.95 }}

@@ -16,7 +16,7 @@ export function TabbedLogStream({ streams }: TabbedLogStreamProps) {
   return (
     <div className="h-full flex flex-col">
       {/* Tab bar */}
-      <div className="flex border-b border-white/10 px-2 shrink-0">
+      <div className="flex border-b border-border px-2 shrink-0">
         {streams.map((s, i) => (
           <button
             key={s.title}

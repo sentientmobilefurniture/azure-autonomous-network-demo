@@ -285,9 +285,17 @@ A base station backhauls through an aggregation switch.
 
 An MPLS path traverses a transport link. Backed by the FactMPLSPathHops junction table.
 
-### depends_on: Service → MPLSPath / AggSwitch / BaseStation
+### depends_on_mplspath: Service → MPLSPath
 
-A service depends on a network resource. EnterpriseVPN → MPLSPath, Broadband → AggSwitch, Mobile5G → BaseStation.
+An EnterpriseVPN service depends on an MPLS path.
+
+### depends_on_aggswitch: Service → AggSwitch
+
+A Broadband service depends on an aggregation switch.
+
+### depends_on_basestation: Service → BaseStation
+
+A Mobile5G service depends on a base station.
 
 ### governed_by: SLAPolicy → Service
 

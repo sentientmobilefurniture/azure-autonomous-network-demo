@@ -51,7 +51,7 @@ export function AgentTimeline({
 
       {/* Run complete footer */}
       {!running && runMeta && runMeta.steps > 0 && (
-        <div className="text-xs text-text-muted border-t border-white/5 pt-3 mt-3 text-center">
+        <div className="text-xs text-text-muted border-t border-border-subtle pt-3 mt-3 text-center">
           Run complete — {runMeta.steps} step{runMeta.steps > 1 ? 's' : ''} ·{' '}
           {runMeta.time}
         </div>

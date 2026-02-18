@@ -46,7 +46,7 @@ If your earliest alert is `LINK_DOWN`, everything downstream is a symptom.
 
 ### Step 5: Impact Assessment
 - Use the root cause entity as the starting point
-- Query ontology: traverse `ROUTES_VIA`, `DEPENDS_ON` relationships to find impacted services
+- Query ontology: traverse `ROUTES_VIA`, `DEPENDS_ON_MPLSPATH` / `DEPENDS_ON_AGGSWITCH` / `DEPENDS_ON_BASESTATION` relationships to find impacted services
 - Check `SLAPolicy` entities for penalty exposure
 - Prioritize: Enterprise SLA > Broadband > Mobile
 

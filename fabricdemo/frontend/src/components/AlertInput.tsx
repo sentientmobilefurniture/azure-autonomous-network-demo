@@ -41,7 +41,7 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
               onClick={() => setExamplesOpen((v) => !v)}
               className={clsx(
                 'py-2.5 px-3 text-sm font-medium rounded-lg transition-colors',
-                'bg-white/5 border border-white/10 hover:border-brand/40',
+                'bg-neutral-bg3 border border-border hover:border-brand/40',
                 'text-text-secondary hover:text-text-primary',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand',
                 examplesOpen && 'border-brand/40 text-text-primary',
@@ -58,7 +58,7 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
                   exit={{ opacity: 0, y: 8 }}
                   transition={{ duration: 0.15 }}
                   className="absolute bottom-full left-0 mb-2 w-72 max-h-56 overflow-y-auto
-                    bg-neutral-bg2 border border-white/10 rounded-lg shadow-xl z-50 p-1.5"
+                    bg-neutral-bg2 border border-border rounded-lg shadow-xl z-50 p-1.5"
                 >
                   {exampleQuestions!.map((q, i) => (
                     <button
@@ -68,7 +68,7 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
                         setExamplesOpen(false);
                       }}
                       className="w-full text-left text-xs px-2.5 py-2 rounded-md
-                        hover:bg-white/5 text-text-secondary hover:text-text-primary
+                        hover:bg-neutral-bg3 text-text-secondary hover:text-text-primary
                         transition-colors cursor-pointer"
                     >
                       "{q}"
@@ -87,7 +87,7 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
           className={clsx(
             'flex-1 py-2.5 text-sm font-medium rounded-lg transition-colors',
             'bg-brand hover:bg-brand-hover text-white',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-bg1',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-white',
             'disabled:opacity-50 disabled:cursor-not-allowed',
           )}
           onClick={onSubmit}

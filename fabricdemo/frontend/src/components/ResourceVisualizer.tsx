@@ -128,7 +128,7 @@ export function ResourceVisualizer() {
           {/* Paused indicator */}
           {isPaused && (
             <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full
-                           bg-white/10 backdrop-blur-sm text-text-muted text-[10px]
+                           bg-neutral-bg4 text-text-muted text-[10px]
                            transition-opacity duration-100">
               ⏸ Paused
             </div>
@@ -136,7 +136,7 @@ export function ResourceVisualizer() {
 
           {/* Loading / error / empty overlays */}
           {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/10">
               <div className="flex flex-col items-center gap-2 text-text-secondary">
                 <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-brand border-t-transparent" />
                 <span className="text-xs">Loading resource graph…</span>
@@ -147,13 +147,13 @@ export function ResourceVisualizer() {
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center space-y-2 text-text-muted">
                 <p className="text-sm">Could not load resource graph</p>
-                <p className="text-xs text-red-400 max-w-sm">{error}</p>
+                <p className="text-xs text-status-error max-w-sm">{error}</p>
               </div>
             </div>
           )}
           {!loading && error && nodes.length > 0 && (
             <div className="absolute top-2 left-2 right-2 z-10">
-              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 text-xs text-yellow-400">
+              <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg px-3 py-2 text-xs text-status-warning">
                 ⚠ {error}
               </div>
             </div>

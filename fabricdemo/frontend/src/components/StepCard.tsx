@@ -62,7 +62,7 @@ export function StepCard({ step }: { step: StepEvent }) {
                 <span className="text-[10px] font-medium text-text-muted uppercase">
                   ▾ Query
                 </span>
-                <div className="text-xs bg-white/5 rounded p-2 mt-1 text-text-secondary whitespace-pre-wrap break-words">
+                <div className="text-xs bg-neutral-bg3 rounded p-2 mt-1 text-text-secondary whitespace-pre-wrap break-words">
                   {step.query}
                 </div>
               </div>
@@ -72,7 +72,7 @@ export function StepCard({ step }: { step: StepEvent }) {
                 <span className="text-[10px] font-medium text-text-muted uppercase">
                   ▾ Response
                 </span>
-                <div className="text-xs prose prose-sm prose-invert max-w-none mt-1 bg-white/5 rounded p-2">
+                <div className="text-xs prose prose-sm max-w-none mt-1 bg-neutral-bg3 rounded p-2">
                   <ReactMarkdown>{step.response}</ReactMarkdown>
                 </div>
               </div>

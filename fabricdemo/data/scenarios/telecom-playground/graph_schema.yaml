@@ -201,8 +201,8 @@ edges:
       - name: HopOrder
         column: HopOrder
 
-  # Service depends_on MPLSPath
-  - label: depends_on
+  # Service depends_on_mplspath MPLSPath
+  - label: depends_on_mplspath
     csv_file: FactServiceDependency.csv
     filter:
       column: DependsOnType
@@ -219,8 +219,8 @@ edges:
       - name: DependencyStrength
         column: DependencyStrength
 
-  # Service depends_on AggSwitch
-  - label: depends_on
+  # Service depends_on_aggswitch AggSwitch
+  - label: depends_on_aggswitch
     csv_file: FactServiceDependency.csv
     filter:
       column: DependsOnType
@@ -237,8 +237,8 @@ edges:
       - name: DependencyStrength
         column: DependencyStrength
 
-  # Service depends_on BaseStation
-  - label: depends_on
+  # Service depends_on_basestation BaseStation
+  - label: depends_on_basestation
     csv_file: FactServiceDependency.csv
     filter:
       column: DependsOnType

@@ -3,7 +3,7 @@ Generate relationship / junction table CSV files for network data.
 
 Outputs 2 CSV files:
   - FactMPLSPathHops.csv   (MPLSPath --ROUTES_VIA--> nodes)
-  - FactServiceDependency.csv  (Service --DEPENDS_ON--> resources)
+  - FactServiceDependency.csv  (Service --DEPENDS_ON_MPLSPATH/AGGSWITCH/BASESTATION--> resources)
 """
 
 import csv

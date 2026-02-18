@@ -75,19 +75,19 @@ export function DiagnosisPanel({
                 Diagnosis
               </span>
               <button
-                className="text-xs text-text-muted hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-white/5"
+                className="text-xs text-text-muted hover:text-text-primary transition-colors px-2 py-1 rounded hover:bg-neutral-bg3"
                 onClick={() => navigator.clipboard.writeText(finalMessage)}
               >
                 Copy
               </button>
             </div>
 
-            <div className="prose prose-sm prose-invert max-w-none">
+            <div className="prose prose-sm max-w-none">
               <ReactMarkdown>{finalMessage}</ReactMarkdown>
             </div>
 
             {runMeta && (
-              <div className="text-xs text-text-muted border-t border-white/5 pt-3 mt-6">
+              <div className="text-xs text-text-muted border-t border-border-subtle pt-3 mt-6">
                 {runMeta.steps} agent step{runMeta.steps !== 1 ? 's' : ''} ·{' '}
                 {runMeta.time}
               </div>

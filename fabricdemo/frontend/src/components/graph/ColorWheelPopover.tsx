@@ -224,7 +224,7 @@ export function ColorWheelPopover({ currentColor, anchorRect, onSelect, onClose 
   return (
     <div
       ref={popoverRef}
-      className="fixed z-50 bg-neutral-bg3 border border-white/15 rounded-lg shadow-xl p-3"
+      className="fixed z-50 bg-neutral-bg3 border border-border-strong rounded-lg shadow-xl p-3"
       style={{ top, left, width: WHEEL_SIZE + 24 }}
     >
       {/* Color wheel: hue ring + SL square inside */}
@@ -252,7 +252,7 @@ export function ColorWheelPopover({ currentColor, anchorRect, onSelect, onClose 
       {/* Hex input + preview swatch */}
       <div className="flex items-center gap-2 mt-3">
         <div
-          className="h-6 w-6 rounded border border-white/20 shrink-0"
+          className="h-6 w-6 rounded border border-border-strong shrink-0"
           style={{ backgroundColor: previewHex }}
         />
         <input
@@ -261,9 +261,9 @@ export function ColorWheelPopover({ currentColor, anchorRect, onSelect, onClose 
           onChange={(e) => setHexInput(e.target.value.toUpperCase())}
           onBlur={commitHex}
           onKeyDown={(e) => { if (e.key === 'Enter') commitHex(); }}
-          className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1
+          className="flex-1 bg-neutral-bg3 border border-border rounded px-2 py-1
                      text-xs text-text-primary font-mono
-                     focus:outline-none focus:border-white/25"
+                     focus:outline-none focus:border-brand"
           maxLength={7}
           placeholder="#FFFFFF"
         />
@@ -281,7 +281,7 @@ export function ColorWheelPopover({ currentColor, anchorRect, onSelect, onClose 
         {COLOR_PALETTE.map((color) => (
           <button
             key={color}
-            className="h-4 w-4 rounded-full border border-white/20 hover:scale-125
+            className="h-4 w-4 rounded-full border border-border-strong hover:scale-125
                        transition-transform relative"
             style={{ backgroundColor: color }}
             onClick={() => { onSelect(color); onClose(); }}

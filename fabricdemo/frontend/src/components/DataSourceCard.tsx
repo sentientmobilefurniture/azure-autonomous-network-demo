@@ -30,19 +30,19 @@ export function DataSourceCard({ source }: { source: DataSourceHealth }) {
       onMouseLeave={() => setShowTooltip(false)}
     >
       <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-bg3 text-[10px] cursor-default">
-        <span className={source.ok ? 'text-green-400' : 'text-red-400'}>●</span>
+        <span className={source.ok ? 'text-status-success' : 'text-status-error'}>●</span>
         <span className="text-text-secondary">{connectorLabel(source.connector)}</span>
         <span className="text-text-muted"> — {source.resource_name}</span>
       </div>
 
       {showTooltip && (
         <div className="absolute left-0 top-full mt-1 z-50 min-w-[260px]
-                        bg-neutral-bg3 border border-white/10 rounded-lg
+                        bg-neutral-bg3 border border-border rounded-lg
                         shadow-xl p-3 text-xs text-text-secondary">
           <p className="font-medium">
             {connectorLabel(source.connector)}: {source.resource_name}
           </p>
-          <p className={`mt-1 ${source.ok ? 'text-green-400' : 'text-red-400'}`}>
+          <p className={`mt-1 ${source.ok ? 'text-status-success' : 'text-status-error'}`}>
             Status: {source.ok ? '🟢 Reachable' : '🔴 Unreachable'}
           </p>
           {source.latency_ms > 0 && (
@@ -55,7 +55,7 @@ export function DataSourceCard({ source }: { source: DataSourceHealth }) {
             {source.query}
           </pre>
           {!source.ok && source.detail && (
-            <p className="mt-2 text-red-400/80 text-[10px]">Error: {source.detail}</p>
+            <p className="mt-2 text-status-error/80 text-[10px]">Error: {source.detail}</p>
           )}
         </div>
       )}

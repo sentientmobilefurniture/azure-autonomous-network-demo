@@ -25,7 +25,7 @@ export function AgentCard({ agent }: { agent: AgentSpec }) {
   return (
     <div
       className="relative inline-flex items-center gap-1.5 px-2 py-1
-                 rounded bg-white/5 hover:bg-white/10 transition-colors
+                 rounded bg-neutral-bg3 hover:bg-neutral-bg4 transition-colors
                  cursor-default select-none"
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
@@ -40,7 +40,7 @@ export function AgentCard({ agent }: { agent: AgentSpec }) {
 
       {showTooltip && (
         <div className="absolute left-0 top-full mt-1 z-50 min-w-[220px]
-                        bg-neutral-bg3 border border-white/10 rounded-lg
+                        bg-neutral-bg3 border border-border rounded-lg
                         shadow-xl p-3 text-xs text-text-secondary">
           <div className="font-medium text-text-primary mb-2">{agent.name}</div>
           <div className="space-y-1">

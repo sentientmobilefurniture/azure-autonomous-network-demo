@@ -21,7 +21,7 @@ const LOG_STREAMS = [
 
 export function TerminalPanel() {
   return (
-    <div className="h-full border-t border-white/10 bg-neutral-bg1">
+    <div className="h-full border-t border-border bg-neutral-bg1">
       <TabbedLogStream streams={LOG_STREAMS} />
     </div>
   );

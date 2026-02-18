@@ -24,17 +24,17 @@ export function ModalShell({ title, onClose, footer, children, className }: Moda
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm"
       onClick={handleBackdropClick}
       onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
     >
       <div
-        className={`bg-neutral-bg2 border border-white/10 rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl ${className ?? ''}`}
+        className={`bg-white border border-border rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl ${className ?? ''}`}
         role="dialog"
         aria-modal="true"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-4 pb-3 border-b border-white/10">
+        <div className="flex items-center justify-between px-6 pt-4 pb-3 border-b border-border">
           <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
           <button
             onClick={onClose}
@@ -50,11 +50,11 @@ export function ModalShell({ title, onClose, footer, children, className }: Moda
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-white/10 flex justify-end">
+        <div className="px-6 py-3 border-t border-border flex justify-end">
           {footer ?? (
             <button
               onClick={onClose}
-              className="px-4 py-1.5 text-sm text-text-primary bg-white/10 hover:bg-white/15 rounded-md transition-colors"
+              className="px-4 py-1.5 text-sm text-text-primary bg-neutral-bg3 hover:bg-neutral-bg4 rounded-md transition-colors"
             >
               Close
             </button>

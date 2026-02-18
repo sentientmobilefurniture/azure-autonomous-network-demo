@@ -37,10 +37,10 @@ export function AgentBar() {
   });
 
   return (
-    <div className="h-8 flex-shrink-0 bg-neutral-bg2 border-b border-white/10
+    <div className="h-8 flex-shrink-0 bg-neutral-bg2 border-b border-border
                     flex items-center gap-2 px-6 overflow-x-auto">
       <HealthDot label="API" />
-      <div className="w-px h-4 bg-white/10" />
+      <div className="w-px h-4 bg-border" />
       {sorted.map(agent => (
         <AgentCard key={agent.id} agent={agent} />
       ))}

@@ -52,11 +52,27 @@ g.V().hasLabel('TransportLink').has('LinkId', 'LINK-SYD-MEL-FIBRE-01')
   .valueMap(true)
 ```
 
-### depends_on: Service → MPLSPath
+### depends_on_mplspath: Service → MPLSPath
 
 ```gremlin
 g.V().hasLabel('MPLSPath').has('PathId', 'MPLS-PATH-SYD-MEL-PRIMARY')
-  .in('depends_on').hasLabel('Service')
+  .in('depends_on_mplspath').hasLabel('Service')
+  .valueMap(true)
+```
+
+### depends_on_aggswitch: Service → AggSwitch
+
+```gremlin
+g.V().hasLabel('AggSwitch').has('SwitchId', 'AGG-SYD-NORTH-01')
+  .in('depends_on_aggswitch').hasLabel('Service')
+  .valueMap(true)
+```
+
+### depends_on_basestation: Service → BaseStation
+
+```gremlin
+g.V().hasLabel('BaseStation').has('StationId', 'GNB-SYD-2041')
+  .in('depends_on_basestation').hasLabel('Service')
   .valueMap(true)
 ```
 
@@ -85,7 +101,7 @@ g.V().hasLabel('CoreRouter').has('RouterId', 'CORE-SYD-01')
 ```gremlin
 g.V().hasLabel('TransportLink').has('LinkId', 'LINK-SYD-MEL-FIBRE-01')
   .in('routes_via').hasLabel('MPLSPath').as('mp')
-  .in('depends_on').hasLabel('Service').as('svc')
+  .in('depends_on_mplspath').hasLabel('Service').as('svc')
   .select('mp', 'svc').by(valueMap(true))
 ```
 
@@ -94,7 +110,7 @@ g.V().hasLabel('TransportLink').has('LinkId', 'LINK-SYD-MEL-FIBRE-01')
 ```gremlin
 g.V().hasLabel('TransportLink').has('LinkId', 'LINK-SYD-MEL-FIBRE-01')
   .in('routes_via').hasLabel('MPLSPath').as('mp')
-  .in('depends_on').hasLabel('Service').as('svc')
+  .in('depends_on_mplspath').hasLabel('Service').as('svc')
   .in('governed_by').hasLabel('SLAPolicy').as('sla')
   .select('mp', 'svc', 'sla').by(valueMap(true))
 ```

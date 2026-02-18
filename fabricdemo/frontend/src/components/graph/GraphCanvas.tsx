@@ -75,12 +75,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
         const size = getNodeSize(node.label);
         const color = getNodeColor(node.label);
 
+        // Read theme tokens from CSS custom properties
+        const styles = getComputedStyle(document.documentElement);
+        const textPrimary = styles.getPropertyValue('--color-text-primary').trim();
+        const borderDefault = styles.getPropertyValue('--color-border-default').trim();
+
         // Circle
         ctx.beginPath();
         ctx.arc(node.x!, node.y!, size, 0, 2 * Math.PI);
         ctx.fillStyle = color;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.strokeStyle = borderDefault;
         ctx.lineWidth = 0.5;
         ctx.stroke();
 
@@ -92,7 +97,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
 
         const fontSize = Math.max(10 / globalScale, 3);
         ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = '#E4E4E7';
+        ctx.fillStyle = textPrimary;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         ctx.fillText(label, node.x!, node.y! + size + 2);
@@ -112,8 +117,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
         const midY = (src.y! + tgt.y!) / 2;
         const fontSize = Math.max(8 / globalScale, 2.5);
 
+        const textMuted = getComputedStyle(document.documentElement).getPropertyValue('--color-text-muted').trim();
+
         ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = '#71717A';
+        ctx.fillStyle = textMuted;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(link.label, midX, midY);
@@ -156,11 +163,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
           // Edge rendering
           linkSource="source"
           linkTarget="target"
-          linkColor={() => 'rgba(255,255,255,0.12)'}
+          linkColor={() => {
+            const borderDefault = getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
+            return borderDefault;
+          }}
           linkWidth={1.5}
           linkDirectionalArrowLength={4}
           linkDirectionalArrowRelPos={0.9}
-          linkDirectionalArrowColor={() => 'rgba(255,255,255,0.2)'}
+          linkDirectionalArrowColor={() => {
+            const borderStrong = getComputedStyle(document.documentElement).getPropertyValue('--color-border-strong').trim();
+            return borderStrong;
+          }}
           linkCanvasObjectMode={linkCanvasObjectMode}
           linkCanvasObject={linkCanvasObject}
           // Interaction

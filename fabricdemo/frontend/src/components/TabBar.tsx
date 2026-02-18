@@ -10,7 +10,7 @@ export function TabBar({ activeTab, onTabChange }: TabBarProps) {
   ];
 
   return (
-    <div role="tablist" aria-label="Main navigation" className="flex border-b border-white/10 bg-neutral-bg2 px-4 shrink-0">
+    <div role="tablist" aria-label="Main navigation" className="flex border-b border-border bg-neutral-bg2 px-4 shrink-0">
       {tabs.map(tab => (
         <button
           key={tab.id}

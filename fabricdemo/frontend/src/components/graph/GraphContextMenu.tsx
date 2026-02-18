@@ -18,7 +18,7 @@ export function GraphContextMenu({ menu, onClose, onSetDisplayField }: GraphCont
       <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => {e.preventDefault(); onClose();}} />
 
       <motion.div
-        className="fixed z-50 bg-neutral-bg3 border border-white/15 rounded-lg shadow-xl
+        className="fixed z-50 bg-neutral-bg3 border border-border-strong rounded-lg shadow-xl
                    py-1 min-w-[180px]"
         style={{ left: menu.x, top: menu.y }}
         initial={{ opacity: 0, scale: 0.9 }}
@@ -26,7 +26,7 @@ export function GraphContextMenu({ menu, onClose, onSetDisplayField }: GraphCont
         transition={{ duration: 0.12 }}
       >
         {/* Header */}
-        <div className="px-3 py-1.5 border-b border-white/10">
+        <div className="px-3 py-1.5 border-b border-border">
           <span className="text-xs font-semibold text-text-primary">{menu.node.id}</span>
           <span className="text-[10px] text-text-muted ml-2">{menu.node.label}</span>
         </div>
@@ -39,7 +39,7 @@ export function GraphContextMenu({ menu, onClose, onSetDisplayField }: GraphCont
               <button
                 key={key}
                 className="block w-full text-left text-xs px-2 py-1 rounded
-                           hover:bg-white/10 text-text-secondary hover:text-text-primary"
+                           hover:bg-neutral-bg4 text-text-secondary hover:text-text-primary"
                 onClick={() => { onSetDisplayField(menu.node.label, key); onClose(); }}
               >
                 {key}

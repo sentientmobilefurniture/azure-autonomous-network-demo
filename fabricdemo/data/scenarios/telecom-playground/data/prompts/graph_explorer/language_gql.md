@@ -55,11 +55,27 @@ WHERE tl.LinkId = 'LINK-SYD-MEL-FIBRE-01'
 RETURN mp.PathId, mp.Role, mp.SourceCity, mp.DestCity
 ```
 
-### depends_on: Service → MPLSPath
+### depends_on_mplspath: Service → MPLSPath
 
 ```gql
-MATCH (svc:Service)-[d:depends_on]->(mp:MPLSPath)
+MATCH (svc:Service)-[d:depends_on_mplspath]->(mp:MPLSPath)
 WHERE mp.PathId = 'MPLS-PATH-SYD-MEL-PRIMARY'
+RETURN svc.ServiceId, svc.Customer, svc.ServiceType, svc.SLA
+```
+
+### depends_on_aggswitch: Service → AggSwitch
+
+```gql
+MATCH (svc:Service)-[d:depends_on_aggswitch]->(agg:AggSwitch)
+WHERE agg.SwitchId = 'AGG-SYD-NORTH-01'
+RETURN svc.ServiceId, svc.Customer, svc.ServiceType, svc.SLA
+```
+
+### depends_on_basestation: Service → BaseStation
+
+```gql
+MATCH (svc:Service)-[d:depends_on_basestation]->(bs:BaseStation)
+WHERE bs.StationId = 'GNB-SYD-2041'
 RETURN svc.ServiceId, svc.Customer, svc.ServiceType, svc.SLA
 ```
 
@@ -86,7 +102,7 @@ RETURN bgp.SessionId, bgp.PeerASN, bgp.PeerIP, bgp.State
 ### 2-hop: link failure → affected paths and services
 
 ```gql
-MATCH (tl:TransportLink)<-[r:routes_via]-(mp:MPLSPath)<-[d:depends_on]-(svc:Service)
+MATCH (tl:TransportLink)<-[r:routes_via]-(mp:MPLSPath)<-[d:depends_on_mplspath]-(svc:Service)
 WHERE tl.LinkId = 'LINK-SYD-MEL-FIBRE-01'
 RETURN mp.PathId, mp.Role, svc.ServiceId, svc.Customer, svc.SLA
 ```
@@ -94,7 +110,7 @@ RETURN mp.PathId, mp.Role, svc.ServiceId, svc.Customer, svc.SLA
 ### 3-hop: full blast radius with SLA exposure
 
 ```gql
-MATCH (tl:TransportLink)<-[r:routes_via]-(mp:MPLSPath)<-[d:depends_on]-(svc:Service)<-[g:governed_by]-(sla:SLAPolicy)
+MATCH (tl:TransportLink)<-[r:routes_via]-(mp:MPLSPath)<-[d:depends_on_mplspath]-(svc:Service)<-[g:governed_by]-(sla:SLAPolicy)
 WHERE tl.LinkId = 'LINK-SYD-MEL-FIBRE-01'
 RETURN mp.PathId, svc.ServiceId, svc.Customer, sla.Tier, sla.MaxDowntimeMin, sla.PenaltyClause
 ```
@@ -124,7 +140,7 @@ RETURN r.RouterId, r.City, r.Region, r.Vendor, r.Model
 ### Find all services affected by a router failure (3-hop)
 
 ```gql
-MATCH (cr:CoreRouter)<-[c:connects_to]-(tl:TransportLink)<-[r:routes_via]-(mp:MPLSPath)<-[d:depends_on]-(svc:Service)
+MATCH (cr:CoreRouter)<-[c:connects_to]-(tl:TransportLink)<-[r:routes_via]-(mp:MPLSPath)<-[d:depends_on_mplspath]-(svc:Service)
 WHERE cr.RouterId = 'CORE-SYD-01'
 RETURN DISTINCT svc.ServiceId, svc.Customer, svc.ServiceType, svc.SLA
 ```

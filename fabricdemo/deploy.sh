@@ -16,6 +16,7 @@
 #
 # Options:
 #   --skip-infra         Skip azd up (reuse existing Azure resources)
+#   --skip-app           Skip app container deploy (use with --skip-infra)
 #   --skip-local         Skip starting local API + frontend
 #   --provision-fabric   Run Fabric provisioning (lakehouse, eventhouse, ontology)
 #   --provision-data     Run data provisioning (AI Search indexes)
@@ -55,6 +56,7 @@ banner() {
 # ── Parse arguments ─────────────────────────────────────────────────
 
 SKIP_INFRA=false
+SKIP_APP=false
 SKIP_LOCAL=false
 PROVISION_FABRIC=false
 PROVISION_DATA=false
@@ -67,6 +69,7 @@ SCENARIO_NAME=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-infra)        SKIP_INFRA=true; shift ;;
+    --skip-app)          SKIP_APP=true; shift ;;
     --skip-local)        SKIP_LOCAL=true; shift ;;
     --provision-fabric)  PROVISION_FABRIC=true; shift ;;
     --provision-data)    PROVISION_DATA=true; shift ;;
@@ -568,23 +571,27 @@ if $SKIP_INFRA; then
   step "Step 3: Infrastructure provisioning (SKIPPED)"
   info "Using existing Azure resources."
 
-  # Still deploy the app container (rebuild + push image)
-  info "Deploying app container..."
+  if $SKIP_APP; then
+    info "App container deploy also skipped (--skip-app)."
+  else
+    # Still deploy the app container (rebuild + push image)
+    info "Deploying app container..."
 
-  # Ensure uv.lock files exist for Docker builds (--frozen requires them)
-  for svc_dir in api graph-query-api; do
-    if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
-      info "Generating missing uv.lock for $svc_dir..."
-      (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
-      ok "$svc_dir/uv.lock created"
+    # Ensure uv.lock files exist for Docker builds (--frozen requires them)
+    for svc_dir in api graph-query-api; do
+      if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
+        info "Generating missing uv.lock for $svc_dir..."
+        (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
+        ok "$svc_dir/uv.lock created"
+      fi
+    done
+
+    if ! azd deploy app --no-prompt; then
+      fail "azd deploy app failed."
+      exit 1
     fi
-  done
-
-  if ! azd deploy app --no-prompt; then
-    fail "azd deploy app failed."
-    exit 1
+    ok "App container deployed!"
   fi
-  ok "App container deployed!"
 else
   step "Step 3: Deploying Azure infrastructure (azd up)"
 

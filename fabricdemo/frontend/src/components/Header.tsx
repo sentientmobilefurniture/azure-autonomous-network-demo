@@ -11,7 +11,7 @@ export function Header() {
 
   return (
     <>
-      <header className="h-12 flex-shrink-0 bg-neutral-bg2 border-b border-white/10 flex items-center px-6 justify-between">
+      <header className="h-12 flex-shrink-0 bg-neutral-bg2 border-b border-border flex items-center px-6 justify-between">
         <div className="flex items-center gap-3">
           <span className="text-brand text-lg leading-none">◆</span>
           <h1 className="text-lg font-semibold text-text-primary leading-none">

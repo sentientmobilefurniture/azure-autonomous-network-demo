@@ -34,7 +34,7 @@ export function ActionButton({ label, icon, description, onClick }: ActionButton
         status === 'done' ? 'border-status-success/30 bg-status-success/5' :
         status === 'error' ? 'border-status-error/30 bg-status-error/5' :
         status === 'working' ? 'border-brand/30 bg-brand/5 animate-pulse' :
-        'border-white/10 bg-neutral-bg1 hover:border-white/20'
+        'border-border bg-neutral-bg1 hover:border-border-strong'
       }`}
     >
       <div className="flex items-center gap-2 mb-1">

@@ -22,7 +22,7 @@ const STATUS_ICON: Record<string, string> = {
 
 const STATUS_COLOR: Record<string, string> = {
   connected: 'text-status-success',
-  partial: 'text-amber-400',
+  partial: 'text-status-warning',
   error: 'text-status-error',
   not_configured: 'text-text-muted',
 };
@@ -65,7 +65,7 @@ export function ServiceHealthPopover({
   return (
     <div
       ref={ref}
-      className="absolute top-full right-0 mt-1 w-72 bg-neutral-bg2 border border-white/10 rounded-lg shadow-xl z-50 p-4 space-y-3"
+      className="absolute top-full right-0 mt-1 w-72 bg-neutral-bg2 border border-border rounded-lg shadow-xl z-50 p-4 space-y-3"
     >
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-text-primary">Services</span>

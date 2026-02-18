@@ -21,7 +21,7 @@ function InteractionCard({ interaction, onClick, onDelete, isActive }: Interacti
       className={`group cursor-pointer rounded-lg border p-2.5 transition-colors ${
         isActive
           ? 'border-brand/40 bg-brand/10'
-          : 'border-white/5 bg-neutral-bg3 hover:border-white/15 hover:bg-neutral-bg4'
+          : 'border-border-subtle bg-neutral-bg3 hover:border-border-strong hover:bg-neutral-bg4'
       }`}
     >
       {/* Header: timestamp + delete */}
@@ -29,7 +29,7 @@ function InteractionCard({ interaction, onClick, onDelete, isActive }: Interacti
         <span className="text-[10px] text-text-muted">{timeAgo}</span>
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-400
+          className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-status-error
                      transition-opacity text-xs p-0.5"
           title="Delete"
         >
@@ -78,9 +78,9 @@ export function InteractionSidebar({
   activeInteractionId, collapsed, onToggleCollapse,
 }: InteractionSidebarProps) {
   return (
-    <div className="h-full border-l border-white/10 bg-neutral-bg2 flex flex-col">
+    <div className="h-full border-l border-border bg-neutral-bg2 flex flex-col">
       {/* Header with collapse toggle */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-white/10 shrink-0">
+      <div className="h-10 flex items-center justify-between px-3 border-b border-border shrink-0">
         {!collapsed && (
           <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
             History
@@ -102,7 +102,7 @@ export function InteractionSidebar({
           {loading && interactions.length === 0 && (
             <div className="space-y-2 p-2">
               {[1, 2, 3].map(i => (
-                <div key={i} className="h-20 rounded-lg bg-white/5 animate-pulse" />
+                <div key={i} className="h-20 rounded-lg bg-neutral-bg3 animate-pulse" />
               ))}
             </div>
           )}

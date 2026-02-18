@@ -26,7 +26,7 @@ export function ResourceToolbar({
   onZoomToFit, isPaused, onTogglePause,
 }: ResourceToolbarProps) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 shrink-0">
+    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border shrink-0">
       {/* Title */}
       <span className="text-xs font-semibold text-text-primary whitespace-nowrap">
         ◇ Agent &amp; Resource Flow
@@ -43,7 +43,7 @@ export function ResourceToolbar({
               className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]
                          border transition-colors
                          ${active
-                           ? 'border-white/20 text-text-secondary'
+                           ? 'border-border-strong text-text-secondary'
                            : 'border-transparent text-text-muted opacity-40'}`}
             >
               <span
@@ -65,9 +65,9 @@ export function ResourceToolbar({
         value={searchQuery}
         onChange={(e) => onSearchChange(e.target.value)}
         placeholder="Search resources..."
-        className="bg-white/5 border border-white/10 rounded px-2 py-0.5
+        className="bg-neutral-bg3 border border-border rounded px-2 py-0.5
                    text-[11px] text-text-secondary placeholder:text-text-muted
-                   w-32 focus:w-44 transition-all focus:outline-none focus:border-white/25"
+                   w-32 focus:w-44 transition-all focus:outline-none focus:border-brand"
       />
 
       {/* Counts */}

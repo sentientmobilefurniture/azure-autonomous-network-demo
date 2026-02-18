@@ -39,12 +39,12 @@ export function ServiceHealthSummary({ onClick }: { onClick: () => void }) {
   if (!health) return null;
 
   const { connected, total, error } = health.summary;
-  const color = error > 0 ? 'text-status-error' : connected === total ? 'text-status-success' : 'text-amber-400';
+  const color = error > 0 ? 'text-status-error' : connected === total ? 'text-status-success' : 'text-status-warning';
 
   return (
     <button
       onClick={onClick}
-      className={`text-[10px] px-2 py-0.5 rounded border border-white/10 hover:bg-white/5 transition-colors ${color}`}
+      className={`text-[10px] px-2 py-0.5 rounded border border-border hover:bg-neutral-bg3 transition-colors ${color}`}
       title="Service health"
     >
       {connected}/{total} Services

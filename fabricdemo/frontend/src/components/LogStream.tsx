@@ -12,10 +12,10 @@ let _logIdCounter = 0;
 
 const LEVEL_COLORS: Record<string, string> = {
   DEBUG: 'text-gray-500',
-  INFO: 'text-green-400',
-  WARNING: 'text-yellow-400',
-  ERROR: 'text-red-400',
-  CRITICAL: 'text-red-500 font-bold',
+  INFO: 'text-status-success',
+  WARNING: 'text-status-warning',
+  ERROR: 'text-status-error',
+  CRITICAL: 'text-status-error font-bold',
 };
 
 const MAX_LINES = 200;
@@ -91,14 +91,14 @@ export function LogStream({ url = '/api/logs', title = 'Logs' }: LogStreamProps)
   return (
     <div className="glass-card h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2">
           <span className="font-mono text-xs text-text-secondary">
             &gt;_ {title}
           </span>
           <span
             className={`inline-block w-1.5 h-1.5 rounded-full ${
-              connected ? 'bg-green-400' : 'bg-red-400'
+              connected ? 'bg-status-success' : 'bg-status-error'
             }`}
             title={connected ? 'Connected' : 'Disconnected'}
           />

@@ -40,23 +40,29 @@ interface ResourceCanvasProps {
 // ── Shape helpers ───────────────────────────────────────────────────────────
 
 function drawCircle(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, doubleBorder = false) {
+  const styles = getComputedStyle(document.documentElement);
+  const borderDefault = styles.getPropertyValue('--color-border-default').trim();
+  const borderStrong = styles.getPropertyValue('--color-border-strong').trim();
+  const textSecondary = styles.getPropertyValue('--color-text-secondary').trim();
+
   ctx.beginPath();
   ctx.arc(x, y, r, 0, 2 * Math.PI);
   ctx.fillStyle = fill;
   ctx.fill();
-  ctx.strokeStyle = doubleBorder ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)';
+  ctx.strokeStyle = doubleBorder ? textSecondary : borderDefault;
   ctx.lineWidth = doubleBorder ? 1.5 : 0.5;
   ctx.stroke();
   if (doubleBorder) {
     ctx.beginPath();
     ctx.arc(x, y, r + 2.5, 0, 2 * Math.PI);
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.strokeStyle = borderStrong;
     ctx.lineWidth = 0.7;
     ctx.stroke();
   }
 }
 
 function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
+  const borderDefault = getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
   ctx.beginPath();
   ctx.moveTo(x, y - r);
   ctx.lineTo(x + r, y);
@@ -65,12 +71,13 @@ function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: num
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.strokeStyle = borderDefault;
   ctx.lineWidth = 0.5;
   ctx.stroke();
 }
 
 function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
+  const borderDefault = getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
   const w = r * 2.2;
   const h = r * 1.4;
   const radius = 3;
@@ -87,12 +94,13 @@ function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, r: n
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.strokeStyle = borderDefault;
   ctx.lineWidth = 0.5;
   ctx.stroke();
 }
 
 function drawHexagon(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
+  const borderStrong = getComputedStyle(document.documentElement).getPropertyValue('--color-border-strong').trim();
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
     const angle = (Math.PI / 3) * i - Math.PI / 6;
@@ -104,7 +112,7 @@ function drawHexagon(ctx: CanvasRenderingContext2D, x: number, y: number, r: num
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.strokeStyle = borderStrong;
   ctx.lineWidth = 0.7;
   ctx.stroke();
 }
@@ -169,7 +177,7 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
     const nodeCanvasObject = useCallback(
       (node: GNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const size = RESOURCE_NODE_SIZES[node.type] ?? 8;
-        const color = RESOURCE_NODE_COLORS[node.type] ?? '#888';
+        const color = RESOURCE_NODE_COLORS[node.type] ?? getComputedStyle(document.documentElement).getPropertyValue('--color-text-muted').trim();
         const dimmed = highlightIds && highlightIds.size > 0 && !highlightIds.has(node.id);
         const alpha = dimmed ? 0.2 : 1;
 
@@ -204,9 +212,13 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
         }
 
         // Label
+        const styles = getComputedStyle(document.documentElement);
+        const textPrimary = styles.getPropertyValue('--color-text-primary').trim();
+        const textSecondary = styles.getPropertyValue('--color-text-secondary').trim();
+
         const fontSize = Math.max(10 / globalScale, 3);
         ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = dimmed ? 'rgba(228,228,231,0.2)' : '#E4E4E7';
+        ctx.fillStyle = dimmed ? textSecondary : textPrimary;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         ctx.fillText(node.label, node.x!, node.y! + size + 3);
@@ -228,8 +240,10 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
         const midY = (src.y! + tgt.y!) / 2;
         const fontSize = Math.max(8 / globalScale, 2.5);
 
+        const textMuted = getComputedStyle(document.documentElement).getPropertyValue('--color-text-muted').trim();
+
         ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = '#71717A';
+        ctx.fillStyle = textMuted;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(link.label, midX, midY);
@@ -239,7 +253,11 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
 
     // Link colour + dash
     const linkColor = useCallback(
-      (link: GLink) => RESOURCE_EDGE_COLORS[link.type] ?? 'rgba(255,255,255,0.12)',
+      (link: GLink) => {
+        const edgeColor = RESOURCE_EDGE_COLORS[link.type];
+        if (edgeColor) return edgeColor;
+        return getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
+      },
       [],
     );
     const linkDash = useCallback(
