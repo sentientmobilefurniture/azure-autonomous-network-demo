@@ -735,6 +735,18 @@ class FabricClient:
                 return item
         return None
 
+    def delete_ontology(self, workspace_id: str, ontology_id: str, name: str):
+        """Delete an Ontology by ID."""
+        r = requests.delete(
+            f"{FABRIC_API}/workspaces/{workspace_id}/ontologies/{ontology_id}",
+            headers=self.headers,
+        )
+        if r.status_code in (200, 204):
+            print(f"  ✓ Deleted existing Ontology: {name} ({ontology_id})")
+        else:
+            print(f"  ⚠ Delete Ontology failed: {r.status_code} — {r.text}")
+            print(f"    Continuing anyway...")
+
     def create_ontology(self, workspace_id: str, name: str, parts: list[dict]) -> dict:
         body = {
             "displayName": name,
@@ -868,15 +880,13 @@ def main():
 
     existing = client.find_ontology(WORKSPACE_ID, ONTOLOGY_NAME)
     if existing:
-        print(f"  Ontology already exists: {existing['id']}")
-        print(f"  Updating definition...")
-        client.update_ontology_definition(WORKSPACE_ID, existing["id"], parts)
-        ontology_id = existing["id"]
-        print(f"  ✓ Ontology definition updated")
-    else:
-        result = client.create_ontology(WORKSPACE_ID, ONTOLOGY_NAME, parts)
-        ontology_id = result.get("id", "unknown")
-        print(f"  ✓ Ontology created: {ontology_id}")
+        print(f"  ⟳ Ontology already exists: {existing['id']} — deleting and recreating...")
+        client.delete_ontology(WORKSPACE_ID, existing["id"], ONTOLOGY_NAME)
+        time.sleep(5)  # Allow deletion to propagate
+
+    result = client.create_ontology(WORKSPACE_ID, ONTOLOGY_NAME, parts)
+    ontology_id = result.get("id", "unknown")
+    print(f"  ✓ Ontology created: {ontology_id}")
 
     # ------------------------------------------------------------------
     # 6. Verify graph model was auto-created

@@ -138,6 +138,18 @@ class FabricClient:
                 return item
         return None
 
+    def delete_eventhouse(self, workspace_id: str, eventhouse_id: str, name: str):
+        """Delete an Eventhouse by ID."""
+        r = requests.delete(
+            f"{FABRIC_API}/workspaces/{workspace_id}/eventhouses/{eventhouse_id}",
+            headers=self.headers,
+        )
+        if r.status_code in (200, 204):
+            print(f"  ✓ Deleted existing Eventhouse: {name} ({eventhouse_id})")
+        else:
+            print(f"  ⚠ Delete Eventhouse failed: {r.status_code} — {r.text}")
+            print(f"    Continuing anyway...")
+
     def create_eventhouse(self, workspace_id: str, name: str) -> dict:
         body = {
             "displayName": name,
@@ -344,10 +356,12 @@ def main():
 
     eh = client.find_eventhouse(WORKSPACE_ID, EVENTHOUSE_NAME)
     if eh:
-        print(f"  ✓ Eventhouse already exists: {eh['id']}")
-    else:
-        eh = client.create_eventhouse(WORKSPACE_ID, EVENTHOUSE_NAME)
-        print(f"  ✓ Eventhouse created: {eh['id']}")
+        print(f"  ⟳ Eventhouse already exists: {eh['id']} — deleting and recreating...")
+        client.delete_eventhouse(WORKSPACE_ID, eh["id"], EVENTHOUSE_NAME)
+        time.sleep(10)  # Allow deletion to propagate (Eventhouse takes longer)
+
+    eh = client.create_eventhouse(WORKSPACE_ID, EVENTHOUSE_NAME)
+    print(f"  ✓ Eventhouse created: {eh['id']}")
 
     eventhouse_id = eh["id"]
 

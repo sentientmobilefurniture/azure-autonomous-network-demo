@@ -163,6 +163,18 @@ class FabricClient:
                 return item
         return None
 
+    def delete_lakehouse(self, workspace_id: str, lakehouse_id: str, name: str):
+        """Delete a Lakehouse by ID."""
+        r = requests.delete(
+            f"{FABRIC_API}/workspaces/{workspace_id}/lakehouses/{lakehouse_id}",
+            headers=self.headers,
+        )
+        if r.status_code in (200, 204):
+            print(f"  ✓ Deleted existing Lakehouse: {name} ({lakehouse_id})")
+        else:
+            print(f"  ⚠ Delete Lakehouse failed: {r.status_code} — {r.text}")
+            print(f"    Continuing anyway...")
+
     def create_lakehouse(self, workspace_id: str, name: str) -> dict:
         body = {"displayName": name, "description": f"Lakehouse for {WORKSPACE_NAME}"}
         r = requests.post(
@@ -244,10 +256,12 @@ def main():
 
     lh = client.find_lakehouse(workspace_id, LAKEHOUSE_NAME)
     if lh:
-        print(f"  ✓ Lakehouse already exists: {lh['id']}")
-    else:
-        lh = client.create_lakehouse(workspace_id, LAKEHOUSE_NAME)
-        print(f"  ✓ Lakehouse created: {lh['id']}")
+        print(f"  ⟳ Lakehouse already exists: {lh['id']} — deleting and recreating...")
+        client.delete_lakehouse(workspace_id, lh["id"], LAKEHOUSE_NAME)
+        time.sleep(5)  # Allow deletion to propagate
+
+    lh = client.create_lakehouse(workspace_id, LAKEHOUSE_NAME)
+    print(f"  ✓ Lakehouse created: {lh['id']}")
 
     lakehouse_id = lh["id"]
 
