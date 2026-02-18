@@ -43,6 +43,7 @@ custom_skills
 
 # Env files
 *.env
+!azure_config.env
 envs
 
 # Root-level project files (not needed in container)

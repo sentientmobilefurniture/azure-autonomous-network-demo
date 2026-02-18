@@ -96,6 +96,36 @@ cd "$PROJECT_ROOT"
 
 CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
 
+# ── Helper: prompt user ────────────────────────────────────────────
+
+confirm() {
+  local msg="$1"
+  if $AUTO_YES; then return 0; fi
+  echo -en "${YELLOW}?${NC}  ${msg} [y/N] "
+  read -r answer
+  [[ "$answer" =~ ^[Yy] ]]
+}
+
+choose() {
+  # Usage: choose "prompt" option1 option2 option3
+  # Returns the chosen option text
+  local prompt="$1"; shift
+  local options=("$@")
+  echo -e "\n${YELLOW}?${NC}  ${prompt}"
+  for i in "${!options[@]}"; do
+    echo "   $((i+1))) ${options[$i]}"
+  done
+  while true; do
+    echo -en "   Choice [1-${#options[@]}]: "
+    read -r choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
+      CHOSEN="${options[$((choice-1))]}"
+      return 0
+    fi
+    echo "   Invalid choice."
+  done
+}
+
 # ── Scenario discovery ──────────────────────────────────────────────
 
 if [[ -z "$SCENARIO_NAME" ]]; then
@@ -144,36 +174,6 @@ print(c.get('data_sources',{}).get('search_indexes',{}).get('tickets',{}).get('i
 ")
 export RUNBOOKS_INDEX_NAME TICKETS_INDEX_NAME
 info "Index names: runbooks=$RUNBOOKS_INDEX_NAME, tickets=$TICKETS_INDEX_NAME"
-
-# ── Helper: prompt user ────────────────────────────────────────────
-
-confirm() {
-  local msg="$1"
-  if $AUTO_YES; then return 0; fi
-  echo -en "${YELLOW}?${NC}  ${msg} [y/N] "
-  read -r answer
-  [[ "$answer" =~ ^[Yy] ]]
-}
-
-choose() {
-  # Usage: choose "prompt" option1 option2 option3
-  # Returns the chosen option text
-  local prompt="$1"; shift
-  local options=("$@")
-  echo -e "\n${YELLOW}?${NC}  ${prompt}"
-  for i in "${!options[@]}"; do
-    echo "   $((i+1))) ${options[$i]}"
-  done
-  while true; do
-    echo -en "   Choice [1-${#options[@]}]: "
-    read -r choice
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
-      CHOSEN="${options[$((choice-1))]}"
-      return 0
-    fi
-    echo "   Invalid choice."
-  done
-}
 
 # ── Helper: auto-discover resources from existing Azure RG ─────────
 
@@ -497,6 +497,26 @@ fi
 
 step "Step 2: Configuring for Fabric GQL backend"
 
+# Nuke stale config — every deploy starts clean.
+# User-configurable values (model names, SKU, admin email) are extracted
+# before deletion and re-injected.  AUTO values (resource IDs,
+# endpoints, workspace IDs) are always re-discovered from Azure.
+if [[ -f "$CONFIG_FILE" ]]; then
+  info "Extracting user-set values from existing azure_config.env..."
+  while IFS='=' read -r key val; do
+    case "$key" in
+      MODEL_DEPLOYMENT_NAME|EMBEDDING_MODEL|EMBEDDING_DIMENSIONS|GPT_CAPACITY_1K_TPM|\
+      CORS_ORIGINS|FABRIC_CAPACITY_SKU|AZURE_FABRIC_ADMIN)
+        val="${val%\"}"; val="${val#\"}"
+        val="${val%\'}"; val="${val#\'}"
+        export "$key=$val"
+        ;;
+    esac
+  done < <(grep -E '^[A-Z_]+=' "$CONFIG_FILE" 2>/dev/null || true)
+  info "Deleting stale azure_config.env (will be regenerated from Azure state)"
+  rm -f "$CONFIG_FILE"
+fi
+
 # Determine location
 if [[ -z "$AZURE_LOC" ]]; then
   # Try to read from existing config or azd env
@@ -512,29 +532,10 @@ if [[ -z "$AZURE_LOC" ]]; then
 fi
 info "Location: $AZURE_LOC"
 
-# Preserve only USER-configurable values from existing config.
-# AUTO values (resource names, endpoints, URIs) are always re-discovered.
-if [[ -f "$CONFIG_FILE" ]]; then
-  info "Existing azure_config.env found — preserving user-set values only."
-  # Selectively read USER vars; ignore AUTO vars so they get re-discovered.
-  while IFS='=' read -r key val; do
-    case "$key" in
-      MODEL_DEPLOYMENT_NAME|EMBEDDING_MODEL|EMBEDDING_DIMENSIONS|GPT_CAPACITY_1K_TPM|\
-      CORS_ORIGINS|GRAPH_BACKEND|FABRIC_CAPACITY_SKU|FABRIC_WORKSPACE_ID|\
-      FABRIC_EVENTHOUSE_ID|FABRIC_CAPACITY_ID|AZURE_FABRIC_ADMIN)
-        # Strip quotes
-        val="${val%\"}"; val="${val#\"}"
-        val="${val%\'}"; val="${val#\'}"
-        export "$key=$val"
-        ;;
-    esac
-  done < <(grep -E '^[A-Z_]+=' "$CONFIG_FILE" 2>/dev/null || true)
-fi
-
 # Force Fabric GQL backend
 GRAPH_BACKEND=fabric-gql
 ok "Location: $AZURE_LOC"
-ok "User-configurable values preserved (AUTO values will be re-discovered)"
+ok "Config will be regenerated from Azure state (no stale values)"
 
 # ── Step 2b: Generate static topology JSON ──────────────────────────
 # Builds topology.json from CSVs + graph_schema.yaml so the frontend
@@ -697,6 +698,9 @@ cat > "$CONFIG_FILE" <<CONFIGEOF
 # GRAPH_BACKEND=fabric-gql — graph queries use GQL via Microsoft Fabric
 # ============================================================================
 
+# --- Scenario ---
+DEFAULT_SCENARIO=${DEFAULT_SCENARIO:-telecom-playground}
+
 # --- Core Azure settings (AUTO: from deployment/discovery) ---
 AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
 AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-}
@@ -716,8 +720,8 @@ GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
 
 # --- Azure AI Search (AUTO: from deployment/discovery) ---
 AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
-RUNBOOKS_INDEX_NAME=\${RUNBOOKS_INDEX_NAME:-runbooks-index}
-TICKETS_INDEX_NAME=\${TICKETS_INDEX_NAME:-tickets-index}
+RUNBOOKS_INDEX_NAME=${RUNBOOKS_INDEX_NAME:-runbooks-index}
+TICKETS_INDEX_NAME=${TICKETS_INDEX_NAME:-tickets-index}
 
 # --- Azure Storage (AUTO: from deployment/discovery) ---
 STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
@@ -778,96 +782,111 @@ else
   info "App URI: $APP_URI"
 fi
 
-# ── Step 4: Grant Container App access to Fabric workspace ─────────
-
-step "Step 4: Fabric workspace RBAC"
-
-FABRIC_WS_ID="${FABRIC_WORKSPACE_ID:-}"
-CA_PRINCIPAL="${APP_PRINCIPAL_ID:-}"
-
-if [[ -z "$FABRIC_WS_ID" ]]; then
-  warn "FABRIC_WORKSPACE_ID not set in azure_config.env — skipping."
-  info "Set FABRIC_WORKSPACE_ID and re-run, or add the connection via the UI."
-elif [[ -z "$CA_PRINCIPAL" ]]; then
-  warn "APP_PRINCIPAL_ID not set — skipping Fabric RBAC."
-  info "Run 'azd up' first to provision the Container App."
-else
-  info "Granting Container App ($CA_PRINCIPAL) Contributor access to Fabric workspace..."
-  FABRIC_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv 2>/dev/null || true)
-  if [[ -z "$FABRIC_TOKEN" ]]; then
-    warn "Could not get Fabric API token — skipping. Grant access manually in the Fabric portal."
-  else
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-      -X POST "https://api.fabric.microsoft.com/v1/workspaces/${FABRIC_WS_ID}/roleAssignments" \
-      -H "Authorization: Bearer $FABRIC_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{\"principal\":{\"id\":\"${CA_PRINCIPAL}\",\"type\":\"ServicePrincipal\"},\"role\":\"Contributor\"}" 2>/dev/null || echo "000")
-    if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
-      ok "Container App granted Contributor on Fabric workspace"
-    elif [[ "$HTTP_CODE" == "409" ]]; then
-      ok "Container App already has access to Fabric workspace"
-    else
-      warn "Fabric RBAC assignment returned HTTP $HTTP_CODE"
-      info "You may need to grant access manually:"
-      echo "   Fabric portal → workspace → Manage access → Add '$CA_PRINCIPAL' as Contributor"
-    fi
-  fi
-fi
-
-# ── Step 5: Fabric Provisioning (optional) ──────────────────────────
+# ── Step 4: Fabric Provisioning (optional) ──────────────────────────
 
 if $PROVISION_FABRIC; then
-  step "Step 5: Provisioning Fabric resources"
+  step "Step 4: Provisioning Fabric resources"
 
-  info "5a: Provisioning Lakehouse..."
+  # 4a: Find-or-create workspace, wait for it, write FABRIC_WORKSPACE_ID.
+  #     This MUST run first — every downstream step needs the workspace.
+  info "4a: Ensuring Fabric workspace exists..."
+  if ! (source "$CONFIG_FILE" && uv run python scripts/fabric/provision_workspace.py); then
+    fail "Workspace provisioning failed — cannot continue with Fabric."
+    exit 1
+  fi
+
+  # Re-source to pick up FABRIC_WORKSPACE_ID written by provision_workspace.py
+  set -a; source "$CONFIG_FILE"; set +a
+  FABRIC_WS_ID="${FABRIC_WORKSPACE_ID:-}"
+
+  if [[ -z "$FABRIC_WS_ID" ]]; then
+    fail "FABRIC_WORKSPACE_ID still empty after workspace provisioning — aborting."
+    exit 1
+  fi
+  ok "Workspace ready: $FABRIC_WS_ID"
+
+  # 4b: Grant Container App Contributor access to Fabric workspace
+  info "4b: Fabric workspace RBAC..."
+  CA_PRINCIPAL="${APP_PRINCIPAL_ID:-}"
+
+  if [[ -z "$CA_PRINCIPAL" ]]; then
+    warn "APP_PRINCIPAL_ID not set — skipping Fabric RBAC."
+    info "Run 'azd up' first to provision the Container App."
+  else
+    info "Granting Container App ($CA_PRINCIPAL) Contributor access to Fabric workspace..."
+    FABRIC_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv 2>/dev/null || true)
+    if [[ -z "$FABRIC_TOKEN" ]]; then
+      warn "Could not get Fabric API token — skipping. Grant access manually in the Fabric portal."
+    else
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "https://api.fabric.microsoft.com/v1/workspaces/${FABRIC_WS_ID}/roleAssignments" \
+        -H "Authorization: Bearer $FABRIC_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"principal\":{\"id\":\"${CA_PRINCIPAL}\",\"type\":\"ServicePrincipal\"},\"role\":\"Contributor\"}" 2>/dev/null || echo "000")
+      if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
+        ok "Container App granted Contributor on Fabric workspace"
+      elif [[ "$HTTP_CODE" == "409" ]]; then
+        ok "Container App already has access to Fabric workspace"
+      else
+        warn "Fabric RBAC assignment returned HTTP $HTTP_CODE"
+        info "You may need to grant access manually:"
+        echo "   Fabric portal → workspace → Manage access → Add '$CA_PRINCIPAL' as Contributor"
+      fi
+    fi
+  fi
+
+  # 4c–4e: Provision Fabric items (workspace guaranteed to exist with ID set)
+  info "4c: Provisioning Lakehouse..."
   (source "$CONFIG_FILE" && uv run python scripts/fabric/provision_lakehouse.py) || warn "Lakehouse provisioning failed"
 
-  info "5b: Provisioning Eventhouse..."
+  info "4d: Provisioning Eventhouse..."
   (source "$CONFIG_FILE" && uv run python scripts/fabric/provision_eventhouse.py) || warn "Eventhouse provisioning failed"
 
-  info "5c: Provisioning Ontology + Graph Model..."
+  info "4e: Provisioning Ontology + Graph Model..."
   (source "$CONFIG_FILE" && uv run python scripts/fabric/provision_ontology.py) || warn "Ontology provisioning failed"
 
-  info "5d: Populating Fabric config..."
-  (source "$CONFIG_FILE" && uv run python scripts/fabric/populate_fabric_config.py) || warn "Config population failed"
+  # 4f: Re-populate config to capture any NEW resource IDs created above
+  info "4f: Re-populating Fabric config (capture new resource IDs)..."
+  (source "$CONFIG_FILE" && uv run python scripts/fabric/populate_fabric_config.py) || warn "Config re-population failed"
+  set -a; source "$CONFIG_FILE"; set +a
 
   # NOTE: Graph Model ID, Eventhouse Query URI, and KQL DB name are
   # discovered at runtime by graph-query-api/fabric_discovery.py.
   # However, FABRIC_WORKSPACE_ID MUST be synced to the Container App
-  # (see Step 7b below) — discovery needs it as the bootstrap value.
+  # (see Step 6b) — discovery needs it as the bootstrap value.
 
   ok "Fabric provisioning complete"
 else
-  step "Step 5: Fabric Provisioning (SKIPPED — use --provision-fabric)"
+  step "Step 4: Fabric Provisioning (SKIPPED — use --provision-fabric)"
 fi
 
-# ── Step 6: Data Provisioning (optional) ────────────────────────────
+# ── Step 5: Data Provisioning (optional) ────────────────────────────
 
 if $PROVISION_DATA; then
-  step "Step 6: Provisioning data"
+  step "Step 5: Provisioning data"
 
-  info "6a: Creating AI Search indexes..."
+  info "5a: Creating AI Search indexes..."
   (source "$CONFIG_FILE" && uv run python scripts/provision_search_index.py --upload-files) || warn "Search index provisioning failed"
 
   ok "Data provisioning complete"
 else
-  step "Step 6: Data Provisioning (SKIPPED — use --provision-data)"
+  step "Step 5: Data Provisioning (SKIPPED — use --provision-data)"
 fi
 
-# ── Step 7: Agent Provisioning (optional) ───────────────────────────
+# ── Step 6: Agent Provisioning (optional) ───────────────────────────
 
 if $PROVISION_AGENTS; then
-  step "Step 7: Provisioning AI Foundry agents"
+  step "Step 6: Provisioning AI Foundry agents"
 
   (source "$CONFIG_FILE" && uv run python scripts/provision_agents.py) || warn "Agent provisioning failed"
 
   ok "Agent provisioning complete — container app will discover agents at runtime"
 else
-  step "Step 7: Agent Provisioning (SKIPPED — use --provision-agents)"
+  step "Step 6: Agent Provisioning (SKIPPED — use --provision-agents)"
 fi
 
-# ── Step 7b: Sync azure_config.env → azd env → Container App ────────
-# After Fabric provisioning (Step 5) populates azure_config.env with
+# ── Step 6b: Sync azure_config.env → azd env → Container App ────────
+# After Fabric provisioning (Step 4) populates azure_config.env with
 # discovered IDs (workspace, eventhouse, graph model, etc.), those values
 # must be pushed into azd env so that `azd provision` can inject them
 # into the Container App's environment variables via Bicep.
@@ -875,9 +894,9 @@ fi
 # Without this step, the Container App keeps stale values from the
 # initial `azd up` run when Fabric resources didn't exist yet.
 
-step "Step 7b: Syncing azure_config.env → Container App env vars"
+step "Step 6b: Syncing azure_config.env → Container App env vars"
 
-# Reload the latest azure_config.env (may have been updated by Step 5)
+# Reload the latest azure_config.env (may have been updated by Step 4)
 if [[ -f "$CONFIG_FILE" ]]; then
   set -a; source "$CONFIG_FILE"; set +a
 fi
@@ -912,9 +931,9 @@ else
   ok "azd env already in sync with azure_config.env"
 fi
 
-# ── Step 8: Verify unified app health ───────────────────────────────
+# ── Step 7: Verify unified app health ───────────────────────────────
 
-step "Step 8: Verifying unified app deployment"
+step "Step 7: Verifying unified app deployment"
 
 GQ_URI="${APP_URI:-}"
 if [[ -z "$GQ_URI" ]]; then

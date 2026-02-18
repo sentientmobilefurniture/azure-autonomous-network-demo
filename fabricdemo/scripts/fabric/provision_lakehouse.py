@@ -31,7 +31,7 @@ from azure.storage.filedatalake import DataLakeServiceClient
 
 from _config import (
     FABRIC_API, PROJECT_ROOT, DATA_DIR,
-    WORKSPACE_NAME, CAPACITY_ID, LAKEHOUSE_NAME,
+    WORKSPACE_ID, WORKSPACE_NAME, CAPACITY_ID, LAKEHOUSE_NAME,
 )
 
 # ---------------------------------------------------------------------------
@@ -127,45 +127,6 @@ class FabricClient:
         print(f"  ✗ {label} timed out after {timeout}s")
         sys.exit(1)
 
-    # --- Workspace ---
-
-    def find_workspace(self, name: str) -> dict | None:
-        """Find workspace by display name."""
-        r = requests.get(
-            f"{FABRIC_API}/workspaces",
-            headers=self.headers,
-            params={"$filter": f"displayName eq '{name}'"},  # OData filter may not work; fallback to list
-        )
-        if r.status_code != 200:
-            # Fallback: list all and filter
-            r = requests.get(f"{FABRIC_API}/workspaces", headers=self.headers)
-            r.raise_for_status()
-        for ws in r.json().get("value", []):
-            if ws["displayName"] == name:
-                return ws
-        return None
-
-    def create_workspace(self, name: str, capacity_id: str = "") -> dict:
-        """Create a Fabric workspace, optionally attach to capacity."""
-        body = {"displayName": name}
-        if capacity_id:
-            body["capacityId"] = capacity_id
-        r = requests.post(f"{FABRIC_API}/workspaces", headers=self.headers, json=body)
-        if r.status_code == 201:
-            return r.json()
-        r.raise_for_status()
-        return r.json()
-
-    def assign_capacity(self, workspace_id: str, capacity_id: str):
-        """Assign capacity to an existing workspace."""
-        r = requests.post(
-            f"{FABRIC_API}/workspaces/{workspace_id}/assignToCapacity",
-            headers=self.headers,
-            json={"capacityId": capacity_id},
-        )
-        if r.status_code not in (200, 202):
-            print(f"  ⚠ Assign capacity: {r.status_code} — {r.text}")
-
     # --- Lakehouse ---
 
     def find_lakehouse(self, workspace_id: str, name: str) -> dict | None:
@@ -188,8 +149,15 @@ class FabricClient:
             print(f"  ⚠ Delete Lakehouse failed: {r.status_code} — {r.text}")
             print(f"    Continuing anyway...")
 
-    def create_lakehouse(self, workspace_id: str, name: str, max_retries: int = 10, retry_delay: int = 30) -> dict:
-        """Create a Lakehouse, retrying on ItemDisplayNameNotAvailableYet."""
+    # Error codes that mean "name still held by a recently-deleted item"
+    _NAME_CONFLICT_CODES = {
+        "ItemDisplayNameNotAvailableYet",
+        "DatamartCreationFailedDueToBadRequest",  # Fabric sometimes uses this
+        "ItemDisplayNameAlreadyInUse",
+    }
+
+    def create_lakehouse(self, workspace_id: str, name: str, max_retries: int = 12, retry_delay: int = 30) -> dict:
+        """Create a Lakehouse, retrying on name-conflict errors after delete."""
         body = {"displayName": name, "description": f"Lakehouse for {WORKSPACE_NAME}"}
         url = f"{FABRIC_API}/workspaces/{workspace_id}/lakehouses"
 
@@ -200,11 +168,19 @@ class FabricClient:
                 try:
                     err = r.json()
                     error_code = err.get("errorCode", "")
+                    error_msg = err.get("message", "").lower()
                 except Exception:
                     error_code = ""
+                    error_msg = ""
 
-                if error_code == "ItemDisplayNameNotAvailableYet":
-                    print(f"  ⏳ Name not available yet (attempt {attempt}/{max_retries}), retrying in {retry_delay}s...")
+                # Retry on any name-conflict variant
+                name_held = (
+                    error_code in self._NAME_CONFLICT_CODES
+                    or "name is already in use" in error_msg
+                    or "name not available" in error_msg
+                )
+                if name_held:
+                    print(f"  ⏳ Name not released yet (attempt {attempt}/{max_retries}), retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
                     continue
 
@@ -261,24 +237,16 @@ def main():
     client = FabricClient()
 
     # ------------------------------------------------------------------
-    # 1. Workspace
+    # 1. Validate workspace exists (created by provision_workspace.py)
     # ------------------------------------------------------------------
+    if not WORKSPACE_ID:
+        print("✗ FABRIC_WORKSPACE_ID not set. Run provision_workspace.py first.")
+        sys.exit(1)
+
+    workspace_id = WORKSPACE_ID
     print("=" * 60)
-    print(f"Provisioning Fabric workspace: {WORKSPACE_NAME}")
+    print(f"Provisioning Lakehouse in workspace: {WORKSPACE_NAME} ({workspace_id})")
     print("=" * 60)
-
-    ws = client.find_workspace(WORKSPACE_NAME)
-    if ws:
-        print(f"  ✓ Workspace already exists: {ws['id']}")
-    else:
-        ws = client.create_workspace(WORKSPACE_NAME, CAPACITY_ID)
-        print(f"  ✓ Workspace created: {ws['id']}")
-
-    workspace_id = ws["id"]
-
-    if CAPACITY_ID and not ws.get("capacityId"):
-        client.assign_capacity(workspace_id, CAPACITY_ID)
-        print(f"  ✓ Capacity assigned: {CAPACITY_ID}")
 
     # ------------------------------------------------------------------
     # 2. Lakehouse
@@ -289,7 +257,7 @@ def main():
     if lh:
         print(f"  ⟳ Lakehouse already exists: {lh['id']} — deleting and recreating...")
         client.delete_lakehouse(workspace_id, lh["id"], LAKEHOUSE_NAME)
-        time.sleep(5)  # Allow deletion to propagate
+        time.sleep(15)  # Fabric needs time to release the name
 
     lh = client.create_lakehouse(workspace_id, LAKEHOUSE_NAME)
     print(f"  ✓ Lakehouse created: {lh['id']}")

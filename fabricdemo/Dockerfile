@@ -51,6 +51,9 @@ COPY api/app/ ./app/
 RUN mkdir -p /app/scripts
 COPY scripts/agent_provisioner.py /app/scripts/
 
+# ── Config file (Fabric IDs, endpoints, etc.) ─────────────────────
+COPY azure_config.env /app/azure_config.env
+
 # ── Scenario data (YAML manifests for runtime config) ─────────────
 COPY data/scenarios/ /app/data/scenarios/
 

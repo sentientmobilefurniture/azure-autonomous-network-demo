@@ -20,9 +20,19 @@ Run locally:
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load azure_config.env before any other module reads os.getenv()
+# override=True so values from the file win over empty env vars
+# injected by Container App Bicep (e.g. FABRIC_WORKSPACE_ID="")
+_config = Path(__file__).resolve().parent.parent / "azure_config.env"
+if _config.exists():
+    load_dotenv(_config, override=True)
+
 import asyncio
 import json
-import os
 import logging
 import time as _time
 from contextlib import asynccontextmanager
