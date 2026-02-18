@@ -1343,7 +1343,7 @@ Run these checks before proceeding to Phase 2:
 | 6 | core_schema.md has new types | `grep -c '### PhysicalConduit\|### AmplifierSite\|### Advisory' data/scenarios/telco-noc/data/prompts/graph_explorer/core_schema.md` | **3** |
 | 7 | core_schema.md has new rels | `grep -c 'routed_through\|amplifies\|affects_version' data/scenarios/telco-noc/data/prompts/graph_explorer/core_schema.md` | **3+** |
 | 8 | scenario.yaml has 11 node styles | `grep -c 'color:' data/scenarios/telco-noc/scenario.yaml` | **11** |
-| 9 | config.ts nodeColors count | `grep -A15 'nodeColors' frontend/src/config.ts \| grep -c ':'` | **11** |
+| 9 | config.ts nodeColors count | `grep -A20 'nodeColors:' frontend/src/config.ts \| grep -c '"#'` | **11** |
 | 10 | exampleQuestions count | `grep -c '^\s*-' data/scenarios/telco-noc/scenario.yaml` under `example_questions:` | **9** |
 
 ---
@@ -1372,9 +1372,16 @@ Phase 2 covers the changes needed to make the new data actually work in the depl
 
 ```python
 LAKEHOUSE_TABLES = [
-    "DimCoreRouter", "DimTransportLink", "DimAggSwitch", "DimBaseStation",
-    "DimBGPSession", "DimMPLSPath", "DimService", "DimSLAPolicy",
-    "FactMPLSPathHops", "FactServiceDependency",
+    "DimCoreRouter",
+    "DimTransportLink",
+    "DimAggSwitch",
+    "DimBaseStation",
+    "DimBGPSession",
+    "DimMPLSPath",
+    "DimService",
+    "DimSLAPolicy",
+    "FactMPLSPathHops",
+    "FactServiceDependency",
 ]
 ```
 
@@ -1382,12 +1389,23 @@ LAKEHOUSE_TABLES = [
 
 ```python
 LAKEHOUSE_TABLES = [
-    "DimCoreRouter", "DimTransportLink", "DimAggSwitch", "DimBaseStation",
-    "DimBGPSession", "DimMPLSPath", "DimService", "DimSLAPolicy",
-    "FactMPLSPathHops", "FactServiceDependency",
+    "DimCoreRouter",
+    "DimTransportLink",
+    "DimAggSwitch",
+    "DimBaseStation",
+    "DimBGPSession",
+    "DimMPLSPath",
+    "DimService",
+    "DimSLAPolicy",
+    "FactMPLSPathHops",
+    "FactServiceDependency",
     # V12 — New entity types + junction tables
-    "DimPhysicalConduit", "DimAmplifierSite", "DimAdvisory",
-    "FactConduitMapping", "FactAmplifierMapping", "FactAdvisoryMapping",
+    "DimPhysicalConduit",
+    "DimAmplifierSite",
+    "DimAdvisory",
+    "FactConduitMapping",
+    "FactAmplifierMapping",
+    "FactAdvisoryMapping",
 ]
 ```
 
@@ -1629,7 +1647,7 @@ R_AFFECTS_VERSION = 3000000000010
 | 3 contextualizations | 17 | End of `build_contextualizations()` |
 | **Total** | **~150** | |
 
-**Verify:** After editing, run `python -c "import scripts.fabric.provision_ontology"` to confirm no syntax errors. Count entity types: `grep -c 'ET_.*=' scripts/fabric/provision_ontology.py` → **11**. Count relationship types: `grep -c 'R_.*=' scripts/fabric/provision_ontology.py` → **10**.
+**Verify:** After editing, run `python3 -m py_compile scripts/fabric/provision_ontology.py` to confirm no syntax errors. Count entity types: `grep -c 'ET_.*=' scripts/fabric/provision_ontology.py` → **11**. Count relationship types: `grep -c 'R_.*=' scripts/fabric/provision_ontology.py` → **10**.
 
 ---
 
@@ -1851,10 +1869,12 @@ cd frontend && npm run build
 **Option A — Full deploy (recommended):**
 
 ```bash
-./deploy.sh
+./deploy.sh --provision-all --yes
 ```
 
 This runs the complete pipeline: topology.json generation (Step 2b) → infrastructure (Step 3) → Fabric provisioning including lakehouse tables + ontology (Step 5) → data provisioning including search index (Step 6) → agent provisioning (Step 7) → health check (Step 8).
+
+> **Note:** `--provision-all` is required to enable Steps 5–7 (Fabric, data, agent provisioning). Without it, `deploy.sh` only deploys infrastructure and app code. `--yes` skips confirmation prompts.
 
 **Option B — Targeted update (if infrastructure is already provisioned):**
 
