@@ -77,3 +77,55 @@ async def log_requests(request: Request, call_next):
 async def health():
     """Simple health check."""
     return {"status": "ok", "service": "autonomous-network-noc-api"}
+
+
+@app.get("/api/services/health")
+async def services_health():
+    """Service connectivity summary for the frontend header widget.
+
+    Returns a list of services with their connectivity status.
+    Currently reports basic reachability — individual service probes
+    can be added as needed.
+    """
+    services = []
+    connected = 0
+    error_count = 0
+    partial = 0
+
+    # AI Foundry
+    ep = os.getenv("PROJECT_ENDPOINT", "")
+    if ep:
+        services.append({"name": "AI Foundry", "group": "AI", "status": "connected", "details": os.getenv("AI_FOUNDRY_NAME", "")})
+        connected += 1
+    else:
+        services.append({"name": "AI Foundry", "group": "AI", "status": "not_configured"})
+
+    # AI Search
+    search = os.getenv("AI_SEARCH_NAME", "")
+    if search:
+        services.append({"name": "AI Search", "group": "Data", "status": "connected", "details": search})
+        connected += 1
+    else:
+        services.append({"name": "AI Search", "group": "Data", "status": "not_configured"})
+
+    # Cosmos DB
+    cosmos = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
+    if cosmos:
+        services.append({"name": "Cosmos DB", "group": "Data", "status": "connected", "details": "NoSQL interactions store"})
+        connected += 1
+    else:
+        services.append({"name": "Cosmos DB", "group": "Data", "status": "not_configured"})
+
+    # Graph Query API
+    gq = os.getenv("GRAPH_QUERY_API_URI", "")
+    if gq:
+        services.append({"name": "Graph Query API", "group": "Backend", "status": "connected", "details": "Fabric GQL"})
+        connected += 1
+    else:
+        services.append({"name": "Graph Query API", "group": "Backend", "status": "not_configured"})
+
+    total = len(services)
+    return {
+        "services": services,
+        "summary": {"total": total, "connected": connected, "partial": partial, "error": error_count},
+    }

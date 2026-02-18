@@ -1,22 +1,26 @@
 """
-Provision Fabric IQ Ontology — automates Day 2 Steps 2.1–2.5.
+Provision Fabric IQ Ontology — data-driven from graph_schema.yaml.
 
-Creates the NetworkTopologyOntology item with:
-  - 8 entity types (CoreRouter, TransportLink, AggSwitch, BaseStation,
-    BGPSession, MPLSPath, Service, SLAPolicy)
-  - Static data bindings to Lakehouse tables
-  - Time-series data binding to Eventhouse (LinkTelemetry)
-  - 7 relationship types with contextualizations (edge data bindings)
+Reads vertex types, edge types, and property type hints from
+graph_schema.yaml under data/scenarios/<name>/. Generates all ontology
+entity types, property IDs, relationship types, data bindings, and
+contextualizations dynamically — zero hardcoded schema.
+
+Adding new entity types or relationships to the scenario requires only
+editing graph_schema.yaml and adding the corresponding CSV files.
+No code changes needed.
 
 Prerequisites:
   - provision_lakehouse.py + provision_eventhouse.py have run
-  - azure_config.env populated with FABRIC_WORKSPACE_ID, FABRIC_LAKEHOUSE_ID, etc.
-  - Lakehouse tables loaded (managed delta tables)
-  - Eventhouse tables created and ingested (AlertStream, LinkTelemetry)
+  - azure_config.env populated with FABRIC_WORKSPACE_ID, etc.
+  - graph_schema.yaml exists in the active scenario directory
+  - Optional: property_types mapping in graph_schema.yaml for non-String types
 
 Usage:
   uv run provision_ontology.py
 """
+
+from __future__ import annotations
 
 import base64
 import json
@@ -25,8 +29,10 @@ import re
 import sys
 import time
 import uuid
+from collections import defaultdict
 
 import requests
+import yaml
 from azure.identity import DefaultAzureCredential
 
 from _config import (
@@ -37,14 +43,24 @@ from _config import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+SCENARIO = os.environ.get("DEFAULT_SCENARIO", "")
+if not SCENARIO:
+    print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
+
 LAKEHOUSE_ID = os.getenv("FABRIC_LAKEHOUSE_ID", "")
 EVENTHOUSE_ID = os.getenv("FABRIC_EVENTHOUSE_ID", "")
+
+_SCHEMA_PATH = PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "graph_schema.yaml"
+if not _SCHEMA_PATH.exists():
+    print(f"ERROR: graph_schema.yaml not found: {_SCHEMA_PATH}"); sys.exit(1)
+
+with open(_SCHEMA_PATH) as _f:
+    GRAPH_SCHEMA = yaml.safe_load(_f)
 
 
 def _discover_item_id(workspace_id: str, item_type: str, headers: dict) -> str:
     """Look up an item ID by type via Fabric REST API (fallback when env var missing)."""
-    import requests as _req
-    r = _req.get(f"{FABRIC_API}/workspaces/{workspace_id}/items", headers=headers)
+    r = requests.get(f"{FABRIC_API}/workspaces/{workspace_id}/items", headers=headers)
     if r.status_code != 200:
         return ""
     for item in r.json().get("value", []):
@@ -102,230 +118,141 @@ def prop(pid: int, name: str, vtype: str = "String") -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ID allocation — positive 64-bit integers, unique across the ontology
+# Dynamic ID allocation — deterministic from declaration order
 # ---------------------------------------------------------------------------
+# Entity type IDs:    1000000000001 + vertex_index
+# Property IDs:       sequential from 2000000000001 across all entity types
+# Relationship IDs:   3000000000001 + relationship_index
 
-# Entity type IDs
-ET_CORE_ROUTER = 1000000000001
-ET_TRANSPORT_LINK = 1000000000002
-ET_AGG_SWITCH = 1000000000003
-ET_BASE_STATION = 1000000000004
-ET_BGP_SESSION = 1000000000005
-ET_MPLS_PATH = 1000000000006
-ET_SERVICE = 1000000000007
-ET_SLA_POLICY = 1000000000008
+_et_counter = 1000000000000
+_prop_counter = 2000000000000
+_rel_counter = 3000000000000
 
-# Property IDs — CoreRouter
-P_ROUTER_ID = 2000000000001
-P_ROUTER_CITY = 2000000000003
-P_ROUTER_REGION = 2000000000004
-P_ROUTER_VENDOR = 2000000000005
-P_ROUTER_MODEL = 2000000000006
 
-# Property IDs — TransportLink (static)
-P_LINK_ID = 2000000000011
-P_LINK_TYPE = 2000000000013
-P_CAPACITY_GBPS = 2000000000014
-P_SOURCE_ROUTER_ID = 2000000000015
-P_TARGET_ROUTER_ID = 2000000000016
-# TransportLink (time-series)
-P_TL_TIMESTAMP = 2000000000018
-P_TL_UTIL_PCT = 2000000000019
-P_TL_OPT_POWER = 2000000000020
-P_TL_BER = 2000000000021
-P_TL_LATENCY = 2000000000022
+def _next_et_id() -> int:
+    global _et_counter
+    _et_counter += 1
+    return _et_counter
 
-# Property IDs — AggSwitch
-P_SWITCH_ID = 2000000000031
-P_SWITCH_CITY = 2000000000033
-P_UPLINK_ROUTER_ID = 2000000000034
 
-# Property IDs — BaseStation
-P_STATION_ID = 2000000000041
-P_STATION_TYPE = 2000000000043
-P_STATION_AGG_SWITCH = 2000000000044
-P_STATION_CITY = 2000000000045
+def _next_prop_id() -> int:
+    global _prop_counter
+    _prop_counter += 1
+    return _prop_counter
 
-# Property IDs — BGPSession
-P_SESSION_ID = 2000000000051
-P_PEER_A_ROUTER = 2000000000052
-P_PEER_B_ROUTER = 2000000000053
-P_AS_NUMBER_A = 2000000000054
-P_AS_NUMBER_B = 2000000000055
 
-# Property IDs — MPLSPath
-P_PATH_ID = 2000000000061
-P_PATH_TYPE = 2000000000063
+def _next_rel_id() -> int:
+    global _rel_counter
+    _rel_counter += 1
+    return _rel_counter
 
-# Property IDs — Service
-P_SERVICE_ID = 2000000000071
-P_SERVICE_TYPE = 2000000000073
-P_CUSTOMER_NAME = 2000000000074
-P_CUSTOMER_COUNT = 2000000000075
-P_ACTIVE_USERS = 2000000000076
-
-# Property IDs — SLAPolicy
-P_SLA_POLICY_ID = 2000000000081
-P_SLA_SERVICE_ID = 2000000000082
-P_AVAILABILITY_PCT = 2000000000083
-P_MAX_LATENCY_MS = 2000000000084
-P_PENALTY_PER_HOUR = 2000000000085
-P_SLA_TIER = 2000000000086
-
-# Relationship type IDs
-R_CONNECTS_TO = 3000000000001
-R_AGGREGATES_TO = 3000000000002
-R_BACKHAULS_VIA = 3000000000003
-R_ROUTES_VIA = 3000000000004
-R_DEPENDS_ON = 3000000000005
-R_GOVERNED_BY = 3000000000006
-R_PEERS_OVER = 3000000000007
 
 # ---------------------------------------------------------------------------
-# Entity type definitions
+# Build ontology model from graph_schema.yaml
 # ---------------------------------------------------------------------------
 
-ENTITY_TYPES = [
-    {
-        "id": str(ET_CORE_ROUTER),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "CoreRouter",
-        "entityIdParts": [str(P_ROUTER_ID)],
-        "displayNamePropertyId": str(P_ROUTER_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_ROUTER_ID, "RouterId"),
-            prop(P_ROUTER_CITY, "City"),
-            prop(P_ROUTER_REGION, "Region"),
-            prop(P_ROUTER_VENDOR, "Vendor"),
-            prop(P_ROUTER_MODEL, "Model"),
-        ],
-        "timeseriesProperties": [],
-    },
-    {
-        "id": str(ET_TRANSPORT_LINK),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "TransportLink",
-        "entityIdParts": [str(P_LINK_ID)],
-        "displayNamePropertyId": str(P_LINK_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_LINK_ID, "LinkId"),
-            prop(P_LINK_TYPE, "LinkType"),
-            prop(P_CAPACITY_GBPS, "CapacityGbps", "BigInt"),
-            prop(P_SOURCE_ROUTER_ID, "SourceRouterId"),
-            prop(P_TARGET_ROUTER_ID, "TargetRouterId"),
-        ],
-        "timeseriesProperties": [],
-    },
-    {
-        "id": str(ET_AGG_SWITCH),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "AggSwitch",
-        "entityIdParts": [str(P_SWITCH_ID)],
-        "displayNamePropertyId": str(P_SWITCH_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_SWITCH_ID, "SwitchId"),
-            prop(P_SWITCH_CITY, "City"),
-            prop(P_UPLINK_ROUTER_ID, "UplinkRouterId"),
-        ],
-        "timeseriesProperties": [],
-    },
-    {
-        "id": str(ET_BASE_STATION),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "BaseStation",
-        "entityIdParts": [str(P_STATION_ID)],
-        "displayNamePropertyId": str(P_STATION_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_STATION_ID, "StationId"),
-            prop(P_STATION_TYPE, "StationType"),
-            prop(P_STATION_AGG_SWITCH, "AggSwitchId"),
-            prop(P_STATION_CITY, "City"),
-        ],
-        "timeseriesProperties": [],
-    },
-    {
-        "id": str(ET_BGP_SESSION),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "BGPSession",
-        "entityIdParts": [str(P_SESSION_ID)],
-        "displayNamePropertyId": str(P_SESSION_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_SESSION_ID, "SessionId"),
-            prop(P_PEER_A_ROUTER, "PeerARouterId"),
-            prop(P_PEER_B_ROUTER, "PeerBRouterId"),
-            prop(P_AS_NUMBER_A, "ASNumberA", "BigInt"),
-            prop(P_AS_NUMBER_B, "ASNumberB", "BigInt"),
-        ],
-        "timeseriesProperties": [],
-    },
-    {
-        "id": str(ET_MPLS_PATH),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "MPLSPath",
-        "entityIdParts": [str(P_PATH_ID)],
-        "displayNamePropertyId": str(P_PATH_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_PATH_ID, "PathId"),
-            prop(P_PATH_TYPE, "PathType"),
-        ],
-        "timeseriesProperties": [],
-    },
-    {
-        "id": str(ET_SERVICE),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "Service",
-        "entityIdParts": [str(P_SERVICE_ID)],
-        "displayNamePropertyId": str(P_SERVICE_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_SERVICE_ID, "ServiceId"),
-            prop(P_SERVICE_TYPE, "ServiceType"),
-            prop(P_CUSTOMER_NAME, "CustomerName"),
-            prop(P_CUSTOMER_COUNT, "CustomerCount", "BigInt"),
-            prop(P_ACTIVE_USERS, "ActiveUsers", "BigInt"),
-        ],
-        "timeseriesProperties": [],
-    },
-    {
-        "id": str(ET_SLA_POLICY),
-        "namespace": "usertypes",
-        "baseEntityTypeId": None,
-        "name": "SLAPolicy",
-        "entityIdParts": [str(P_SLA_POLICY_ID)],
-        "displayNamePropertyId": str(P_SLA_POLICY_ID),
-        "namespaceType": "Custom",
-        "visibility": "Visible",
-        "properties": [
-            prop(P_SLA_POLICY_ID, "SLAPolicyId"),
-            prop(P_SLA_SERVICE_ID, "ServiceId"),
-            prop(P_AVAILABILITY_PCT, "AvailabilityPct", "Double"),
-            prop(P_MAX_LATENCY_MS, "MaxLatencyMs", "BigInt"),
-            prop(P_PENALTY_PER_HOUR, "PenaltyPerHourUSD", "BigInt"),
-            prop(P_SLA_TIER, "Tier"),
-        ],
-        "timeseriesProperties": [],
-    },
-]
+# Lookup tables populated during entity type generation
+_vertex_to_et_id: dict[str, int] = {}              # vertex label → entity type ID
+_vertex_prop_ids: dict[tuple[str, str], int] = {}   # (label, prop) → property ID
+_vertex_id_prop: dict[str, int] = {}                # vertex label → property ID of id_column
+
+
+def _build_entity_types() -> list[dict]:
+    """Generate ENTITY_TYPES from graph_schema.yaml vertices."""
+    entity_types = []
+
+    for vertex in GRAPH_SCHEMA.get("vertices", []):
+        label = vertex["label"]
+        et_id = _next_et_id()
+        _vertex_to_et_id[label] = et_id
+
+        id_column = vertex["id_column"]
+        prop_type_hints = vertex.get("property_types", {})
+
+        properties = []
+        for prop_name in vertex["properties"]:
+            pid = _next_prop_id()
+            _vertex_prop_ids[(label, prop_name)] = pid
+            vtype = prop_type_hints.get(prop_name, "String")
+            properties.append(prop(pid, prop_name, vtype))
+
+            if prop_name == id_column:
+                _vertex_id_prop[label] = pid
+
+        entity_types.append({
+            "id": str(et_id),
+            "namespace": "usertypes",
+            "baseEntityTypeId": None,
+            "name": label,
+            "entityIdParts": [str(_vertex_id_prop[label])],
+            "displayNamePropertyId": str(_vertex_id_prop[label]),
+            "namespaceType": "Custom",
+            "visibility": "Visible",
+            "properties": properties,
+            "timeseriesProperties": [],
+        })
+
+    return entity_types
+
+
+def _group_edges() -> tuple[
+    dict[tuple[str, str, str], list[dict]],
+    dict[str, set[tuple[str, str]]],
+]:
+    """Group edge definitions by (label, source_label, target_label).
+
+    Returns:
+        edge_groups: { (label, src_label, tgt_label) → [edge_defs...] }
+        label_pairs: { label → { (src_label, tgt_label), ... } }
+    """
+    edge_groups: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    label_pairs: dict[str, set[tuple[str, str]]] = defaultdict(set)
+
+    for edge in GRAPH_SCHEMA.get("edges", []):
+        src_label = edge["source"]["label"]
+        tgt_label = edge["target"]["label"]
+        key = (edge["label"], src_label, tgt_label)
+        edge_groups[key].append(edge)
+        label_pairs[edge["label"]].add((src_label, tgt_label))
+
+    return dict(edge_groups), dict(label_pairs)
+
+
+# Populated during relationship type generation
+_rel_type_ids: dict[tuple[str, str, str], int] = {}  # (label, src, tgt) → rel ID
+
+
+def _build_relationship_types(
+    edge_groups: dict[tuple[str, str, str], list[dict]],
+    label_pairs: dict[str, set[tuple[str, str]]],
+) -> list[dict]:
+    """Generate RELATIONSHIP_TYPES from edge groups."""
+    relationship_types = []
+
+    for (label, src_label, tgt_label) in edge_groups:
+        rid = _next_rel_id()
+        _rel_type_ids[(label, src_label, tgt_label)] = rid
+
+        # Disambiguate name when same label appears with multiple target types
+        pairs = label_pairs[label]
+        if len(pairs) == 1:
+            name = label
+        else:
+            name = f"{label}_{tgt_label.lower()}"
+
+        src_et_id = _vertex_to_et_id[src_label]
+        tgt_et_id = _vertex_to_et_id[tgt_label]
+
+        relationship_types.append({
+            "id": str(rid),
+            "namespace": "usertypes",
+            "name": name,
+            "namespaceType": "Custom",
+            "source": {"entityTypeId": str(src_et_id)},
+            "target": {"entityTypeId": str(tgt_et_id)},
+        })
+
+    return relationship_types
 
 # ---------------------------------------------------------------------------
 # Static data bindings — Lakehouse tables → entity types
@@ -385,165 +312,29 @@ def eventhouse_binding(
 
 
 def build_static_bindings() -> dict[int, list[dict]]:
-    """Return entity_type_id → [binding, ...] for all static bindings."""
-    return {
-        ET_CORE_ROUTER: [
-            lakehouse_binding("CoreRouter-static", "DimCoreRouter", [
-                ("RouterId", P_ROUTER_ID),
-                ("City", P_ROUTER_CITY),
-                ("Region", P_ROUTER_REGION),
-                ("Vendor", P_ROUTER_VENDOR),
-                ("Model", P_ROUTER_MODEL),
-            ]),
-        ],
-        ET_TRANSPORT_LINK: [
-            lakehouse_binding("TransportLink-static", "DimTransportLink", [
-                ("LinkId", P_LINK_ID),
-                ("LinkType", P_LINK_TYPE),
-                ("CapacityGbps", P_CAPACITY_GBPS),
-                ("SourceRouterId", P_SOURCE_ROUTER_ID),
-                ("TargetRouterId", P_TARGET_ROUTER_ID),
-            ]),
-        ],
-        ET_AGG_SWITCH: [
-            lakehouse_binding("AggSwitch-static", "DimAggSwitch", [
-                ("SwitchId", P_SWITCH_ID),
-                ("City", P_SWITCH_CITY),
-                ("UplinkRouterId", P_UPLINK_ROUTER_ID),
-            ]),
-        ],
-        ET_BASE_STATION: [
-            lakehouse_binding("BaseStation-static", "DimBaseStation", [
-                ("StationId", P_STATION_ID),
-                ("StationType", P_STATION_TYPE),
-                ("AggSwitchId", P_STATION_AGG_SWITCH),
-                ("City", P_STATION_CITY),
-            ]),
-        ],
-        ET_BGP_SESSION: [
-            lakehouse_binding("BGPSession-static", "DimBGPSession", [
-                ("SessionId", P_SESSION_ID),
-                ("PeerARouterId", P_PEER_A_ROUTER),
-                ("PeerBRouterId", P_PEER_B_ROUTER),
-                ("ASNumberA", P_AS_NUMBER_A),
-                ("ASNumberB", P_AS_NUMBER_B),
-            ]),
-        ],
-        ET_MPLS_PATH: [
-            lakehouse_binding("MPLSPath-static", "DimMPLSPath", [
-                ("PathId", P_PATH_ID),
-                ("PathType", P_PATH_TYPE),
-            ]),
-        ],
-        ET_SERVICE: [
-            lakehouse_binding("Service-static", "DimService", [
-                ("ServiceId", P_SERVICE_ID),
-                ("ServiceType", P_SERVICE_TYPE),
-                ("CustomerName", P_CUSTOMER_NAME),
-                ("CustomerCount", P_CUSTOMER_COUNT),
-                ("ActiveUsers", P_ACTIVE_USERS),
-            ]),
-        ],
-        ET_SLA_POLICY: [
-            lakehouse_binding("SLAPolicy-static", "DimSLAPolicy", [
-                ("SLAPolicyId", P_SLA_POLICY_ID),
-                ("ServiceId", P_SLA_SERVICE_ID),
-                ("AvailabilityPct", P_AVAILABILITY_PCT),
-                ("MaxLatencyMs", P_MAX_LATENCY_MS),
-                ("PenaltyPerHourUSD", P_PENALTY_PER_HOUR),
-                ("Tier", P_SLA_TIER),
-            ]),
-        ],
-    }
+    """Generate entity_type_id → [binding, ...] from graph_schema.yaml vertices."""
+    bindings: dict[int, list[dict]] = {}
 
+    for vertex in GRAPH_SCHEMA.get("vertices", []):
+        label = vertex["label"]
+        et_id = _vertex_to_et_id[label]
+        table_name = vertex["csv_file"].removesuffix(".csv")
 
-def build_timeseries_binding(cluster_uri: str, db_name: str) -> dict:
-    """LinkTelemetry → TransportLink time-series binding."""
-    return eventhouse_binding(
-        seed="TransportLink-timeseries",
-        table="LinkTelemetry",
-        cluster_uri=cluster_uri,
-        db_name=db_name,
-        timestamp_col="Timestamp",
-        bindings=[
-            ("Timestamp", P_TL_TIMESTAMP),
-            ("UtilizationPct", P_TL_UTIL_PCT),
-            ("OpticalPowerDbm", P_TL_OPT_POWER),
-            ("BitErrorRate", P_TL_BER),
-            ("LatencyMs", P_TL_LATENCY),
-            # Map LinkId to static entity key so system matches rows → entities
-            ("LinkId", P_LINK_ID),
-        ],
-    )
+        col_bindings = [
+            (prop_name, _vertex_prop_ids[(label, prop_name)])
+            for prop_name in vertex["properties"]
+        ]
 
+        bindings[et_id] = [
+            lakehouse_binding(f"{label}-static", table_name, col_bindings)
+        ]
 
-# ---------------------------------------------------------------------------
-# Relationship types
-# ---------------------------------------------------------------------------
+    return bindings
 
-RELATIONSHIP_TYPES = [
-    {
-        "id": str(R_CONNECTS_TO),
-        "namespace": "usertypes",
-        "name": "connects_to",
-        "namespaceType": "Custom",
-        "source": {"entityTypeId": str(ET_TRANSPORT_LINK)},
-        "target": {"entityTypeId": str(ET_CORE_ROUTER)},
-    },
-    {
-        "id": str(R_AGGREGATES_TO),
-        "namespace": "usertypes",
-        "name": "aggregates_to",
-        "namespaceType": "Custom",
-        "source": {"entityTypeId": str(ET_AGG_SWITCH)},
-        "target": {"entityTypeId": str(ET_CORE_ROUTER)},
-    },
-    {
-        "id": str(R_BACKHAULS_VIA),
-        "namespace": "usertypes",
-        "name": "backhauls_via",
-        "namespaceType": "Custom",
-        "source": {"entityTypeId": str(ET_BASE_STATION)},
-        "target": {"entityTypeId": str(ET_AGG_SWITCH)},
-    },
-    {
-        "id": str(R_ROUTES_VIA),
-        "namespace": "usertypes",
-        "name": "routes_via",
-        "namespaceType": "Custom",
-        "source": {"entityTypeId": str(ET_MPLS_PATH)},
-        "target": {"entityTypeId": str(ET_TRANSPORT_LINK)},
-    },
-    {
-        "id": str(R_DEPENDS_ON),
-        "namespace": "usertypes",
-        "name": "depends_on",
-        "namespaceType": "Custom",
-        "source": {"entityTypeId": str(ET_SERVICE)},
-        "target": {"entityTypeId": str(ET_MPLS_PATH)},
-    },
-    {
-        "id": str(R_GOVERNED_BY),
-        "namespace": "usertypes",
-        "name": "governed_by",
-        "namespaceType": "Custom",
-        "source": {"entityTypeId": str(ET_SLA_POLICY)},
-        "target": {"entityTypeId": str(ET_SERVICE)},
-    },
-    {
-        "id": str(R_PEERS_OVER),
-        "namespace": "usertypes",
-        "name": "peers_over",
-        "namespaceType": "Custom",
-        "source": {"entityTypeId": str(ET_BGP_SESSION)},
-        "target": {"entityTypeId": str(ET_CORE_ROUTER)},
-    },
-]
 
 # ---------------------------------------------------------------------------
 # Contextualizations — bind relationship types to Lakehouse junction tables
 # ---------------------------------------------------------------------------
-
 
 def ctx(seed: str, table: str, src_bindings: list, tgt_bindings: list) -> dict:
     """Build a Contextualization (relationship data binding)."""
@@ -566,62 +357,42 @@ def ctx(seed: str, table: str, src_bindings: list, tgt_bindings: list) -> dict:
     }
 
 
-def build_contextualizations() -> dict[int, list[dict]]:
-    """Return rel_type_id → [contextualization, ...]."""
-    return {
-        # connects_to: TransportLink → CoreRouter
-        # Two contextualizations — one for each endpoint of the link
-        R_CONNECTS_TO: [
-            ctx("connects_to-source", "DimTransportLink",
-                [("LinkId", P_LINK_ID)],
-                [("SourceRouterId", P_ROUTER_ID)]),
-            ctx("connects_to-target", "DimTransportLink",
-                [("LinkId", P_LINK_ID)],
-                [("TargetRouterId", P_ROUTER_ID)]),
-        ],
-        # aggregates_to: AggSwitch → CoreRouter
-        R_AGGREGATES_TO: [
-            ctx("aggregates_to", "DimAggSwitch",
-                [("SwitchId", P_SWITCH_ID)],
-                [("UplinkRouterId", P_ROUTER_ID)]),
-        ],
-        # backhauls_via: BaseStation → AggSwitch
-        R_BACKHAULS_VIA: [
-            ctx("backhauls_via", "DimBaseStation",
-                [("StationId", P_STATION_ID)],
-                [("AggSwitchId", P_SWITCH_ID)]),
-        ],
-        # routes_via: MPLSPath → TransportLink (via FactMPLSPathHops)
-        # Rows where NodeType != TransportLink will not match any LinkId → ignored
-        R_ROUTES_VIA: [
-            ctx("routes_via", "FactMPLSPathHops",
-                [("PathId", P_PATH_ID)],
-                [("NodeId", P_LINK_ID)]),
-        ],
-        # depends_on: Service → MPLSPath (via FactServiceDependency)
-        # Rows where DependsOnType != MPLSPath will not match any PathId → ignored
-        R_DEPENDS_ON: [
-            ctx("depends_on", "FactServiceDependency",
-                [("ServiceId", P_SERVICE_ID)],
-                [("DependsOnId", P_PATH_ID)]),
-        ],
-        # governed_by: SLAPolicy → Service
-        R_GOVERNED_BY: [
-            ctx("governed_by", "DimSLAPolicy",
-                [("SLAPolicyId", P_SLA_POLICY_ID)],
-                [("ServiceId", P_SERVICE_ID)]),
-        ],
-        # peers_over: BGPSession → CoreRouter
-        # Two contextualizations — PeerA and PeerB
-        R_PEERS_OVER: [
-            ctx("peers_over-a", "DimBGPSession",
-                [("SessionId", P_SESSION_ID)],
-                [("PeerARouterId", P_ROUTER_ID)]),
-            ctx("peers_over-b", "DimBGPSession",
-                [("SessionId", P_SESSION_ID)],
-                [("PeerBRouterId", P_ROUTER_ID)]),
-        ],
-    }
+def build_contextualizations(
+    edge_groups: dict[tuple[str, str, str], list[dict]],
+) -> dict[int, list[dict]]:
+    """Generate rel_type_id → [contextualization, ...] from edge groups."""
+    ctx_map: dict[int, list[dict]] = {}
+
+    for (label, src_label, tgt_label), edges in edge_groups.items():
+        rid = _rel_type_ids[(label, src_label, tgt_label)]
+        ctxs = []
+
+        for i, edge in enumerate(edges):
+            table_name = edge["csv_file"].removesuffix(".csv")
+            src_col = edge["source"]["column"]
+            src_prop = edge["source"]["property"]
+            tgt_col = edge["target"]["column"]
+            tgt_prop = edge["target"]["property"]
+
+            # Look up property IDs from the entity type definitions
+            src_pid = _vertex_prop_ids[(src_label, src_prop)]
+            tgt_pid = _vertex_prop_ids[(tgt_label, tgt_prop)]
+
+            # Deterministic seed for UUID generation
+            if len(edges) > 1:
+                seed = f"{label}-{tgt_label}-{i}"
+            else:
+                seed = f"{label}-{tgt_label}"
+
+            ctxs.append(
+                ctx(seed, table_name,
+                    [(src_col, src_pid)],
+                    [(tgt_col, tgt_pid)])
+            )
+
+        ctx_map[rid] = ctxs
+
+    return ctx_map
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +400,8 @@ def build_contextualizations() -> dict[int, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def build_definition_parts(
+    entity_types: list[dict],
+    relationship_types: list[dict],
     bindings: dict[int, list[dict]],
     contextualizations: dict[int, list[dict]],
 ) -> list[dict]:
@@ -652,7 +425,7 @@ def build_definition_parts(
     ]
 
     # Entity types + data bindings
-    for et in ENTITY_TYPES:
+    for et in entity_types:
         et_id = et["id"]
         parts.append({
             "path": f"EntityTypes/{et_id}/definition.json",
@@ -667,7 +440,7 @@ def build_definition_parts(
             })
 
     # Relationship types + contextualizations
-    for rel in RELATIONSHIP_TYPES:
+    for rel in relationship_types:
         rel_id = rel["id"]
         parts.append({
             "path": f"RelationshipTypes/{rel_id}/definition.json",
@@ -877,40 +650,39 @@ def main():
 
     print("=" * 60)
     print(f"Provisioning Fabric IQ Ontology: {ONTOLOGY_NAME}")
+    print(f"  Schema source: {_SCHEMA_PATH}")
     print("=" * 60)
 
     # ------------------------------------------------------------------
-    # 1. Build static data bindings
+    # 1. Build entity types and relationship types from graph_schema.yaml
     # ------------------------------------------------------------------
-    print("\n--- Building ontology definition ---")
+    print("\n--- Building ontology from graph_schema.yaml ---")
+
+    entity_types = _build_entity_types()
+    et_names = [et["name"] for et in entity_types]
+    print(f"  ✓ {len(entity_types)} entity types: {', '.join(et_names)}")
+
+    edge_groups, label_pairs = _group_edges()
+    relationship_types = _build_relationship_types(edge_groups, label_pairs)
+    rel_names = [r["name"] for r in relationship_types]
+    print(f"  ✓ {len(relationship_types)} relationship types: {', '.join(rel_names)}")
+
+    # ------------------------------------------------------------------
+    # 2. Build static data bindings
+    # ------------------------------------------------------------------
     bindings = build_static_bindings()
     print(f"  ✓ {sum(len(v) for v in bindings.values())} static data bindings")
 
     # ------------------------------------------------------------------
-    # 2. Build time-series binding (optional — needs Eventhouse ingested)
-    # ------------------------------------------------------------------
-    # cluster_uri = client.get_kql_cluster_uri(WORKSPACE_ID)
-    # db_name = KQL_DB_NAME or "NetworkTelemetryEH_3117"
-
-    # if cluster_uri:
-    #     ts_binding = build_timeseries_binding(cluster_uri, db_name)
-    #     bindings.setdefault(ET_TRANSPORT_LINK, []).append(ts_binding)
-    #     print(f"  ✓ Time-series binding: LinkTelemetry → TransportLink")
-    #     print(f"    Cluster: {cluster_uri}")
-    # else:
-    #     print("  ⚠ Skipping time-series binding — KQL cluster URI not found")
-    #     print("    Ingest Eventhouse data first, then re-run to add binding")
-
-    # ------------------------------------------------------------------
     # 3. Build contextualizations (relationship bindings)
     # ------------------------------------------------------------------
-    contextualizations = build_contextualizations()
+    contextualizations = build_contextualizations(edge_groups)
     print(f"  ✓ {sum(len(v) for v in contextualizations.values())} relationship contextualizations")
 
     # ------------------------------------------------------------------
     # 4. Assemble definition parts
     # ------------------------------------------------------------------
-    parts = build_definition_parts(bindings, contextualizations)
+    parts = build_definition_parts(entity_types, relationship_types, bindings, contextualizations)
     print(f"  ✓ {len(parts)} definition parts total")
 
     # ------------------------------------------------------------------
@@ -963,15 +735,12 @@ def main():
     # ------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("✅ Ontology provisioning complete!")
-    print(f"   Name       : {ONTOLOGY_NAME}")
-    print(f"   ID         : {ontology_id}")
-    print(f"   Workspace  : {WORKSPACE_ID}")
-    print(f"   Entity types: {len(ENTITY_TYPES)}")
-    print(f"     CoreRouter, TransportLink, AggSwitch, BaseStation,")
-    print(f"     BGPSession, MPLSPath, Service, SLAPolicy")
-    print(f"   Relationships: {len(RELATIONSHIP_TYPES)}")
-    print(f"     connects_to, aggregates_to, backhauls_via, routes_via,")
-    print(f"     depends_on, governed_by, peers_over")
+    print(f"   Name           : {ONTOLOGY_NAME}")
+    print(f"   ID             : {ontology_id}")
+    print(f"   Workspace      : {WORKSPACE_ID}")
+    print(f"   Entity types   : {len(entity_types)} — {', '.join(et_names)}")
+    print(f"   Relationships  : {len(relationship_types)} — {', '.join(rel_names)}")
+    print(f"   Schema source  : {_SCHEMA_PATH.relative_to(PROJECT_ROOT)}")
     print("=" * 60)
 
     print("\n  ✓ Updated azure_config.env")

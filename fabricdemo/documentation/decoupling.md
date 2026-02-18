@@ -331,25 +331,85 @@ if not args.scenario:
 
 ### 3.5 `scripts/fabric/provision_lakehouse.py`
 
-Changed default from `"telco-noc"` to `""` with fail-fast:
+**Phase 1** (prior): Changed default from `"telco-noc"` to `""` with fail-fast.
+
+**Phase 2** (v12): Fully data-driven — replaced hardcoded `LAKEHOUSE_TABLES` list with dynamic derivation from `graph_schema.yaml`:
 
 ```python
-SCENARIO = os.environ.get("DEFAULT_SCENARIO", "")
-if not SCENARIO:
-    print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
+# Before (hardcoded)
+LAKEHOUSE_TABLES = [
+    "DimCoreRouter", "DimTransportLink", "DimAggSwitch",
+    "DimBaseStation", "DimBGPSession", "DimMPLSPath",
+    "DimService", "DimSLAPolicy",
+    "FactMPLSPathHops", "FactServiceDependency",
+]
+
+# After (data-driven)
+with open(_SCHEMA_PATH) as f:
+    _schema = yaml.safe_load(f)
+
+_seen: set[str] = set()
+LAKEHOUSE_TABLES: list[str] = []
+for section in ("vertices", "edges"):
+    for entry in _schema.get(section, []):
+        tbl = entry["csv_file"].removesuffix(".csv")
+        if tbl not in _seen:
+            _seen.add(tbl)
+            LAKEHOUSE_TABLES.append(tbl)
 ```
+
+Adding new vertex/edge types only requires editing `graph_schema.yaml` — no code changes.
 
 ### 3.6 `scripts/fabric/provision_eventhouse.py`
 
-Same pattern as 3.5:
+**Phase 1** (prior): Changed default from `"telco-noc"` to `""` with fail-fast.
+
+**Phase 2** (v12): Fully data-driven — replaced hardcoded `TABLE_SCHEMAS` dict with `_build_table_schemas()` that reads `scenario.yaml` telemetry containers + CSV headers:
 
 ```python
-SCENARIO = os.environ.get("DEFAULT_SCENARIO", "")
-if not SCENARIO:
-    print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
+# Before (hardcoded)
+TABLE_SCHEMAS = {
+    "AlertStream": {"Timestamp": "datetime", "RouterId": "string", ...},
+    "LinkTelemetry": {"Timestamp": "datetime", "LinkId": "string", ...},
+}
+
+# After (data-driven)
+def _build_table_schemas() -> dict[str, dict[str, str]]:
+    schemas = {}
+    for container in _CONTAINERS:
+        csv_path = DATA_DIR / "scenarios" / SCENARIO / "data" / "telemetry" / container["csv_file"]
+        with open(csv_path) as f:
+            headers = next(csv.reader(f))
+        numeric = set(container.get("numeric_fields", []))
+        col_types = {}
+        for col in headers:
+            if col == "Timestamp":     col_types[col] = "datetime"
+            elif col in numeric:       col_types[col] = "real"
+            else:                      col_types[col] = "string"
+        schemas[container["name"]] = col_types
+    return schemas
 ```
 
-### 3.7 `scripts/agent_provisioner.py`
+Adding new telemetry tables only requires editing `scenario.yaml` containers + providing the CSV.
+
+### 3.7 `scripts/fabric/provision_ontology.py`
+
+**Phase 2** (v12): Fully data-driven — the largest decoupling change. Replaced ~600 lines of hardcoded entity types, property IDs, relationship types, data bindings, and contextualizations with dynamic generation from `graph_schema.yaml`:
+
+| Component | Before (hardcoded) | After (data-driven) |
+|---|---|---|
+| Entity type IDs | 8 named constants (`ET_CORE_ROUTER`, ...) | `_next_et_id()` — sequential from `1000000000001` |
+| Property IDs | ~35 named constants (`P_ROUTER_ID`, ...) | `_next_prop_id()` — sequential from `2000000000001` |
+| Relationship IDs | 7 named constants (`R_CONNECTS_TO`, ...) | `_next_rel_id()` — sequential from `3000000000001` |
+| `ENTITY_TYPES` list | 8 hardcoded dicts with explicit properties | `_build_entity_types()` — reads vertices from YAML |
+| `RELATIONSHIP_TYPES` list | 7 hardcoded dicts | `_build_relationship_types()` — groups edges by `(label, src, tgt)` |
+| `build_static_bindings()` | 8 explicit Lakehouse binding entries | Iterates vertices, maps properties to generated IDs |
+| `build_contextualizations()` | 7 explicit contextualization entries | Iterates edge groups, maps source/target columns to property IDs |
+| Property value types | Inline in entity type dicts | `property_types` dict in `graph_schema.yaml` |
+
+Key improvement: `depends_on` edges now properly create separate relationship types per target entity type (`depends_on_mplspath`, `depends_on_aggswitch`, `depends_on_basestation`) instead of silently ignoring non-MPLSPath targets.
+
+### 3.8 `scripts/agent_provisioner.py`
 
 Comment-only change:
 - Line 150: `"/query/graph/telco-noc-topology"` → `"/query/graph/<scenario>-topology"`
@@ -881,6 +941,9 @@ data/scenarios/*/scripts/
 | What | Before | After |
 |---|---|---|
 | Comment (line 13) | `data/network → scenarios/telco-noc/data/entities` | `data/network → scenarios/<name>/data/entities` |
+| `property_types` | Not present | Added optional `property_types` dict to TransportLink, BGPSession, Service, SLAPolicy for non-String ontology types (BigInt, Double) |
+
+The `property_types` mapping is used by `provision_ontology.py` to set `valueType` on ontology properties. Vertices with all-String properties (CoreRouter, AggSwitch, BaseStation, MPLSPath) don't need it.
 
 ---
 
@@ -964,8 +1027,9 @@ Returns **zero** results. Only `data/scenarios/telco-noc/` (the scenario's own d
 | `scripts/provision_cosmos.py` | Edit — `load_scenario()` for data dir + container defs from YAML | ✅ |
 | `scripts/provision_agents.py` | Edit — `load_scenario()` for prompts dir + graph name | ✅ |
 | `scripts/generate_topology_json.py` | Edit — default from env var, validation, usage string | ✅ |
-| `scripts/fabric/provision_lakehouse.py` | Edit — remove fallback default, fail-fast | ✅ |
-| `scripts/fabric/provision_eventhouse.py` | Edit — remove fallback default, fail-fast | ✅ |
+| `scripts/fabric/provision_lakehouse.py` | Edit — data-driven `LAKEHOUSE_TABLES` from `graph_schema.yaml` | ✅ |
+| `scripts/fabric/provision_eventhouse.py` | Edit — data-driven `TABLE_SCHEMAS` from `scenario.yaml` + CSV headers | ✅ |
+| `scripts/fabric/provision_ontology.py` | Edit — data-driven entity types, properties, relationships, bindings from `graph_schema.yaml` | ✅ |
 | `scripts/agent_provisioner.py` | Edit — comment update (line 150) | ✅ |
 | `graph-query-api/config.py` | Edit — YAML loader, `SCENARIO_NAME`/`DEFAULT_GRAPH` exports, `DATA_SOURCES` from YAML | ✅ |
 | `graph-query-api/router_health.py` | Edit — import `SCENARIO_NAME`/`DEFAULT_GRAPH`, use as defaults | ✅ |
@@ -985,10 +1049,10 @@ Returns **zero** results. Only `data/scenarios/telco-noc/` (the scenario's own d
 | `.dockerignore` | Edit — granular data include/exclude rules | ✅ |
 | `infra/main.bicep` | Edit — `defaultScenario`/`runbooksIndexName`/`ticketsIndexName` params + env vars | ✅ |
 | `data/scenarios/telco-noc/scripts/generate_all.sh` | Edit — comments/echo only | ✅ |
-| `data/scenarios/telco-noc/graph_schema.yaml` | Edit — comment only | ✅ |
+| `data/scenarios/telco-noc/graph_schema.yaml` | Edit — comment update + `property_types` for ontology value types | ✅ |
 | `README.md` | Edit — `--scenario` flag in table, tarball reference genericized | ✅ |
 
-**Total: 2 new files, 29 edits — all complete.**
+**Total: 2 new files, 30 edits — all complete.**
 
 ### Files NOT changed (no changes needed)
 

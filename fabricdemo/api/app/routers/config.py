@@ -305,22 +305,52 @@ async def get_scenario():
 
     The frontend uses this to populate titles, graph styles,
     example questions, and data-source labels without hardcoding.
+
+    Keys are camelCase to match the frontend ScenarioConfig interface.
+    graph_styles.node_types is transformed into flat nodeColors/nodeSizes/nodeIcons maps.
     """
     if not _manifest:
-        return {"name": SCENARIO_NAME, "display_name": SCENARIO_NAME, "data_sources": {}}
+        return {
+            "name": SCENARIO_NAME,
+            "displayName": SCENARIO_NAME,
+            "description": "",
+            "graph": "",
+            "runbooksIndex": "",
+            "ticketsIndex": "",
+            "graphStyles": {"nodeColors": {}, "nodeSizes": {}, "nodeIcons": {}},
+            "exampleQuestions": [],
+            "useCases": [],
+        }
 
     ds = _manifest.get("data_sources", {})
     search = ds.get("search_indexes", {})
     graph_cfg = ds.get("graph", {}).get("config", {})
 
+    # Transform graph_styles.node_types into flat maps for the frontend
+    node_types = _manifest.get("graph_styles", {}).get("node_types", {})
+    node_colors: dict[str, str] = {}
+    node_sizes: dict[str, int] = {}
+    node_icons: dict[str, str] = {}
+    for node_type, style in node_types.items():
+        if "color" in style:
+            node_colors[node_type] = style["color"]
+        if "size" in style:
+            node_sizes[node_type] = style["size"]
+        if "icon" in style:
+            node_icons[node_type] = style["icon"]
+
     return {
         "name": SCENARIO_NAME,
-        "display_name": _manifest.get("display_name", SCENARIO_NAME),
-        "graph_name": graph_cfg.get("graph", ""),
-        "graph_styles": _manifest.get("graph_styles", {}),
-        "example_questions": _manifest.get("example_questions", []),
-        "data_sources": {
-            "runbooks_index": search.get("runbooks", {}).get("index_name", "runbooks-index"),
-            "tickets_index": search.get("tickets", {}).get("index_name", "tickets-index"),
+        "displayName": _manifest.get("display_name", SCENARIO_NAME),
+        "description": _manifest.get("description", ""),
+        "graph": graph_cfg.get("graph", ""),
+        "runbooksIndex": search.get("runbooks", {}).get("index_name", "runbooks-index"),
+        "ticketsIndex": search.get("tickets", {}).get("index_name", "tickets-index"),
+        "graphStyles": {
+            "nodeColors": node_colors,
+            "nodeSizes": node_sizes,
+            "nodeIcons": node_icons,
         },
+        "exampleQuestions": _manifest.get("example_questions", []),
+        "useCases": _manifest.get("use_cases", []),
     }

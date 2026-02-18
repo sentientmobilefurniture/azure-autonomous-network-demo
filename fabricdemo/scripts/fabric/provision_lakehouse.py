@@ -25,6 +25,7 @@ import sys
 import time
 
 import requests
+import yaml
 from azure.identity import DefaultAzureCredential
 from azure.storage.filedatalake import DataLakeServiceClient
 
@@ -44,19 +45,29 @@ if not SCENARIO:
     print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
 LAKEHOUSE_CSV_DIR = str(DATA_DIR / "scenarios" / SCENARIO / "data" / "entities")
 
-# CSV files to upload to Lakehouse → load as delta tables
-LAKEHOUSE_TABLES = [
-    "DimCoreRouter",
-    "DimTransportLink",
-    "DimAggSwitch",
-    "DimBaseStation",
-    "DimBGPSession",
-    "DimMPLSPath",
-    "DimService",
-    "DimSLAPolicy",
-    "FactMPLSPathHops",
-    "FactServiceDependency",
-]
+# ---------------------------------------------------------------------------
+# Derive table list from graph_schema.yaml (no hardcoded table names)
+# ---------------------------------------------------------------------------
+_SCHEMA_PATH = DATA_DIR / "scenarios" / SCENARIO / "graph_schema.yaml"
+if not _SCHEMA_PATH.exists():
+    print(f"ERROR: graph_schema.yaml not found: {_SCHEMA_PATH}"); sys.exit(1)
+
+with open(_SCHEMA_PATH) as _f:
+    _GRAPH_SCHEMA = yaml.safe_load(_f)
+
+# Collect unique table names — vertex csv files (Dim*) + edge csv files (Fact*)
+_seen: set[str] = set()
+LAKEHOUSE_TABLES: list[str] = []
+for vertex in _GRAPH_SCHEMA.get("vertices", []):
+    table = vertex["csv_file"].removesuffix(".csv")
+    if table not in _seen:
+        _seen.add(table)
+        LAKEHOUSE_TABLES.append(table)
+for edge in _GRAPH_SCHEMA.get("edges", []):
+    table = edge["csv_file"].removesuffix(".csv")
+    if table not in _seen:
+        _seen.add(table)
+        LAKEHOUSE_TABLES.append(table)
 
 
 class FabricClient:

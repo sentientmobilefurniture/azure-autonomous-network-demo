@@ -4,24 +4,26 @@ Provision Fabric Eventhouse — create tables and ingest CSV data.
 Automates:
   1. Create Eventhouse (NetworkTelemetryEH_3117) if not exists
   2. Discover the default KQL database and query URI
-  3. Create KQL tables (AlertStream, LinkTelemetry)
+  3. Create KQL tables from scenario.yaml telemetry container definitions
   4. Ingest CSV data via queued ingestion (azure-kusto-ingest)
 
 Prerequisites:
   - provision_lakehouse.py has run (workspace exists)
   - azure_config.env populated with FABRIC_WORKSPACE_ID, FABRIC_CAPACITY_ID
-  - Data files exist in data/eventhouse/
+  - Data files exist in data/scenarios/<name>/data/telemetry/
 
 Usage:
   uv run provision_eventhouse.py
 """
 
+import csv
 import os
 import re
 import sys
 import time
 
 import requests
+import yaml
 from azure.identity import DefaultAzureCredential
 from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 from azure.kusto.ingest import QueuedIngestClient, IngestionProperties
@@ -33,37 +35,70 @@ from _config import (
 )
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration — derived from scenario.yaml + CSV headers
 # ---------------------------------------------------------------------------
 SCENARIO = os.environ.get("DEFAULT_SCENARIO", "")
 if not SCENARIO:
     print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
 DATA_DIR = str(PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "data" / "telemetry")
 
-# Table schemas — column name → KQL type
-TABLE_SCHEMAS = {
-    "AlertStream": {
-        "AlertId": "string",
-        "Timestamp": "datetime",
-        "SourceNodeId": "string",
-        "SourceNodeType": "string",
-        "AlertType": "string",
-        "Severity": "string",
-        "Description": "string",
-        "OpticalPowerDbm": "real",
-        "BitErrorRate": "real",
-        "CPUUtilPct": "real",
-        "PacketLossPct": "real",
-    },
-    "LinkTelemetry": {
-        "LinkId": "string",
-        "Timestamp": "datetime",
-        "UtilizationPct": "real",
-        "OpticalPowerDbm": "real",
-        "BitErrorRate": "real",
-        "LatencyMs": "real",
-    },
-}
+# Load scenario.yaml to discover telemetry container definitions
+_SCENARIO_YAML = PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "scenario.yaml"
+if not _SCENARIO_YAML.exists():
+    print(f"ERROR: scenario.yaml not found: {_SCENARIO_YAML}"); sys.exit(1)
+
+with open(_SCENARIO_YAML) as _f:
+    _SCENARIO_CFG = yaml.safe_load(_f)
+
+_TELEMETRY_CFG = _SCENARIO_CFG.get("data_sources", {}).get("telemetry", {}).get("config", {})
+_CONTAINERS = _TELEMETRY_CFG.get("containers", [])
+
+
+def _build_table_schemas() -> dict[str, dict[str, str]]:
+    """Build KQL table schemas from scenario.yaml containers + CSV headers.
+
+    For each container defined in scenario.yaml:
+      - Read the CSV header row to get column names
+      - Use numeric_fields list to set 'real' type
+      - Use 'Timestamp' convention for 'datetime' type
+      - Default everything else to 'string'
+    """
+    schemas: dict[str, dict[str, str]] = {}
+    for container in _CONTAINERS:
+        table_name = container["name"]
+        csv_file = container.get("csv_file", f"{table_name}.csv")
+        csv_path = os.path.join(DATA_DIR, csv_file)
+        numeric = set(container.get("numeric_fields", []))
+
+        if not os.path.exists(csv_path):
+            print(f"WARNING: CSV not found for table {table_name}: {csv_path}")
+            continue
+
+        with open(csv_path) as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+
+        if not header:
+            print(f"WARNING: Empty CSV for table {table_name}: {csv_path}")
+            continue
+
+        col_types: dict[str, str] = {}
+        for col in header:
+            col = col.strip()
+            if col == "Timestamp":
+                col_types[col] = "datetime"
+            elif col in numeric:
+                col_types[col] = "real"
+            else:
+                col_types[col] = "string"
+
+        schemas[table_name] = col_types
+    return schemas
+
+
+TABLE_SCHEMAS = _build_table_schemas()
+if not TABLE_SCHEMAS:
+    print("ERROR: No telemetry tables found in scenario.yaml containers"); sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

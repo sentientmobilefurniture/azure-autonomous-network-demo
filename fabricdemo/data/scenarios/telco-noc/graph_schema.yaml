@@ -50,6 +50,8 @@ vertices:
     id_column: LinkId
     partition_key: link
     properties: [LinkId, LinkType, CapacityGbps, SourceRouterId, TargetRouterId]
+    property_types:
+      CapacityGbps: BigInt
 
   - label: MPLSPath
     csv_file: DimMPLSPath.csv
@@ -62,18 +64,28 @@ vertices:
     id_column: ServiceId
     partition_key: service
     properties: [ServiceId, ServiceType, CustomerName, CustomerCount, ActiveUsers]
+    property_types:
+      CustomerCount: BigInt
+      ActiveUsers: BigInt
 
   - label: SLAPolicy
     csv_file: DimSLAPolicy.csv
     id_column: SLAPolicyId
     partition_key: policy
     properties: [SLAPolicyId, ServiceId, AvailabilityPct, MaxLatencyMs, PenaltyPerHourUSD, Tier]
+    property_types:
+      AvailabilityPct: Double
+      MaxLatencyMs: BigInt
+      PenaltyPerHourUSD: BigInt
 
   - label: BGPSession
     csv_file: DimBGPSession.csv
     id_column: SessionId
     partition_key: session
     properties: [SessionId, PeerARouterId, PeerBRouterId, ASNumberA, ASNumberB]
+    property_types:
+      ASNumberA: BigInt
+      ASNumberB: BigInt
 
 # ---------------------------------------------------------------------------
 # Edges
