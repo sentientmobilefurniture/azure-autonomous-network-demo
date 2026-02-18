@@ -833,7 +833,8 @@ if $PROVISION_FABRIC; then
 
   # NOTE: Graph Model ID, Eventhouse Query URI, and KQL DB name are
   # discovered at runtime by graph-query-api/fabric_discovery.py.
-  # No need to re-sync these to the Container App via azd provision.
+  # However, FABRIC_WORKSPACE_ID MUST be synced to the Container App
+  # (see Step 7b below) — discovery needs it as the bootstrap value.
 
   ok "Fabric provisioning complete"
 else
@@ -863,6 +864,52 @@ if $PROVISION_AGENTS; then
   ok "Agent provisioning complete — container app will discover agents at runtime"
 else
   step "Step 7: Agent Provisioning (SKIPPED — use --provision-agents)"
+fi
+
+# ── Step 7b: Sync azure_config.env → azd env → Container App ────────
+# After Fabric provisioning (Step 5) populates azure_config.env with
+# discovered IDs (workspace, eventhouse, graph model, etc.), those values
+# must be pushed into azd env so that `azd provision` can inject them
+# into the Container App's environment variables via Bicep.
+#
+# Without this step, the Container App keeps stale values from the
+# initial `azd up` run when Fabric resources didn't exist yet.
+
+step "Step 7b: Syncing azure_config.env → Container App env vars"
+
+# Reload the latest azure_config.env (may have been updated by Step 5)
+if [[ -f "$CONFIG_FILE" ]]; then
+  set -a; source "$CONFIG_FILE"; set +a
+fi
+
+# List of vars that azure_config.env may update after initial azd up.
+# These MUST be pushed into azd env so Bicep can inject them into the
+# Container App.  Add new vars here as needed.
+SYNC_VARS=(
+  FABRIC_WORKSPACE_ID
+)
+
+SYNC_NEEDED=false
+for var in "${SYNC_VARS[@]}"; do
+  LOCAL_VAL="${!var:-}"
+  AZD_VAL=$(azd env get-values 2>/dev/null | grep "^${var}=" | cut -d'"' -f2 || true)
+  if [[ -n "$LOCAL_VAL" && "$LOCAL_VAL" != "$AZD_VAL" ]]; then
+    info "  Syncing $var → azd env  ($AZD_VAL → $LOCAL_VAL)"
+    azd env set "$var" "$LOCAL_VAL"
+    SYNC_NEEDED=true
+  fi
+done
+
+if $SYNC_NEEDED; then
+  info "Env vars changed — running azd provision to update Container App..."
+  if azd provision --no-prompt; then
+    ok "Container App env vars updated"
+  else
+    warn "azd provision failed — Container App may have stale env vars"
+    warn "You can manually fix with: azd env set FABRIC_WORKSPACE_ID <correct-id> && azd provision --no-prompt"
+  fi
+else
+  ok "azd env already in sync with azure_config.env"
 fi
 
 # ── Step 8: Verify unified app health ───────────────────────────────
