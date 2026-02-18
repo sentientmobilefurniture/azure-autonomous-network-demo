@@ -74,9 +74,12 @@ def _get_project_client():
     """Create an AIProjectClient with the project-scoped endpoint."""
     from azure.ai.projects import AIProjectClient
 
-    base_endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
+    endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
     project_name = os.environ["AI_FOUNDRY_PROJECT_NAME"]
-    endpoint = f"{base_endpoint}/api/projects/{project_name}"
+    # Ensure endpoint uses services.ai.azure.com and has /api/projects/ path
+    if "/api/projects/" not in endpoint:
+        endpoint = endpoint.replace("cognitiveservices.azure.com", "services.ai.azure.com")
+        endpoint = f"{endpoint}/api/projects/{project_name}"
     return AIProjectClient(endpoint=endpoint, credential=_get_credential())
 
 

@@ -123,6 +123,90 @@ choose() {
   done
 }
 
+# ── Helper: auto-discover resources from existing Azure RG ─────────
+
+discover_resources_from_rg() {
+  # Populates AUTO-filled variables by querying existing Azure resources.
+  # Called when azure_config.env is missing/empty and --skip-infra is used.
+  local rg="$1"
+
+  if ! az group show --name "$rg" &>/dev/null; then
+    warn "Resource group '$rg' not found — cannot auto-discover resources."
+    return 1
+  fi
+
+  info "Auto-discovering resources from resource group: $rg"
+
+  # Subscription
+  AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv 2>/dev/null || true)
+
+  # AI Foundry (CognitiveServices account of kind AIServices)
+  AI_FOUNDRY_NAME=$(az cognitiveservices account list -g "$rg" \
+    --query "[?kind=='AIServices'].name | [0]" -o tsv 2>/dev/null || true)
+  if [[ -n "$AI_FOUNDRY_NAME" ]]; then
+    AI_FOUNDRY_ENDPOINT="https://${AI_FOUNDRY_NAME}.cognitiveservices.azure.com/"
+    ok "AI Foundry:   $AI_FOUNDRY_NAME"
+  fi
+
+  # AI Foundry project (child account of the foundry)
+  AI_FOUNDRY_PROJECT_NAME=$(az cognitiveservices account list -g "$rg" \
+    --query "[?kind=='AIServices' && contains(name,'proj')].name | [0]" -o tsv 2>/dev/null || true)
+  # Fallback: derive from foundry name  (aif-xxx → proj-xxx)
+  if [[ -z "$AI_FOUNDRY_PROJECT_NAME" && -n "$AI_FOUNDRY_NAME" ]]; then
+    local suffix="${AI_FOUNDRY_NAME#aif-}"
+    AI_FOUNDRY_PROJECT_NAME="proj-${suffix}"
+  fi
+
+  # Build the correct project endpoint (services.ai.azure.com, not cognitiveservices)
+  if [[ -n "$AI_FOUNDRY_NAME" && -n "$AI_FOUNDRY_PROJECT_NAME" ]]; then
+    PROJECT_ENDPOINT="https://${AI_FOUNDRY_NAME}.services.ai.azure.com/api/projects/${AI_FOUNDRY_PROJECT_NAME}"
+    ok "Project EP:   $PROJECT_ENDPOINT"
+  fi
+
+  # AI Search
+  AI_SEARCH_NAME=$(az search service list -g "$rg" \
+    --query "[0].name" -o tsv 2>/dev/null || true)
+  [[ -n "$AI_SEARCH_NAME" ]] && ok "AI Search:    $AI_SEARCH_NAME"
+
+  # Storage Account
+  STORAGE_ACCOUNT_NAME=$(az storage account list -g "$rg" \
+    --query "[0].name" -o tsv 2>/dev/null || true)
+  [[ -n "$STORAGE_ACCOUNT_NAME" ]] && ok "Storage:      $STORAGE_ACCOUNT_NAME"
+
+  # Cosmos DB NoSQL
+  local cosmos_name
+  cosmos_name=$(az cosmosdb list -g "$rg" \
+    --query "[0].name" -o tsv 2>/dev/null || true)
+  if [[ -n "$cosmos_name" ]]; then
+    COSMOS_NOSQL_ENDPOINT=$(az cosmosdb show -n "$cosmos_name" -g "$rg" \
+      --query "documentEndpoint" -o tsv 2>/dev/null || true)
+    [[ -n "$COSMOS_NOSQL_ENDPOINT" ]] && ok "Cosmos DB:    $cosmos_name"
+  fi
+
+  # Container App (unified app)
+  local ca_name
+  ca_name=$(az containerapp list -g "$rg" \
+    --query "[0].name" -o tsv 2>/dev/null || true)
+  if [[ -n "$ca_name" ]]; then
+    APP_URI=$(az containerapp show -n "$ca_name" -g "$rg" \
+      --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+    if [[ -n "$APP_URI" && ! "$APP_URI" =~ ^https:// ]]; then
+      APP_URI="https://$APP_URI"
+    fi
+    GRAPH_QUERY_API_URI="$APP_URI"
+    APP_PRINCIPAL_ID=$(az containerapp show -n "$ca_name" -g "$rg" \
+      --query "identity.principalId" -o tsv 2>/dev/null || true)
+    [[ -n "$APP_URI" ]] && ok "App URI:      $APP_URI"
+  fi
+
+  # Fabric admin from azd env (preserved across runs)
+  if [[ -z "${AZURE_FABRIC_ADMIN:-}" ]]; then
+    AZURE_FABRIC_ADMIN=$(azd env get-values 2>/dev/null | grep "^AZURE_FABRIC_ADMIN=" | cut -d'"' -f2 || true)
+  fi
+
+  ok "Auto-discovery complete"
+}
+
 # ── Step 0: Prerequisites ──────────────────────────────────────────
 
 banner
@@ -376,80 +460,35 @@ if [[ -z "$AZURE_LOC" ]]; then
 fi
 info "Location: $AZURE_LOC"
 
-# If config file exists, read existing values to preserve them
+# Preserve only USER-configurable values from existing config.
+# AUTO values (resource names, endpoints, URIs) are always re-discovered.
 if [[ -f "$CONFIG_FILE" ]]; then
-  info "Existing azure_config.env found — preserving user-set values."
-  set -a
-  source "$CONFIG_FILE"
-  set +a
+  info "Existing azure_config.env found — preserving user-set values only."
+  # Selectively read USER vars; ignore AUTO vars so they get re-discovered.
+  while IFS='=' read -r key val; do
+    case "$key" in
+      MODEL_DEPLOYMENT_NAME|EMBEDDING_MODEL|EMBEDDING_DIMENSIONS|GPT_CAPACITY_1K_TPM|\
+      CORS_ORIGINS|GRAPH_BACKEND|FABRIC_CAPACITY_SKU|FABRIC_WORKSPACE_ID|\
+      FABRIC_EVENTHOUSE_ID|FABRIC_CAPACITY_ID|AZURE_FABRIC_ADMIN)
+        # Strip quotes
+        val="${val%\"}"; val="${val#\"}"
+        val="${val%\'}"; val="${val#\'}"
+        export "$key=$val"
+        ;;
+    esac
+  done < <(grep -E '^[A-Z_]+=' "$CONFIG_FILE" 2>/dev/null || true)
 fi
 
 # Force Fabric GQL backend
 GRAPH_BACKEND=fabric-gql
-
-# Create / update the config — preserve existing values where sensible
-cat > "$CONFIG_FILE" <<ENVEOF
-# ============================================================================
-# Autonomous Network NOC Demo — Configuration (Fabric GQL Flow)
-# ============================================================================
-# Generated by deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)
-# GRAPH_BACKEND=fabric-gql — graph queries use GQL via Microsoft Fabric
-# ============================================================================
-
-# --- Core Azure settings (AUTO: populated after azd up) ---
-AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
-AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-}
-AZURE_LOCATION=${AZURE_LOC}
-
-# --- AI Foundry (AUTO: populated after azd up) ---
-AI_FOUNDRY_NAME=${AI_FOUNDRY_NAME:-}
-AI_FOUNDRY_ENDPOINT=${AI_FOUNDRY_ENDPOINT:-}
-AI_FOUNDRY_PROJECT_NAME=${AI_FOUNDRY_PROJECT_NAME:-}
-PROJECT_ENDPOINT=${PROJECT_ENDPOINT:-}
-
-# --- Model deployments ---
-MODEL_DEPLOYMENT_NAME=${MODEL_DEPLOYMENT_NAME:-gpt-4.1}
-EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
-EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-1536}
-GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
-
-# --- Azure AI Search (AUTO: name after azd up) ---
-AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
-RUNBOOKS_INDEX_NAME=\${RUNBOOKS_INDEX_NAME:-runbooks-index}
-TICKETS_INDEX_NAME=\${TICKETS_INDEX_NAME:-tickets-index}
-# --- Azure Storage (AUTO: name after azd up) ---
-STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
-
-# --- Graph Backend ---
-GRAPH_BACKEND=fabric-gql
-
-# --- Cosmos DB NoSQL / Metadata (AUTO: populated after azd up) ---
-COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
-
-# --- Fabric Resources ---
-# Graph Model ID, Eventhouse URI, and KQL DB name are discovered at runtime.
-FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
-FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
-
-# --- App / CORS ---
-CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
-
-# --- Unified app (AUTO: populated after azd up) ---
-APP_URI=${APP_URI:-}
-GRAPH_QUERY_API_URI=${GRAPH_QUERY_API_URI:-}
-ENVEOF
-
-ok "azure_config.env written with GRAPH_BACKEND=fabric-gql"
 ok "Location: $AZURE_LOC"
+ok "User-configurable values preserved (AUTO values will be re-discovered)"
 
 # ── Step 3: Deploy infrastructure ───────────────────────────────────
 
 if $SKIP_INFRA; then
   step "Step 3: Infrastructure deployment (SKIPPED)"
-  info "Using existing Azure resources. Loading config..."
-  if [[ -f "$CONFIG_FILE" ]]; then
-    set -a; source "$CONFIG_FILE"; set +a
-  fi
+  info "Using existing Azure resources."
 else
   step "Step 3: Deploying Azure infrastructure (azd up)"
 
@@ -515,25 +554,123 @@ else
   ok "Infrastructure deployed!"
 
   # Reload config (postprovision.sh should have populated it)
-  set -a; source "$CONFIG_FILE"; set +a
-
-  # Verify critical values were populated
-  MISSING_AFTER_AZD=()
-  [[ -z "${AI_SEARCH_NAME:-}" ]]          && MISSING_AFTER_AZD+=("AI_SEARCH_NAME")
-  [[ -z "${STORAGE_ACCOUNT_NAME:-}" ]]    && MISSING_AFTER_AZD+=("STORAGE_ACCOUNT_NAME")
-  [[ -z "${AI_FOUNDRY_NAME:-}" ]]         && MISSING_AFTER_AZD+=("AI_FOUNDRY_NAME")
-  [[ -z "${PROJECT_ENDPOINT:-}" ]]        && MISSING_AFTER_AZD+=("PROJECT_ENDPOINT")
-  [[ -z "${APP_URI:-}" ]]                  && MISSING_AFTER_AZD+=("APP_URI")
-
-  if (( ${#MISSING_AFTER_AZD[@]} > 0 )); then
-    fail "azd up completed but these values are missing from azure_config.env:"
-    for v in "${MISSING_AFTER_AZD[@]}"; do echo "   • $v"; done
-    fail "Check postprovision.sh output. You may need to set them manually."
-    exit 1
+  if [[ -f "$CONFIG_FILE" ]]; then
+    set -a; source "$CONFIG_FILE"; set +a
   fi
+fi
 
+# ── Step 3b: Auto-discover / verify resource config ─────────────────
+# Always runs — handles: skip-infra, no-Bicep-changes (postprovision skipped),
+# deleted azure_config.env, or partial postprovision population.
+
+step "Step 3b: Verifying & discovering Azure resource configuration"
+
+# Determine resource group from config, azd env, or convention
+RG="${AZURE_RESOURCE_GROUP:-}"
+if [[ -z "$RG" ]]; then
+  AZD_ENV=$(azd env get-values 2>/dev/null | grep "^AZURE_ENV_NAME=" | cut -d'"' -f2 || true)
+  if [[ -n "$AZD_ENV" ]]; then
+    RG="rg-${AZD_ENV}"
+  fi
+fi
+
+if [[ -z "$RG" ]]; then
+  fail "Cannot determine resource group. Set AZURE_RESOURCE_GROUP or ensure azd env is configured."
+  exit 1
+fi
+
+AZURE_RESOURCE_GROUP="$RG"
+
+# Check if critical values are missing
+if [[ -z "${AI_FOUNDRY_NAME:-}" || -z "${AI_SEARCH_NAME:-}" || -z "${APP_URI:-}" || -z "${STORAGE_ACCOUNT_NAME:-}" ]]; then
+  info "One or more resource values missing — running auto-discovery from $RG..."
+  discover_resources_from_rg "$RG"
+else
+  ok "All critical config values already present"
+fi
+
+# Write the fully resolved azure_config.env
+info "Writing azure_config.env..."
+cat > "$CONFIG_FILE" <<CONFIGEOF
+# ============================================================================
+# Autonomous Network NOC Demo — Configuration (Fabric GQL Flow)
+# ============================================================================
+# Generated by deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)
+# GRAPH_BACKEND=fabric-gql — graph queries use GQL via Microsoft Fabric
+# ============================================================================
+
+# --- Core Azure settings (AUTO: from deployment/discovery) ---
+AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
+AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-}
+AZURE_LOCATION=${AZURE_LOC}
+
+# --- AI Foundry (AUTO: from deployment/discovery) ---
+AI_FOUNDRY_NAME=${AI_FOUNDRY_NAME:-}
+AI_FOUNDRY_ENDPOINT=${AI_FOUNDRY_ENDPOINT:-}
+AI_FOUNDRY_PROJECT_NAME=${AI_FOUNDRY_PROJECT_NAME:-}
+PROJECT_ENDPOINT=${PROJECT_ENDPOINT:-}
+
+# --- Model deployments (USER) ---
+MODEL_DEPLOYMENT_NAME=${MODEL_DEPLOYMENT_NAME:-gpt-4.1}
+EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-1536}
+GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
+
+# --- Azure AI Search (AUTO: from deployment/discovery) ---
+AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
+RUNBOOKS_INDEX_NAME=\${RUNBOOKS_INDEX_NAME:-runbooks-index}
+TICKETS_INDEX_NAME=\${TICKETS_INDEX_NAME:-tickets-index}
+
+# --- Azure Storage (AUTO: from deployment/discovery) ---
+STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
+
+# --- Deployment settings (USER) ---
+GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
+
+# --- App / CORS (USER) ---
+CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
+
+# --- Graph Backend ---
+GRAPH_BACKEND=${GRAPH_BACKEND:-fabric-gql}
+
+# --- Unified app (AUTO: from deployment/discovery) ---
+APP_URI=${APP_URI:-}
+APP_PRINCIPAL_ID=${APP_PRINCIPAL_ID:-}
+GRAPH_QUERY_API_URI=${GRAPH_QUERY_API_URI:-}
+
+# --- Cosmos DB NoSQL / Interactions (AUTO: from deployment/discovery) ---
+COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
+
+# --- Fabric Admin & Capacity (USER/AUTO) ---
+AZURE_FABRIC_ADMIN=${AZURE_FABRIC_ADMIN:-}
+FABRIC_CAPACITY_SKU=${FABRIC_CAPACITY_SKU:-F8}
+
+# --- Fabric Resources ---
+# Graph Model ID, Eventhouse Query URI, and KQL DB name are
+# discovered at runtime by graph-query-api/fabric_discovery.py.
+FABRIC_CAPACITY_ID=${FABRIC_CAPACITY_ID:-}
+FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
+FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
+CONFIGEOF
+
+ok "azure_config.env written"
+set -a; source "$CONFIG_FILE"; set +a
+
+# Final verification — warn but don't exit (user may be doing partial re-deploy)
+MISSING_VARS=()
+[[ -z "${AI_FOUNDRY_NAME:-}" ]]       && MISSING_VARS+=("AI_FOUNDRY_NAME")
+[[ -z "${AI_SEARCH_NAME:-}" ]]        && MISSING_VARS+=("AI_SEARCH_NAME")
+[[ -z "${STORAGE_ACCOUNT_NAME:-}" ]]  && MISSING_VARS+=("STORAGE_ACCOUNT_NAME")
+[[ -z "${APP_URI:-}" ]]               && MISSING_VARS+=("APP_URI")
+[[ -z "${PROJECT_ENDPOINT:-}" ]]      && MISSING_VARS+=("PROJECT_ENDPOINT")
+
+if (( ${#MISSING_VARS[@]} > 0 )); then
+  warn "These values are still missing after discovery:"
+  for v in "${MISSING_VARS[@]}"; do echo "   • $v"; done
+  warn "Resources may not exist yet. Run without --skip-infra to provision them."
+else
   ok "All critical config values populated"
-  info "App URI:            $APP_URI"
+  info "App URI: $APP_URI"
 fi
 
 # ── Step 4: Grant Container App access to Fabric workspace ─────────

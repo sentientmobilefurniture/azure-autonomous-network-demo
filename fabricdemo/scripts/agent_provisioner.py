@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import yaml
 from azure.identity import DefaultAzureCredential
+from azure.core.exceptions import ResourceNotFoundError
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents.models import (
     AzureAISearchTool,
@@ -172,11 +173,19 @@ class AgentProvisioner:
         client = self._get_client()
         agents_client = client.agents
         deleted = 0
-        for agent in agents_client.list_agents(limit=100):
-            if agent.name in AGENT_NAMES:
-                logger.info("Deleting %s (%s)", agent.name, agent.id)
-                agents_client.delete_agent(agent.id)
-                deleted += 1
+        try:
+            for agent in agents_client.list_agents(limit=100):
+                if agent.name in AGENT_NAMES:
+                    logger.info("Deleting %s (%s)", agent.name, agent.id)
+                    try:
+                        agents_client.delete_agent(agent.id)
+                        deleted += 1
+                    except Exception as exc:
+                        logger.warning("Could not delete %s: %s", agent.id, exc)
+        except ResourceNotFoundError as exc:
+            # Stale agent references can cause list pagination to fail;
+            # log and continue — we'll create fresh agents anyway.
+            logger.warning("list_agents hit a stale reference, continuing: %s", exc)
         return deleted
 
     def provision_all(

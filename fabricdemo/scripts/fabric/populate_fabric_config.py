@@ -135,9 +135,17 @@ def main():
     }
 
     # --- AI Foundry — find the Fabric connection name ---
-    project_endpoint = os.getenv("PROJECT_ENDPOINT", "")
+    project_endpoint = os.getenv("PROJECT_ENDPOINT", "").rstrip("/")
     fabric_conn_name = ""
     if project_endpoint:
+        # Ensure endpoint uses services.ai.azure.com and has /api/projects/ path
+        if "/api/projects/" not in project_endpoint:
+            project_name = os.getenv("AI_FOUNDRY_PROJECT_NAME", "")
+            project_endpoint = project_endpoint.replace(
+                "cognitiveservices.azure.com", "services.ai.azure.com"
+            )
+            if project_name:
+                project_endpoint = f"{project_endpoint}/api/projects/{project_name}"
         print(f"\nLooking up Fabric connection in AI Foundry project...")
         try:
             from azure.ai.projects import AIProjectClient

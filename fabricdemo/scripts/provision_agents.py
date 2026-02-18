@@ -65,9 +65,15 @@ def _load_config() -> dict:
         print("WARNING: GRAPH_QUERY_API_URI not set. GraphExplorer and Telemetry agents")
         print("         will be created WITHOUT tools.")
 
-    base_endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
+    # PROJECT_ENDPOINT is the full project-scoped endpoint:
+    # https://<name>.services.ai.azure.com/api/projects/<project>
+    project_endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
+    # Ensure it has the /api/projects/ path (backward compat with old configs)
     project_name = os.environ["AI_FOUNDRY_PROJECT_NAME"]
-    project_endpoint = f"{base_endpoint}/api/projects/{project_name}"
+    if "/api/projects/" not in project_endpoint:
+        # Old-style endpoint (cognitiveservices.azure.com) — convert
+        base_host = project_endpoint.replace("cognitiveservices.azure.com", "services.ai.azure.com")
+        project_endpoint = f"{base_host}/api/projects/{project_name}"
 
     return {
         "project_endpoint": project_endpoint,

@@ -178,7 +178,7 @@ module app 'modules/container-app.bicep' = {
     cpu: '1.0'
     memory: '2Gi'
     env: union([
-      { name: 'PROJECT_ENDPOINT', value: aiFoundry.outputs.foundryEndpoint }
+      { name: 'PROJECT_ENDPOINT', value: aiFoundry.outputs.projectEndpoint }
       { name: 'AI_FOUNDRY_PROJECT_NAME', value: aiFoundry.outputs.projectName }
       { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
       { name: 'CORS_ORIGINS', value: '*' }
@@ -242,6 +242,7 @@ output AZURE_VNET_NAME string = vnet.outputs.name
 output AZURE_AI_FOUNDRY_NAME string = aiFoundry.outputs.foundryName
 output AZURE_AI_FOUNDRY_ENDPOINT string = aiFoundry.outputs.foundryEndpoint
 output AZURE_AI_FOUNDRY_PROJECT_NAME string = aiFoundry.outputs.projectName
+output AZURE_AI_PROJECT_ENDPOINT string = aiFoundry.outputs.projectEndpoint
 output AZURE_SEARCH_NAME string = search.outputs.name
 output AZURE_SEARCH_ENDPOINT string = search.outputs.endpoint
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name

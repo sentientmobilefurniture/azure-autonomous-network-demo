@@ -158,6 +158,34 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
 }
 
 // ---------------------------------------------------------------------------
+// Capability Hosts — required to initialise the Agent Service data plane.
+// Without these, the project exists in ARM but the SDK returns 404
+// "Project not found" for all agent / assistant operations.
+// ---------------------------------------------------------------------------
+
+resource accountCapabilityHost 'Microsoft.CognitiveServices/accounts/capabilityHosts@2025-04-01-preview' = {
+  name: '${foundryName}-caphost'
+  parent: foundry
+  properties: {
+    capabilityHostKind: 'Agents'
+  }
+  dependsOn: [
+    project
+  ]
+}
+
+resource projectCapabilityHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-04-01-preview' = {
+  name: '${projectName}-caphost'
+  parent: project
+  properties: {
+    capabilityHostKind: 'Agents'
+  }
+  dependsOn: [
+    accountCapabilityHost
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 
@@ -166,3 +194,6 @@ output foundryName string = foundry.name
 output foundryEndpoint string = foundry.properties.endpoint
 output foundryPrincipalId string = foundry.identity.principalId
 output projectName string = project.name
+// The AI Projects SDK requires the services.ai.azure.com hostname (not
+// cognitiveservices.azure.com) with the /api/projects/<name> path.
+output projectEndpoint string = 'https://${foundryName}.services.ai.azure.com/api/projects/${project.name}'
