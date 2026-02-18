@@ -25,6 +25,13 @@ from azure.identity import DefaultAzureCredential
 
 GRAPH_BACKEND: str = os.getenv("GRAPH_BACKEND", "fabric-gql").lower()
 
+# ---------------------------------------------------------------------------
+# Topology source: "static" (default) reads pre-built JSON file,
+# "live" queries the graph backend (Fabric GQL / mock).
+# ---------------------------------------------------------------------------
+
+TOPOLOGY_SOURCE: str = os.getenv("TOPOLOGY_SOURCE", "static").lower()
+
 
 # ---------------------------------------------------------------------------
 # AI Search settings (used by /query/health)

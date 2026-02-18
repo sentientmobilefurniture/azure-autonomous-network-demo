@@ -40,6 +40,18 @@ from _config import (
 LAKEHOUSE_ID = os.getenv("FABRIC_LAKEHOUSE_ID", "")
 EVENTHOUSE_ID = os.getenv("FABRIC_EVENTHOUSE_ID", "")
 
+
+def _discover_item_id(workspace_id: str, item_type: str, headers: dict) -> str:
+    """Look up an item ID by type via Fabric REST API (fallback when env var missing)."""
+    import requests as _req
+    r = _req.get(f"{FABRIC_API}/workspaces/{workspace_id}/items", headers=headers)
+    if r.status_code != 200:
+        return ""
+    for item in r.json().get("value", []):
+        if item.get("type") == item_type:
+            return item["id"]
+    return ""
+
 # ---------------------------------------------------------------------------
 # Env file updater
 # ---------------------------------------------------------------------------
@@ -747,18 +759,34 @@ class FabricClient:
             print(f"  ⚠ Delete Ontology failed: {r.status_code} — {r.text}")
             print(f"    Continuing anyway...")
 
-    def create_ontology(self, workspace_id: str, name: str, parts: list[dict]) -> dict:
+    def create_ontology(self, workspace_id: str, name: str, parts: list[dict], max_retries: int = 10, retry_delay: int = 30) -> dict:
+        """Create an Ontology, retrying on ItemDisplayNameNotAvailableYet."""
         body = {
             "displayName": name,
             "description": "Network topology ontology for autonomous NOC demo",
             "definition": {"parts": parts},
         }
-        r = requests.post(
-            f"{FABRIC_API}/workspaces/{workspace_id}/ontologies",
-            headers=self.headers,
-            json=body,
-        )
-        return self.wait_for_lro(r, f"Create Ontology '{name}'")
+        url = f"{FABRIC_API}/workspaces/{workspace_id}/ontologies"
+
+        for attempt in range(1, max_retries + 1):
+            r = requests.post(url, headers=self.headers, json=body)
+
+            if r.status_code == 400:
+                try:
+                    err = r.json()
+                    error_code = err.get("errorCode", "")
+                except Exception:
+                    error_code = ""
+
+                if error_code == "ItemDisplayNameNotAvailableYet":
+                    print(f"  ⏳ Name not available yet (attempt {attempt}/{max_retries}), retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+
+            return self.wait_for_lro(r, f"Create Ontology '{name}'")
+
+        print(f"  ✗ Ontology name '{name}' still not available after {max_retries} attempts ({max_retries * retry_delay}s)")
+        sys.exit(1)
 
     def update_ontology_definition(
         self, workspace_id: str, ontology_id: str, parts: list[dict]
@@ -821,19 +849,31 @@ class FabricClient:
 
 def main():
     # Validate config
-    missing = []
     if not WORKSPACE_ID:
-        missing.append("FABRIC_WORKSPACE_ID")
-    if not LAKEHOUSE_ID:
-        missing.append("FABRIC_LAKEHOUSE_ID")
-    if not EVENTHOUSE_ID:
-        missing.append("FABRIC_EVENTHOUSE_ID")
-    if missing:
-        print(f"✗ Missing env vars: {', '.join(missing)}")
+        print("✗ Missing env var: FABRIC_WORKSPACE_ID")
         print("  Run provision_lakehouse.py first and populate azure_config.env")
         sys.exit(1)
 
     client = FabricClient()
+
+    # Auto-discover missing IDs via Fabric API
+    global LAKEHOUSE_ID, EVENTHOUSE_ID
+    if not LAKEHOUSE_ID:
+        print("  ⚠ FABRIC_LAKEHOUSE_ID not set — looking up via API...")
+        LAKEHOUSE_ID = _discover_item_id(WORKSPACE_ID, "Lakehouse", client.headers)
+        if LAKEHOUSE_ID:
+            print(f"  ✓ Discovered FABRIC_LAKEHOUSE_ID = {LAKEHOUSE_ID}")
+        else:
+            print("  ✗ No Lakehouse found in workspace. Run provision_lakehouse.py first.")
+            sys.exit(1)
+    if not EVENTHOUSE_ID:
+        print("  ⚠ FABRIC_EVENTHOUSE_ID not set — looking up via API...")
+        EVENTHOUSE_ID = _discover_item_id(WORKSPACE_ID, "Eventhouse", client.headers)
+        if EVENTHOUSE_ID:
+            print(f"  ✓ Discovered FABRIC_EVENTHOUSE_ID = {EVENTHOUSE_ID}")
+        else:
+            print("  ✗ No Eventhouse found in workspace. Run provision_eventhouse.py first.")
+            sys.exit(1)
 
     print("=" * 60)
     print(f"Provisioning Fabric IQ Ontology: {ONTOLOGY_NAME}")

@@ -5,7 +5,7 @@ info:
   description: |
     Micro-API for executing graph queries against the topology database.
     Used by Foundry agents via OpenApiTool.
-# NOTE: Template placeholders ({base_url}, {graph_name}, {query_language_description})
+# NOTE: Template placeholders ({base_url}, {query_language_description})
 # are substituted at runtime by agent_provisioner.py.
 servers:
   - url: "{base_url}"
@@ -19,15 +19,6 @@ paths:
       description: |
         {query_language_description}
         Returns columns and data rows from the network topology ontology.
-      parameters:
-        - name: X-Graph
-          in: header
-          required: true
-          schema:
-            type: string
-            enum: ["{graph_name}"]
-          description: |
-            The graph name to route this request to. Always use the value shown.
       requestBody:
         required: true
         content:

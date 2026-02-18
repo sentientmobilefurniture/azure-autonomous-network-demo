@@ -347,11 +347,23 @@ def _poll_indexer(
     """Poll indexer status until complete or timeout. Returns True if successful."""
     print(f"    Polling indexer '{indexer_name}'...")
 
-    # Reset / run the indexer
-    try:
-        indexer_client.run_indexer(indexer_name)
-    except Exception as e:
-        print(f"    ⚠ Could not start indexer: {e}")
+    # Reset / run the indexer (retry if another invocation is in progress)
+    indexer_started = False
+    for attempt in range(1, 7):
+        try:
+            indexer_client.run_indexer(indexer_name)
+            indexer_started = True
+            break
+        except Exception as e:
+            if "concurrent" in str(e).lower() or "another indexer" in str(e).lower():
+                print(f"    ⏳ Indexer busy (attempt {attempt}/6), waiting 15s...")
+                time.sleep(15)
+            else:
+                print(f"    ⚠ Could not start indexer: {e}")
+                break
+
+    if not indexer_started:
+        print("    ⚠ Proceeding — will poll for existing run to complete")
 
     start = time.time()
     while time.time() - start < timeout_seconds:

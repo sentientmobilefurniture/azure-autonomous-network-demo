@@ -116,18 +116,17 @@ No Fabric Graph queries. No cold-start. Sub-millisecond response.
 **What:** Ensure the generated `topology.json` is available inside the container at `/app/graph-query-api/backends/fixtures/topology.json`.
 
 **Details:**
+- `deploy.sh` runs `scripts/generate_topology_json.py` **before** `azd up` (which triggers the Docker build)
 - The Dockerfile already copies `graph-query-api/backends/` into the image:
   ```dockerfile
   COPY graph-query-api/backends/ ./backends/
   ```
   So placing `topology.json` in `graph-query-api/backends/fixtures/` is sufficient — it will be included automatically.
-- Run `scripts/generate_topology_json.py` as part of the build prep (before `docker build`), or as a Dockerfile `RUN` step.
-
-**Preferred approach:** Generate it as a pre-build step in `deploy.sh` so it's committed/versioned alongside the CSVs. The Dockerfile doesn't need to change.
+- The generated file is `.gitignore`d — it's always freshly generated from CSVs during deploy.
 
 **Files to update:**
-- `deploy.sh` — add topology JSON generation step before `azd deploy`
-- *or* just commit the generated `topology.json` to the repo (simplest)
+- `deploy.sh` — add topology JSON generation step (between Step 2 config and Step 3 infra deploy)
+- `.gitignore` — add `graph-query-api/backends/fixtures/topology.json`
 
 ---
 
@@ -203,5 +202,5 @@ In the `topology()` endpoint:
 ## Decision Points
 
 1. **Option A vs C?** — Option C (hybrid with `TOPOLOGY_SOURCE` env var) is recommended. Minimal frontend change, easy fallback to live queries, same API contract.
-2. **Generate at build time vs commit to repo?** — Committing the generated `topology.json` is simpler and guarantees it's always available. Regenerate whenever CSVs change.
+2. **Generate during deploy** — `deploy.sh` runs the generator before `azd up` so the JSON is always fresh from CSVs. Not committed to git.
 3. **Should agents still use live graph queries?** — Yes. `POST /query/graph` (used by agents via OpenApiTool) is unaffected. Only the *visualization* topology endpoint changes.

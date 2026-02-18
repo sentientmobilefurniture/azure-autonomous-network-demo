@@ -56,6 +56,9 @@ data/network/
 data/telemetry/
 data/cosmosdb/
 
+# --- Generated topology JSON (created by deploy.sh / generate_topology_json.py) ---
+graph-query-api/backends/fixtures/topology.json
+
 # --- Azure Functions (local dev artifacts) ---
 mcp_server/.python_packages/
 mcp_server/local.settings.json

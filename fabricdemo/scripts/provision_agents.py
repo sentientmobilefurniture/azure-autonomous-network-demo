@@ -162,7 +162,6 @@ def main():
         prompts=prompts,
         graph_query_api_uri=config["graph_query_api_uri"],
         graph_backend=config["graph_backend"],
-        graph_name=config["graph_name"],
         runbooks_index=config["runbooks_index"],
         tickets_index=config["tickets_index"],
         search_connection_id=search_conn_id,

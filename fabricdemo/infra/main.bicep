@@ -29,6 +29,9 @@ param gptCapacity int = 300
 @description('Graph backend: "fabric-gql" uses Microsoft Fabric for graph queries.')
 param graphBackend string = 'fabric-gql'
 
+@description('Topology source: "static" reads pre-built JSON (instant), "live" queries graph backend.')
+param topologySource string = 'static'
+
 @description('Fabric workspace ID (set after Fabric provisioning)')
 param fabricWorkspaceId string = ''
 
@@ -183,6 +186,7 @@ module app 'modules/container-app.bicep' = {
       { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
       { name: 'CORS_ORIGINS', value: '*' }
       { name: 'GRAPH_BACKEND', value: graphBackend }
+      { name: 'TOPOLOGY_SOURCE', value: topologySource }
       { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosNoSql.outputs.cosmosNoSqlEndpoint }
       { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
       { name: 'AZURE_RESOURCE_GROUP', value: rg.name }

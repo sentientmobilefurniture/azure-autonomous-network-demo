@@ -9,8 +9,6 @@ Finds the workspace by FABRIC_WORKSPACE_NAME, then discovers:
   - FABRIC_KQL_DB_ID
   - FABRIC_KQL_DB_NAME
   - EVENTHOUSE_QUERY_URI
-  - FABRIC_CONNECTION_NAME  (from AI Foundry project connections)
-
 Usage:
   uv run populate_fabric_config.py
 """
@@ -133,57 +131,6 @@ def main():
         "FABRIC_KQL_DB_NAME": kql_db_name,
         "EVENTHOUSE_QUERY_URI": query_uri,
     }
-
-    # --- AI Foundry — find the Fabric connection name ---
-    project_endpoint = os.getenv("PROJECT_ENDPOINT", "").rstrip("/")
-    fabric_conn_name = ""
-    if project_endpoint:
-        # Ensure endpoint uses services.ai.azure.com and has /api/projects/ path
-        if "/api/projects/" not in project_endpoint:
-            project_name = os.getenv("AI_FOUNDRY_PROJECT_NAME", "")
-            project_endpoint = project_endpoint.replace(
-                "cognitiveservices.azure.com", "services.ai.azure.com"
-            )
-            if project_name:
-                project_endpoint = f"{project_endpoint}/api/projects/{project_name}"
-        print(f"\nLooking up Fabric connection in AI Foundry project...")
-        try:
-            from azure.ai.projects import AIProjectClient
-
-            project_client = AIProjectClient(
-                endpoint=project_endpoint,
-                credential=DefaultAzureCredential(),
-            )
-            # List all connections and find ones that look like Fabric
-            connections = project_client.connections.list()
-            for conn in connections:
-                # Fabric connections have category "MicrosoftFabric" or contain "fabric" in name
-                conn_props = conn.properties if hasattr(conn, "properties") else {}
-                category = getattr(conn_props, "category", "") if conn_props else ""
-                conn_name = conn.name if hasattr(conn, "name") else ""
-
-                if "fabric" in category.lower() or "fabric" in conn_name.lower():
-                    fabric_conn_name = conn_name
-                    print(f"  ✓ FABRIC_CONNECTION_NAME = {fabric_conn_name}  (category: {category})")
-                    break
-
-            if not fabric_conn_name:
-                # Print all connections so the user can identify the right one
-                print("  ⚠ No Fabric connection found. Available connections:")
-                connections = project_client.connections.list()
-                for conn in connections:
-                    conn_props = conn.properties if hasattr(conn, "properties") else {}
-                    category = getattr(conn_props, "category", "?") if conn_props else "?"
-                    conn_name = conn.name if hasattr(conn, "name") else "?"
-                    print(f"    - {conn_name}  (category: {category})")
-        except Exception as e:
-            print(f"  ⚠ Could not query AI Foundry connections: {e}")
-            print("    You may need to install: pip install azure-ai-projects")
-    else:
-        print("\n  ⚠ PROJECT_ENDPOINT not set — skipping AI Foundry connection lookup")
-
-    if fabric_conn_name:
-        updates["FABRIC_CONNECTION_NAME"] = fabric_conn_name
 
     # Only write non-empty values
     updates = {k: v for k, v in updates.items() if v}

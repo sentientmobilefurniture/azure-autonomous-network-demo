@@ -27,7 +27,6 @@ class GraphQueryResponse(BaseModel):
 
 class TelemetryQueryRequest(BaseModel):
     query: str
-    container_name: str = "AlertStream"
 
 
 class TelemetryQueryResponse(BaseModel):

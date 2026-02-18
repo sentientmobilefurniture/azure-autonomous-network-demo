@@ -484,11 +484,54 @@ GRAPH_BACKEND=fabric-gql
 ok "Location: $AZURE_LOC"
 ok "User-configurable values preserved (AUTO values will be re-discovered)"
 
+# ── Step 2b: Generate static topology JSON ──────────────────────────
+# Builds topology.json from CSVs + graph_schema.yaml so the frontend
+# graph visualizer loads instantly without querying Fabric Graph.
+# The file lands in graph-query-api/backends/fixtures/ which the
+# Dockerfile already COPYs into the container image.
+
+step "Step 2b: Generating static topology JSON"
+
+TOPO_SCRIPT="$PROJECT_ROOT/scripts/generate_topology_json.py"
+TOPO_OUTPUT="$PROJECT_ROOT/graph-query-api/backends/fixtures/topology.json"
+
+if [[ -f "$TOPO_SCRIPT" ]]; then
+  if command -v uv &>/dev/null; then
+    info "Generating topology.json from scenario CSVs..."
+    (cd "$PROJECT_ROOT" && uv run python "$TOPO_SCRIPT") && ok "topology.json generated → $TOPO_OUTPUT" || warn "Topology generation failed — frontend will fall back to live queries"
+  elif command -v python3 &>/dev/null; then
+    info "Generating topology.json from scenario CSVs (python3)..."
+    (cd "$PROJECT_ROOT" && python3 "$TOPO_SCRIPT") && ok "topology.json generated → $TOPO_OUTPUT" || warn "Topology generation failed — frontend will fall back to live queries"
+  else
+    warn "Neither uv nor python3 found — skipping topology generation"
+  fi
+else
+  warn "Topology generator script not found at $TOPO_SCRIPT — skipping"
+fi
+
 # ── Step 3: Deploy infrastructure ───────────────────────────────────
 
 if $SKIP_INFRA; then
-  step "Step 3: Infrastructure deployment (SKIPPED)"
+  step "Step 3: Infrastructure provisioning (SKIPPED)"
   info "Using existing Azure resources."
+
+  # Still deploy the app container (rebuild + push image)
+  info "Deploying app container..."
+
+  # Ensure uv.lock files exist for Docker builds (--frozen requires them)
+  for svc_dir in api graph-query-api; do
+    if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
+      info "Generating missing uv.lock for $svc_dir..."
+      (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
+      ok "$svc_dir/uv.lock created"
+    fi
+  done
+
+  if ! azd deploy app --no-prompt; then
+    fail "azd deploy app failed."
+    exit 1
+  fi
+  ok "App container deployed!"
 else
   step "Step 3: Deploying Azure infrastructure (azd up)"
 
@@ -633,6 +676,9 @@ CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
 # --- Graph Backend ---
 GRAPH_BACKEND=${GRAPH_BACKEND:-fabric-gql}
 
+# --- Topology Source (static = pre-built JSON, live = query graph) ---
+TOPOLOGY_SOURCE=static
+
 # --- Unified app (AUTO: from deployment/discovery) ---
 APP_URI=${APP_URI:-}
 APP_PRINCIPAL_ID=${APP_PRINCIPAL_ID:-}
@@ -650,7 +696,11 @@ FABRIC_CAPACITY_SKU=${FABRIC_CAPACITY_SKU:-F8}
 # discovered at runtime by graph-query-api/fabric_discovery.py.
 FABRIC_CAPACITY_ID=${FABRIC_CAPACITY_ID:-}
 FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
+FABRIC_LAKEHOUSE_ID=${FABRIC_LAKEHOUSE_ID:-}
 FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
+FABRIC_KQL_DB_ID=${FABRIC_KQL_DB_ID:-}
+FABRIC_KQL_DB_NAME=${FABRIC_KQL_DB_NAME:-}
+EVENTHOUSE_QUERY_URI=${EVENTHOUSE_QUERY_URI:-}
 CONFIGEOF
 
 ok "azure_config.env written"

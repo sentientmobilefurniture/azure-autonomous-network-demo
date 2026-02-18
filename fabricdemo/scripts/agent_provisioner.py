@@ -64,8 +64,14 @@ CONNECTOR_OPENAPI_VARS: dict[str, dict[str, str]] = {
             "RETURN r.RouterId."
         ),
         "telemetry_query_language_description": (
-            "Submits a KQL query against telemetry data stored in "
-            "Microsoft Fabric Eventhouse."
+            "KQL (Kusto Query Language). Queries start with the table name "
+            "followed by pipe operators. Example: AlertStream | where "
+            "Severity == 'CRITICAL' | top 10 by Timestamp desc | project "
+            "AlertId, Timestamp, SourceNodeId, AlertType. Available tables: "
+            "AlertStream (network alerts) and LinkTelemetry (link metrics). "
+            "Do NOT use SQL syntax (SELECT, FROM, GROUP BY). Use KQL: "
+            "project (select columns), summarize (aggregation), top (order+limit), "
+            "take (limit), where (filter)."
         ),
     },
 }
@@ -105,7 +111,6 @@ def _load_openapi_spec(
     graph_query_api_uri: str,
     graph_backend: str = "fabric",
     keep_path: str | None = None,
-    graph_name: str = "topology",
     *,
     spec_template: str | None = None,
 ) -> dict:
@@ -140,7 +145,6 @@ def _load_openapi_spec(
         raw = spec_file.read_text(encoding="utf-8")
 
     raw = raw.replace("{base_url}", graph_query_api_uri.rstrip("/"))
-    raw = raw.replace("{graph_name}", graph_name)
     spec = yaml.safe_load(raw)
     if keep_path and "paths" in spec:
         # Prefix match: "/query/graph" matches "/query/graph/telco-noc-topology"
@@ -194,7 +198,6 @@ class AgentProvisioner:
         prompts: dict[str, str],
         graph_query_api_uri: str,
         graph_backend: str,
-        graph_name: str,
         runbooks_index: str,
         tickets_index: str,
         search_connection_id: str,
@@ -211,7 +214,6 @@ class AgentProvisioner:
               Keys: "orchestrator", "graph_explorer", "telemetry", "runbook", "ticket"
             graph_query_api_uri: Base URL for OpenAPI tools
             graph_backend: "fabric" or "mock"
-            graph_name: Graph name for X-Graph header (e.g. "telco-noc-topology")
             runbooks_index: AI Search index name for RunbookKB
             tickets_index: AI Search index name for HistoricalTicket
             search_connection_id: Foundry connection ID for AI Search
@@ -240,7 +242,7 @@ class AgentProvisioner:
         emit("graph_explorer", "Creating GraphExplorerAgent...")
         ge_tools = []
         if graph_query_api_uri:
-            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/graph", graph_name=graph_name, spec_template="graph")
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/graph", spec_template="graph")
             tool = OpenApiTool(
                 name="query_graph",
                 spec=spec,
@@ -262,7 +264,7 @@ class AgentProvisioner:
         emit("telemetry", "Creating TelemetryAgent...")
         tel_tools = []
         if graph_query_api_uri:
-            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/telemetry", graph_name=graph_name, spec_template="telemetry")
+            spec = _load_openapi_spec(graph_query_api_uri, graph_backend, "/query/telemetry", spec_template="telemetry")
             tool = OpenApiTool(
                 name="query_telemetry",
                 spec=spec,

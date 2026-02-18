@@ -150,17 +150,33 @@ class FabricClient:
             print(f"  ⚠ Delete Eventhouse failed: {r.status_code} — {r.text}")
             print(f"    Continuing anyway...")
 
-    def create_eventhouse(self, workspace_id: str, name: str) -> dict:
+    def create_eventhouse(self, workspace_id: str, name: str, max_retries: int = 10, retry_delay: int = 30) -> dict:
+        """Create an Eventhouse, retrying on ItemDisplayNameNotAvailableYet."""
         body = {
             "displayName": name,
             "description": f"Eventhouse for {WORKSPACE_NAME}",
         }
-        r = requests.post(
-            f"{FABRIC_API}/workspaces/{workspace_id}/eventhouses",
-            headers=self.headers,
-            json=body,
-        )
-        return self._wait_for_lro(r, f"Create Eventhouse '{name}'")
+        url = f"{FABRIC_API}/workspaces/{workspace_id}/eventhouses"
+
+        for attempt in range(1, max_retries + 1):
+            r = requests.post(url, headers=self.headers, json=body)
+
+            if r.status_code == 400:
+                try:
+                    err = r.json()
+                    error_code = err.get("errorCode", "")
+                except Exception:
+                    error_code = ""
+
+                if error_code == "ItemDisplayNameNotAvailableYet":
+                    print(f"  ⏳ Name not available yet (attempt {attempt}/{max_retries}), retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+
+            return self._wait_for_lro(r, f"Create Eventhouse '{name}'")
+
+        print(f"  ✗ Eventhouse name '{name}' still not available after {max_retries} attempts ({max_retries * retry_delay}s)")
+        sys.exit(1)
 
     def find_kql_database(
         self, workspace_id: str, eventhouse_id: str
