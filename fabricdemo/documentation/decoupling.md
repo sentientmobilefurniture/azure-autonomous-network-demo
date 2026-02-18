@@ -1,8 +1,10 @@
-# Scenario Decoupling — Implementation Plan
+# Scenario Decoupling — Implementation Record
 
 > **Goal:** Remove every hardcoded `telco-noc` reference from source code so that `./deploy.sh --scenario <name>` reads everything from `data/scenarios/<name>/scenario.yaml` and provisions automatically.
 
 > **Invariant:** After this work, adding a new scenario requires **only** creating a new `data/scenarios/<name>/` folder with a valid `scenario.yaml` — zero code changes.
+
+> **Status: ✅ COMPLETE** — All changes implemented and verified. `grep -rn "telco-noc"` returns zero results across `api/`, `graph-query-api/`, `frontend/src/`, `scripts/`, `hooks/`, and `infra/`.
 
 ---
 
@@ -12,41 +14,42 @@
 |---|---|
 | **Single source of truth** | `scenario.yaml` is the only place scenario-specific values live. |
 | **Runtime env var** | `DEFAULT_SCENARIO` is the one env var that names the active scenario. Every consumer reads it. |
-| **Resolve-once, pass-down** | A new shared module (`scenario_loader.py`) parses `scenario.yaml` once and hands a typed dict to all consumers. |
+| **Resolve-once, pass-down** | A shared module (`scenario_loader.py`) parses `scenario.yaml` once and hands a typed dict to all consumers. |
 | **No search-and-replace** | Don't just swap `telco-noc` for a variable — delete the hardcoded structures entirely and derive them from `scenario.yaml`. |
-| **Index names from YAML** | `scenario.yaml` is authoritative for AI Search index names. Current code uses `runbooks-index` / `tickets-index` while `scenario.yaml` uses `telco-noc-runbooks-index` / `telco-noc-tickets-index`. After decoupling, the YAML values win everywhere. |
+| **Index names from YAML** | `scenario.yaml` is authoritative for AI Search index names. |
 
 ### 0.1 Index Name Reconciliation
 
-**Current state (inconsistency):**
-- `scenario.yaml` defines: `telco-noc-runbooks-index`, `telco-noc-tickets-index`
-- Code / Bicep / env vars use: `runbooks-index`, `tickets-index`
+**Previous state (inconsistency):**
+- `scenario.yaml` defined: `telco-noc-runbooks-index`, `telco-noc-tickets-index`
+- Code / Bicep / env vars used: `runbooks-index`, `tickets-index`
 
-**Decision:** `scenario.yaml` is the single source of truth. After decoupling:
-- The Bicep env vars `RUNBOOKS_INDEX_NAME` / `TICKETS_INDEX_NAME` will be set from `scenario.yaml` values via `azd env set` (or `deploy.sh` pre-processing).
-- All runtime code reads index names from `scenario.yaml` or from the env vars that `deploy.sh` populates from it.
+**Resolution:** `scenario.yaml` is the single source of truth. After decoupling:
+- `deploy.sh` extracts index names from `scenario.yaml` via python3 and sets them with `azd env set`.
+- Bicep parameters `runbooksIndexName` / `ticketsIndexName` receive these values and pass them to the Container App.
+- All runtime code reads index names from `scenario.yaml` (with env var fallbacks for backward compatibility).
 - `provision_search_index.py` creates indexes using the names from `scenario.yaml`.
 
 ---
 
-## 1. Add `--scenario` to `deploy.sh`
+## 1. `deploy.sh` — `--scenario` flag ✅
 
 **File:** `deploy.sh`
 
 ### 1.1 New CLI flag
 
-Add a `--scenario` argument alongside the existing flags (after line 65):
+Added `SCENARIO_NAME=""` variable alongside existing flags, and `--scenario)` case to the argument parser:
 
 ```bash
 SCENARIO_NAME=""
 
-# Add to the while loop:
+# In the while loop:
     --scenario)          SCENARIO_NAME="$2"; shift 2 ;;
 ```
 
 ### 1.2 Default discovery
 
-If `--scenario` is not provided, auto-detect. Add after argument parsing (around line 88):
+After argument parsing — auto-detects scenario from `data/scenarios/` if `--scenario` not provided:
 
 ```bash
 if [[ -z "$SCENARIO_NAME" ]]; then
@@ -72,6 +75,8 @@ fi
 
 ### 1.3 Validate, export, and extract YAML values
 
+Scenario validation, export, and python3-based YAML extraction of index names:
+
 ```bash
 SCENARIO_DIR="$PROJECT_ROOT/data/scenarios/$SCENARIO_NAME"
 SCENARIO_YAML="$SCENARIO_DIR/scenario.yaml"
@@ -84,8 +89,6 @@ fi
 export DEFAULT_SCENARIO="$SCENARIO_NAME"
 info "Scenario: $SCENARIO_NAME (from $SCENARIO_YAML)"
 
-# Extract index names from scenario.yaml for Bicep / env vars
-# Uses python3 to parse YAML — python3 is guaranteed available
 RUNBOOKS_INDEX_NAME=$(python3 -c "
 import yaml
 with open('$SCENARIO_YAML') as f:
@@ -99,9 +102,12 @@ with open('$SCENARIO_YAML') as f:
 print(c.get('data_sources',{}).get('search_indexes',{}).get('tickets',{}).get('index_name','tickets-index'))
 ")
 export RUNBOOKS_INDEX_NAME TICKETS_INDEX_NAME
+info "Index names: runbooks=$RUNBOOKS_INDEX_NAME, tickets=$TICKETS_INDEX_NAME"
 ```
 
 ### 1.4 Propagate to azd env
+
+Three `azd env set` calls in the infrastructure section (~line 608):
 
 ```bash
 azd env set DEFAULT_SCENARIO "$SCENARIO_NAME"
@@ -109,43 +115,27 @@ azd env set RUNBOOKS_INDEX_NAME "$RUNBOOKS_INDEX_NAME"
 azd env set TICKETS_INDEX_NAME "$TICKETS_INDEX_NAME"
 ```
 
-This ensures all three values flow into `postprovision.sh` hooks, Container App env vars (via Bicep parameters), and all downstream scripts.
+### 1.5 Pass scenario to topology generation
 
-### 1.5 Pass scenario to topology generation (line ~501)
-
-Replace the hardcoded invocation:
+Updated both `uv run` and `python3` fallback invocations (~line 553) to pass `--scenario "$SCENARIO_NAME"`:
 
 ```bash
-# Before (line 501)
-(cd "$PROJECT_ROOT" && uv run python "$TOPO_SCRIPT")
-
-# After
 (cd "$PROJECT_ROOT" && uv run python "$TOPO_SCRIPT" --scenario "$SCENARIO_NAME")
-```
-
-Same for the python3 fallback on line 504:
-
-```bash
-# Before (line 504)
-(cd "$PROJECT_ROOT" && python3 "$TOPO_SCRIPT")
-
-# After
+# and
 (cd "$PROJECT_ROOT" && python3 "$TOPO_SCRIPT" --scenario "$SCENARIO_NAME")
 ```
 
-`generate_topology_json.py` already accepts `--scenario` — this just wires it up.
+### 1.6 Provisioning script invocations
 
-### 1.6 Provisioning script invocations (lines 768–806)
-
-Each provisioning script reads `DEFAULT_SCENARIO` from env. Since we exported it in 1.3, no changes to the invocation lines — but every script must honour it (steps 3.x below).
+No changes needed — each script reads `DEFAULT_SCENARIO` from the exported env var.
 
 ---
 
-## 2. Create `scenario_loader.py` — the shared resolver
+## 2. `scripts/scenario_loader.py` — New shared resolver ✅
 
 **New file:** `scripts/scenario_loader.py`
 
-This is the single module that parses `scenario.yaml` and returns a structured dict. Every script imports from here instead of hardcoding paths or names.
+Parses `scenario.yaml` and returns a resolved config dict. All provisioning scripts import from here.
 
 ```python
 """
@@ -155,7 +145,7 @@ Usage:
     from scenario_loader import load_scenario
 
     sc = load_scenario()             # uses DEFAULT_SCENARIO env var
-    sc = load_scenario("telco-noc")  # explicit name
+    sc = load_scenario("my-scenario")  # explicit name
 """
 from __future__ import annotations
 
@@ -231,24 +221,20 @@ def load_scenario(name: str | None = None) -> dict:
 
 ---
 
-## 3. Update provisioning scripts (`scripts/`)
+## 3. Provisioning scripts (`scripts/`) ✅
 
-Each script replaces its hardcoded path / name with a call to `load_scenario()`.
+Each script replaced its hardcoded path/name with a call to `load_scenario()`.
 
 ### 3.1 `scripts/provision_search_index.py`
 
-**Current hardcoded references (actual line numbers):**
+**Changes:**
 
-| Line | Current Code | Change To |
+| What | Before | After |
 |---|---|---|
-| 8 | `For the telco-noc demo, creates:` | `For the active scenario, creates:` |
-| 9 | `- runbooks-index:   blob container 'runbooks'` | Remove — will be dynamic |
-| 10 | `- tickets-index:    blob container 'tickets'` | Remove — will be dynamic |
-| 70 | `KNOWLEDGE_DIR = PROJECT_ROOT / "data" / "scenarios" / "telco-noc" / "data" / "knowledge"` | `sc = load_scenario()` then `KNOWLEDGE_DIR = sc["paths"]["runbooks"].parent` |
-| 83 | `"runbooks-index": {` (INDEX_CONFIGS dict key) | Build dynamically from `sc["runbooks_index_name"]` |
-| 90 | `"tickets-index": {` (INDEX_CONFIGS dict key) | Build dynamically from `sc["tickets_index_name"]` |
-
-**Implementation:** Replace the top-level `KNOWLEDGE_DIR` and `INDEX_CONFIGS` with:
+| Docstring (line 8) | `For the telco-noc demo, creates:` | `For the active scenario, creates indexes as defined in scenario.yaml` |
+| Docstring (lines 9–10) | Hardcoded index names | Removed — now dynamic |
+| `KNOWLEDGE_DIR` | `PROJECT_ROOT / "data" / "scenarios" / "telco-noc" / "data" / "knowledge"` | `sc["paths"]["runbooks"].parent` |
+| `INDEX_CONFIGS` dict | Hardcoded `"runbooks-index": {...}` and `"tickets-index": {...}` | Built dynamically from `sc["runbooks_index_name"]`, `sc["tickets_index_name"]`, etc. |
 
 ```python
 from scenario_loader import load_scenario
@@ -276,16 +262,14 @@ INDEX_CONFIGS = {
 
 ### 3.2 `scripts/provision_cosmos.py`
 
-**Current hardcoded references (actual line numbers):**
+**Changes:**
 
-| Line | Current Code | Change To |
+| What | Before | After |
 |---|---|---|
-| 6 | `For the telco-noc demo, loads AlertStream` | Generic docstring |
-| 10 | `Read CSVs from local data/scenarios/telco-noc/data/telemetry/` | Generic path |
-| 47 | `DATA_DIR = PROJECT_ROOT / "data" / "scenarios" / "telco-noc" / "data" / "telemetry"` | `sc = load_scenario()` then `DATA_DIR = sc["paths"]["telemetry"]` |
-| 57–72 | `CONTAINERS` dict hardcoded | Build from `sc["data_sources"]["telemetry"]["config"]["containers"]` |
-
-**Implementation:** Replace lines 47–72:
+| Docstring | `For the telco-noc demo, loads AlertStream` | `Loads containers defined in scenario.yaml` |
+| Docstring | `Read CSVs from local data/scenarios/telco-noc/data/telemetry/` | Generic path reference |
+| `DATA_DIR` | `PROJECT_ROOT / "data" / "scenarios" / "telco-noc" / "data" / "telemetry"` | `sc["paths"]["telemetry"]` |
+| `CONTAINERS` dict | Hardcoded with `AlertStream`, `MetricStream`, `ConfigSnapshot` | Built dynamically from `sc["data_sources"]["telemetry"]["config"]["containers"]` |
 
 ```python
 from scenario_loader import load_scenario
@@ -293,74 +277,61 @@ from scenario_loader import load_scenario
 sc = load_scenario()
 DATA_DIR = sc["paths"]["telemetry"]
 
-# Build container definitions from scenario.yaml
 _telemetry_cfg = sc["data_sources"]["telemetry"]["config"]
 CONTAINERS = {}
-for c in _telemetry_cfg.get("containers", []):
-    CONTAINERS[c["name"]] = {
-        "partition_key": c["partition_key"],
-        "csv_file": c["csv_file"],
-        "id_field": c.get("id_field"),
-        "numeric_fields": set(c.get("numeric_fields", [])),
+for _c in _telemetry_cfg.get("containers", []):
+    CONTAINERS[_c["name"]] = {
+        "partition_key": _c["partition_key"],
+        "csv_file": _c["csv_file"],
+        "id_field": _c.get("id_field"),
+        "numeric_fields": set(_c.get("numeric_fields", [])),
     }
 ```
 
 ### 3.3 `scripts/provision_agents.py`
 
-**Current hardcoded references (actual line numbers):**
+**Changes:**
 
-| Line | Current Code | Change To |
+| What | Before | After |
 |---|---|---|
-| 31 | `SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")` | `sc = load_scenario()` |
-| 32 | `PROMPTS_DIR = PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "data" / "prompts"` | `PROMPTS_DIR = sc["paths"]["prompts"]` |
-| 90 | `"graph_name": os.environ.get("DEFAULT_SCENARIO", "telco-noc")` | `"graph_name": sc["graph_name"]` |
-
-**Implementation:** Replace lines 31–32:
+| `SCENARIO` variable | `os.environ.get("DEFAULT_SCENARIO", "telco-noc")` | Replaced with `sc = load_scenario()` |
+| `PROMPTS_DIR` | `PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "data" / "prompts"` | `sc["paths"]["prompts"]` |
+| `"graph_name"` in config dict | `os.environ.get("DEFAULT_SCENARIO", "telco-noc")` | `sc["graph_name"]` |
 
 ```python
 from scenario_loader import load_scenario
 
 sc = load_scenario()
 PROMPTS_DIR = sc["paths"]["prompts"]
-```
-
-And line 90:
-
-```python
+# ...
         "graph_name": sc["graph_name"],
 ```
 
 ### 3.4 `scripts/generate_topology_json.py`
 
-**Current hardcoded references (actual line numbers):**
+**Changes:**
 
-| Line | Current Code | Change To |
+| What | Before | After |
 |---|---|---|
-| 10 | `python scripts/generate_topology_json.py [--scenario telco-noc]` | `[--scenario <name>]` |
-| 166 | `default="telco-noc"` (argparse) | `default=os.environ.get("DEFAULT_SCENARIO", "")` |
-
-This script already accepts `--scenario` and resolves `data/scenarios/<name>` — just change the default to read from env var and update the usage string. Add a validation check if neither is provided.
+| Usage docstring | `[--scenario telco-noc]` | `[--scenario <name>]` |
+| argparse default | `default="telco-noc"` | `default=os.environ.get("DEFAULT_SCENARIO", "")` |
+| Validation | None | `if not args.scenario: parser.error(...)` |
+| Import | No `os` import | Added `import os` |
 
 ```python
-    parser.add_argument(
-        "--scenario",
-        default=os.environ.get("DEFAULT_SCENARIO", ""),
-        help="Scenario name (subfolder under data/scenarios/)",
-    )
-    args = parser.parse_args()
-    if not args.scenario:
-        parser.error("--scenario is required (or set DEFAULT_SCENARIO env var)")
+parser.add_argument(
+    "--scenario",
+    default=os.environ.get("DEFAULT_SCENARIO", ""),
+    help="Scenario name (subfolder under data/scenarios/)",
+)
+args = parser.parse_args()
+if not args.scenario:
+    parser.error("--scenario is required (or set DEFAULT_SCENARIO env var)")
 ```
 
 ### 3.5 `scripts/fabric/provision_lakehouse.py`
 
-**Current hardcoded reference (actual line number):**
-
-| Line | Current Code | Change To |
-|---|---|---|
-| 42 | `SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")` | Remove `"telco-noc"` fallback; fail-fast if unset |
-
-**Implementation:**
+Changed default from `"telco-noc"` to `""` with fail-fast:
 
 ```python
 SCENARIO = os.environ.get("DEFAULT_SCENARIO", "")
@@ -368,57 +339,32 @@ if not SCENARIO:
     print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
 ```
 
-Alternatively, import `load_scenario()` — but this script's import path would need `sys.path` adjustment since it's in `scripts/fabric/`. The simpler approach (remove fallback) is sufficient since `deploy.sh` always exports the env var.
-
 ### 3.6 `scripts/fabric/provision_eventhouse.py`
 
-**Current hardcoded reference (actual line number):**
+Same pattern as 3.5:
 
-| Line | Current Code | Change To |
-|---|---|---|
-| 38 | `SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")` | Remove `"telco-noc"` fallback; fail-fast if unset |
-
-Same pattern as 3.5.
+```python
+SCENARIO = os.environ.get("DEFAULT_SCENARIO", "")
+if not SCENARIO:
+    print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
+```
 
 ### 3.7 `scripts/agent_provisioner.py`
 
-**Current hardcoded reference (actual line number):**
-
-| Line | Current Code | Change To |
-|---|---|---|
-| 150 | `# Prefix match: "/query/graph" matches "/query/graph/telco-noc-topology"` | `# Prefix match: "/query/graph" matches "/query/graph/<scenario>-topology"` |
-
-This is a comment only — cosmetic change, no logic impact.
-
-> **Note:** The original audit listed a `graph_name` docstring example at line 214. That reference existed in a previous version of `agent_provisioner.py` and has been refactored out. The current `provision_all()` no longer takes `graph_name` as a parameter.
+Comment-only change:
+- Line 150: `"/query/graph/telco-noc-topology"` → `"/query/graph/<scenario>-topology"`
 
 ---
 
-## 4. Update `graph-query-api/` (runtime service)
+## 4. `graph-query-api/` (runtime service) ✅
 
-The graph-query-api runs inside the container at `/app/graph-query-api/`. It needs scenario-specific values (graph name, index names, etc.) at runtime.
+### 4.0 Pre-requisite: `scenario.yaml` in the container
 
-### 4.0 Pre-requisite: `scenario.yaml` must be in the container
+The Dockerfile `COPY data/scenarios/` line ensures scenario.yaml is available at `/app/data/scenarios/<name>/scenario.yaml`. All values fall back to env vars if the file is missing.
 
-**This is a critical dependency.** The unified Dockerfile does NOT currently copy `data/` into the container image (verified: no `COPY data/` line exists). Step 9 adds this. Steps 4 and 5 depend on it.
+### 4.1 `graph-query-api/config.py` — YAML-driven config
 
-**Fallback strategy:** If `scenario.yaml` is missing (e.g., during development), all values fall back to env vars. This ensures backward compatibility during the transition.
-
-### 4.1 `graph-query-api/config.py` — replace hardcoded config with YAML loader
-
-**Current hardcoded references (actual line numbers):**
-
-| Line | Current Code | Change To |
-|---|---|---|
-| 7 | `Provides ScenarioContext — a fixed hardcoded context for the telco-noc` | Generic docstring |
-| 8 | `demo. No dynamic routing, no X-Graph header parsing, no config store.` | Generic docstring |
-| 56 | `DEFAULT_GRAPH = "telco-noc-topology"` | Derive from YAML / env var |
-| 72 | `# Scenario context — hardcoded for telco-noc` | Generic comment |
-| 77 | `"""Fixed routing context for the telco-noc demo.` | Generic docstring |
-| 106 | `"runbooks": {"index_name": "runbooks-index"},` | Derive from YAML |
-| 107 | `"tickets": {"index_name": "tickets-index"},` | Derive from YAML |
-
-**Implementation:** Add YAML loading between the existing AI_SEARCH_NAME and DEFAULT_GRAPH sections:
+Replaced hardcoded `DEFAULT_GRAPH = "telco-noc-topology"` and `DATA_SOURCES` with scenario YAML loading.
 
 ```python
 import yaml
@@ -451,6 +397,7 @@ DEFAULT_GRAPH = (
     if _SCENARIO else os.getenv("DEFAULT_GRAPH", "")
 )
 
+# Data source definitions (derived from scenario.yaml)
 DATA_SOURCES = {
     "graph": {
         "connector": _SCENARIO.get("data_sources", {}).get("graph", {}).get("connector", "fabric-gql") if _SCENARIO else "fabric-gql",
@@ -477,78 +424,44 @@ DATA_SOURCES = {
 }
 ```
 
+**Docstrings updated:**
+- `Provides ScenarioContext — a fixed hardcoded context for the telco-noc` → `Provides ScenarioContext — a routing context for the active scenario, derived from scenario.yaml when available, with env var fallbacks.`
+- `# Scenario context — hardcoded for telco-noc` → `# Scenario config — loaded from scenario.yaml with env var fallbacks`
+
+**Exports:** `SCENARIO_NAME`, `DEFAULT_GRAPH` are now importable by `router_health.py`.
+
 ### 4.2 `graph-query-api/router_health.py`
 
-**Current hardcoded references (actual line numbers):**
-
-| Line | Current Code | Change To |
+| What | Before | After |
 |---|---|---|
-| 2 | `Health-check router — probes each data source for the telco-noc demo.` | `...for the active scenario.` |
-| 4 | `GET /query/health/sources?scenario=telco-noc` | `GET /query/health/sources?scenario=<name>` |
-| 96 | `Query(default="telco-noc", description="Scenario name")` | `Query(default=SCENARIO_NAME, ...)` — import from config |
-| 104 | `graph_def.get("resource_name", "telco-noc-topology")` | `graph_def.get("resource_name", DEFAULT_GRAPH)` — import from config |
-
-**Implementation:** Update import at top:
-
-```python
-from config import DATA_SOURCES, SCENARIO_NAME, DEFAULT_GRAPH
-```
+| Module docstring | `for the telco-noc demo` | `for the active scenario` |
+| Example in docstring | `?scenario=telco-noc` | `?scenario=<name>` |
+| Query default | `Query(default="telco-noc", ...)` | `Query(default=SCENARIO_NAME, ...)` |
+| Graph fallback | `graph_def.get("resource_name", "telco-noc-topology")` | `graph_def.get("resource_name", DEFAULT_GRAPH)` |
+| Import | From `config import DATA_SOURCES` | From `config import DATA_SOURCES, SCENARIO_NAME, DEFAULT_GRAPH` |
 
 ### 4.3 `graph-query-api/search_indexer.py`
 
-**Current hardcoded references (actual line numbers):**
-
-| Lines | Current Code | Change To |
-|---|---|---|
-| 82 | `index_name: Search index name (e.g. 'telco-noc-runbooks-index')` | `(e.g. '<scenario>-runbooks-index')` |
-| 83 | `container_name: Blob container name (e.g. 'telco-noc-runbooks')` | `(e.g. 'runbooks')` |
-
-Docstrings only — cosmetic.
+Docstring-only:
+- `(e.g. 'telco-noc-runbooks-index')` → `(e.g. '<scenario>-runbooks-index')`
+- `(e.g. 'telco-noc-runbooks')` → `(e.g. 'runbooks')`
 
 ### 4.4 `graph-query-api/services/blob_uploader.py`
 
-**Current hardcoded reference (actual line number):**
+Docstring-only:
+- `(e.g. 'telco-noc-runbooks')` → `(e.g. 'runbooks')`
 
-| Line | Current Code | Change To |
-|---|---|---|
-| 31 | `container_name: Target blob container name (e.g. 'telco-noc-runbooks')` | `(e.g. 'runbooks')` |
+### 4.5 `graph-query-api/pyproject.toml`
 
-Docstring only — cosmetic.
-
-### 4.5 `graph-query-api/` dependency: add `pyyaml`
-
-The `graph-query-api/pyproject.toml` needs `pyyaml` added as a dependency (if not already present), since `config.py` will now import `yaml`.
-
-```bash
-cd graph-query-api && uv add pyyaml
-```
+`pyyaml` was already present. No change needed.
 
 ---
 
-## 5. Update `api/app/routers/config.py` (runtime service)
+## 5. `api/app/routers/config.py` (runtime service) ✅
 
-**Current state:** Entire `SCENARIO_CONFIG` dict hardcoded (lines 27–86), `_load_current_config()` returns `"graph": "telco-noc"` (line 99), and `get_resource_graph()` passes `"telco-noc"` (line 264).
+### 5.1 Scenario YAML loader
 
-**Current hardcoded references (actual line numbers):**
-
-| Line | Current Code | Type |
-|---|---|---|
-| 24 | `# Hardcoded scenario config for telco-noc` | Comment |
-| 47 | `"index": "runbooks-index"` | Agent tool config |
-| 54 | `"index": "tickets-index"` | Agent tool config |
-| 68 | `"label": "Fabric GQL (telco-noc-topology)"` | Data source label |
-| 79 | `"label": "AI Search (runbooks-index)"` | Data source label |
-| 80 | `"index": "runbooks-index"` | Data source config |
-| 84 | `"label": "AI Search (tickets-index)"` | Data source label |
-| 85 | `"index": "tickets-index"` | Data source config |
-| 99 | `"graph": "telco-noc"` | Config value |
-| 100 | `"runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", "runbooks-index")` | Config value |
-| 101 | `"tickets_index": os.getenv("TICKETS_INDEX_NAME", "tickets-index")` | Config value |
-| 264 | `_build_resource_graph(SCENARIO_CONFIG, "telco-noc")` | Function call |
-
-### 5.1 Add scenario YAML loader
-
-Same pattern as graph-query-api. The api runs at `/app/api/` in the container, so `scenario.yaml` is at `/app/data/scenarios/<name>/scenario.yaml`.
+Added imports (`yaml`, `Path`), `SCENARIO_NAME`, `_SCENARIO_YAML_CANDIDATES`, and `_load_scenario_yaml()` function. Same dual-path pattern as `graph-query-api/config.py`:
 
 ```python
 import yaml
@@ -556,7 +469,6 @@ from pathlib import Path
 
 SCENARIO_NAME = os.getenv("DEFAULT_SCENARIO", "")
 
-# Container path: /app/data/scenarios/<name>/scenario.yaml
 _SCENARIO_YAML_CANDIDATES = [
     Path("/app/data/scenarios") / SCENARIO_NAME / "scenario.yaml",
     PROJECT_ROOT / "data" / "scenarios" / SCENARIO_NAME / "scenario.yaml",
@@ -572,13 +484,11 @@ def _load_scenario_yaml() -> dict:
                 return yaml.safe_load(f)
     logger.warning("scenario.yaml not found — resource graph will be empty")
     return {}
-
-_manifest = _load_scenario_yaml()
 ```
 
-### 5.2 Build `SCENARIO_CONFIG` from YAML
+### 5.2 `_build_scenario_config()` replaces hardcoded `SCENARIO_CONFIG`
 
-Replace the entire hardcoded `SCENARIO_CONFIG` dict (lines 27–86) with a function that generates it from the parsed YAML:
+The entire 60-line hardcoded `SCENARIO_CONFIG` dict was replaced with `_build_scenario_config(manifest)` that generates the same structure from parsed YAML:
 
 ```python
 def _build_scenario_config(manifest: dict) -> dict:
@@ -590,9 +500,8 @@ def _build_scenario_config(manifest: dict) -> dict:
             tool_entry = {"type": t["type"]}
             if t["type"] == "openapi":
                 tool_entry["spec_template"] = t.get("spec_template", "")
-                tool_entry["data_source"] = t.get("spec_template", "")  # graph/telemetry
+                tool_entry["data_source"] = t.get("spec_template", "")
             elif t["type"] == "azure_ai_search":
-                # Resolve index key to actual index name from scenario.yaml
                 idx_key = t.get("index_key", "")
                 idx_name = manifest.get("data_sources", {}).get("search_indexes", {}).get(idx_key, {}).get("index_name", f"{idx_key}-index")
                 tool_entry["index"] = idx_name
@@ -616,13 +525,13 @@ def _build_scenario_config(manifest: dict) -> dict:
 
     data_sources = {
         "graph": {
-            "type": ds.get("graph", {}).get("connector", "fabric-gql"),
+            "type": ds.get("graph", {}).get("connector", "fabric-gql") if ds else "fabric_gql",
             "label": f"Fabric GQL ({graph_name})",
             "workspace": os.getenv("FABRIC_WORKSPACE_ID", ""),
             "graph_model": "(auto-discovered at runtime)",
         },
         "telemetry": {
-            "type": ds.get("telemetry", {}).get("connector", "fabric-kql"),
+            "type": ds.get("telemetry", {}).get("connector", "fabric-kql") if ds else "fabric_kql",
             "label": "Fabric KQL (NetworkTelemetryEH)",
             "eventhouse": "(auto-discovered at runtime)",
         },
@@ -640,112 +549,102 @@ def _build_scenario_config(manifest: dict) -> dict:
 
     return {"agents": agents, "data_sources": data_sources}
 
+
 _manifest = _load_scenario_yaml()
 SCENARIO_CONFIG = _build_scenario_config(_manifest) if _manifest else {"agents": [], "data_sources": {}}
 ```
 
-### 5.3 Update `_load_current_config()`
+### 5.3 `_load_current_config()` updated
 
-Replace line 99:
+| What | Before | After |
+|---|---|---|
+| `"graph"` value | `"telco-noc"` | `SCENARIO_NAME` |
+| `"runbooks_index"` fallback | `os.getenv("RUNBOOKS_INDEX_NAME", "runbooks-index")` | `os.getenv("RUNBOOKS_INDEX_NAME", _runbooks_default)` where `_runbooks_default` derives from `_manifest` |
+| `"tickets_index"` fallback | `os.getenv("TICKETS_INDEX_NAME", "tickets-index")` | `os.getenv("TICKETS_INDEX_NAME", _tickets_default)` where `_tickets_default` derives from `_manifest` |
 
 ```python
-# Before
-"graph": "telco-noc",
-
-# After
-"graph": SCENARIO_NAME,
+def _load_current_config() -> dict:
+    """Load current config from Foundry agent discovery + env-var defaults."""
+    _runbooks_default = (
+        _manifest.get("data_sources", {}).get("search_indexes", {}).get("runbooks", {}).get("index_name", "runbooks-index")
+        if _manifest else "runbooks-index"
+    )
+    _tickets_default = (
+        _manifest.get("data_sources", {}).get("search_indexes", {}).get("tickets", {}).get("index_name", "tickets-index")
+        if _manifest else "tickets-index"
+    )
+    config = {
+        "graph": SCENARIO_NAME,
+        "runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", _runbooks_default),
+        "tickets_index": os.getenv("TICKETS_INDEX_NAME", _tickets_default),
+        "agents": None,
+    }
+    # ... (agent discovery continues)
 ```
 
-Lines 100–101: the env var fallback approach already works because `deploy.sh` sets the env vars from `scenario.yaml`. The `os.getenv("RUNBOOKS_INDEX_NAME", ...)` pattern is fine — update the hardcoded fallback default:
+### 5.4 `get_resource_graph` endpoint updated
+
+| What | Before | After |
+|---|---|---|
+| Docstring | `from hardcoded config` | `from active scenario` |
+| Scenario arg | `"telco-noc"` | `SCENARIO_NAME` |
 
 ```python
-# Before
-"runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", "runbooks-index"),
-"tickets_index": os.getenv("TICKETS_INDEX_NAME", "tickets-index"),
-
-# After — fallback derives from manifest if available
-"runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", _manifest.get("data_sources", {}).get("search_indexes", {}).get("runbooks", {}).get("index_name", "runbooks-index") if _manifest else "runbooks-index"),
-"tickets_index": os.getenv("TICKETS_INDEX_NAME", _manifest.get("data_sources", {}).get("search_indexes", {}).get("tickets", {}).get("index_name", "tickets-index") if _manifest else "tickets-index"),
+@router.get("/resources", summary="Get resource graph for visualization")
+async def get_resource_graph(request: Request):
+    """Build and return the nodes+edges resource graph from active scenario."""
+    return _build_resource_graph(SCENARIO_CONFIG, SCENARIO_NAME)
 ```
 
-### 5.4 Update `get_resource_graph` endpoint
+### 5.5 New `GET /api/config/scenario` endpoint
 
-Replace line 264:
-
-```python
-# Before
-return _build_resource_graph(SCENARIO_CONFIG, "telco-noc")
-
-# After
-return _build_resource_graph(SCENARIO_CONFIG, SCENARIO_NAME)
-```
-
-### 5.5 Add `/scenario` metadata endpoint
-
-Add a new endpoint for the frontend to fetch scenario info at runtime:
+Returns scenario metadata from `scenario.yaml` for the frontend. Passes through raw `graph_styles` and `example_questions` directly from YAML (simpler than restructuring into separate `nodeColors/nodeSizes/nodeIcons` dicts):
 
 ```python
-@router.get("/scenario", summary="Get active scenario metadata")
-async def get_scenario_metadata():
-    """Return scenario name, display name, graph styles, example questions."""
-    graph_styles = {"nodeColors": {}, "nodeSizes": {}, "nodeIcons": {}}
-    for node_type, style in _manifest.get("graph_styles", {}).get("node_types", {}).items():
-        graph_styles["nodeColors"][node_type] = style.get("color", "#888")
-        graph_styles["nodeSizes"][node_type] = style.get("size", 16)
-        graph_styles["nodeIcons"][node_type] = style.get("icon", "default")
+@router.get("/scenario", summary="Active scenario metadata")
+async def get_scenario():
+    """Return scenario-level metadata loaded from scenario.yaml.
 
-    search = _manifest.get("data_sources", {}).get("search_indexes", {})
+    The frontend uses this to populate titles, graph styles,
+    example questions, and data-source labels without hardcoding.
+    """
+    if not _manifest:
+        return {"name": SCENARIO_NAME, "display_name": SCENARIO_NAME, "data_sources": {}}
+
+    ds = _manifest.get("data_sources", {})
+    search = ds.get("search_indexes", {})
+    graph_cfg = ds.get("graph", {}).get("config", {})
 
     return {
         "name": SCENARIO_NAME,
-        "displayName": _manifest.get("display_name", SCENARIO_NAME),
-        "description": _manifest.get("description", ""),
-        "graph": _manifest.get("data_sources", {}).get("graph", {}).get("config", {}).get("graph", ""),
-        "runbooksIndex": search.get("runbooks", {}).get("index_name", ""),
-        "ticketsIndex": search.get("tickets", {}).get("index_name", ""),
-        "graphStyles": graph_styles,
-        "exampleQuestions": _manifest.get("example_questions", []),
-        "useCases": _manifest.get("use_cases", []),
+        "display_name": _manifest.get("display_name", SCENARIO_NAME),
+        "graph_name": graph_cfg.get("graph", ""),
+        "graph_styles": _manifest.get("graph_styles", {}),
+        "example_questions": _manifest.get("example_questions", []),
+        "data_sources": {
+            "runbooks_index": search.get("runbooks", {}).get("index_name", "runbooks-index"),
+            "tickets_index": search.get("tickets", {}).get("index_name", "tickets-index"),
+        },
     }
 ```
 
-### 5.6 `api/` dependency: add `pyyaml`
+**Note on response shape:** The API returns `graph_styles` as the raw YAML structure (with `node_colors`, `node_sizes`, `node_icons` sub-keys as defined in `scenario.yaml`). The frontend `ScenarioContext` maps these to camelCase properties (`nodeColors`, `nodeSizes`, `nodeIcons`) via the `getScenario()` fetch in `config.ts`.
 
-The `api/pyproject.toml` needs `pyyaml` added as a dependency (if not already present).
+### 5.6 `api/pyproject.toml`
+
+`pyyaml` was already present. No change needed.
 
 ---
 
-## 6. Update frontend (`frontend/src/config.ts`)
+## 6. Frontend (`frontend/src/`) ✅
 
-**Current state:** All values hardcoded in a single `SCENARIO` const export. 8 components import and use it.
+### 6.1 `frontend/src/config.ts` — async fetch replaces hardcoded SCENARIO
 
-**Current hardcoded references:**
-
-| Line | Current Code |
-|---|---|
-| 5 | `name: "telco-noc"` |
-| 7 | `graph: "telco-noc-topology"` |
-| 8 | `runbooksIndex: "runbooks-index"` |
-| 9 | `ticketsIndex: "tickets-index"` |
-| 10–57 | Entire `SCENARIO` object (display name, description, graphStyles, exampleQuestions) |
-
-**Consuming components (8 files):**
-
-| File | Usage |
-|---|---|
-| `App.tsx` (lines 60, 74) | `SCENARIO.name` — interaction fetching, chat scenario param |
-| `components/Header.tsx` (line 23) | `SCENARIO.displayName` |
-| `components/InvestigationPanel.tsx` (line 31) | `SCENARIO.exampleQuestions` |
-| `components/DataSourceBar.tsx` (line 13) | `SCENARIO.name` — health check query param |
-| `components/GraphTopologyViewer.tsx` (line 18) | `SCENARIO.name` — storage prefix |
-| `components/graph/GraphCanvas.tsx` (line 61) | `SCENARIO.graphStyles.nodeSizes` |
-| `hooks/useNodeColor.ts` (line 5) | `SCENARIO.graphStyles.nodeColors` |
-
-### 6.1 New frontend config approach
-
-Replace the hardcoded `SCENARIO` with a fetch from `/api/config/scenario` (the endpoint added in step 5.5).
-
-**`frontend/src/config.ts`** — new implementation:
+Replaced the entire hardcoded `SCENARIO` const (name, displayName, graph, graphStyles, exampleQuestions) with:
+- `ScenarioConfig` TypeScript interface
+- `getScenario()` async function that fetches from `/api/config/scenario` with in-memory caching
+- `SCENARIO_DEFAULTS` for initial render before fetch completes
+- `getScenarioSync()` backward-compat synchronous access
 
 ```typescript
 export interface ScenarioConfig {
@@ -799,11 +698,11 @@ export function getScenarioSync(): ScenarioConfig {
 }
 ```
 
-### 6.2 Create React context provider
+### 6.2 `frontend/src/ScenarioContext.tsx` — New React context provider
 
-**New file: `frontend/src/ScenarioContext.tsx`**
+**New file** that wraps `getScenario()` in a React context:
 
-```typescript
+```tsx
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { ScenarioConfig, SCENARIO_DEFAULTS, getScenario } from './config';
 
@@ -817,220 +716,213 @@ export const ScenarioProvider: React.FC<{children: React.ReactNode}> = ({childre
 };
 ```
 
-Wrap `<App />` in `<ScenarioProvider>` in `main.tsx` / `index.tsx`.
+`<App />` is wrapped in `<ScenarioProvider>` in `main.tsx`:
 
-### 6.3 Update all 8 consuming components
+```tsx
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <ScenarioProvider>
+      <App />
+    </ScenarioProvider>
+  </React.StrictMode>
+);
+```
 
-Each component replaces `import { SCENARIO } from '../config'` with:
+### 6.3 Updated all 7 consuming components
+
+Each component replaced `import { SCENARIO } from '../config'` (or `'../../config'`) with:
 
 ```typescript
-import { useScenario } from '../ScenarioContext';
+import { useScenario } from '../ScenarioContext';  // or '../../ScenarioContext'
 
 // Inside component function body:
 const SCENARIO = useScenario();
 ```
 
-**Files to update (mechanical change per file):**
+This keeps all downstream usage of `SCENARIO.name`, `SCENARIO.displayName`, etc. unchanged.
 
-1. `frontend/src/App.tsx` — `SCENARIO.name`
-2. `frontend/src/components/Header.tsx` — `SCENARIO.displayName`
-3. `frontend/src/components/InvestigationPanel.tsx` — `SCENARIO.exampleQuestions`
-4. `frontend/src/components/DataSourceBar.tsx` — `SCENARIO.name`
-5. `frontend/src/components/GraphTopologyViewer.tsx` — `SCENARIO.name`
-6. `frontend/src/components/graph/GraphCanvas.tsx` — `SCENARIO.graphStyles.nodeSizes`
-7. `frontend/src/hooks/useNodeColor.ts` — `SCENARIO.graphStyles.nodeColors` (this is a hook, not a component — it already runs inside a component, so `useScenario()` works here)
+**Files updated:**
+
+| File | What changed |
+|---|---|
+| `App.tsx` | Import `useScenario`, added `const SCENARIO = useScenario()` at top of component |
+| `components/Header.tsx` | Import `useScenario`, added `const SCENARIO = useScenario()` at top of component |
+| `components/InvestigationPanel.tsx` | Import `useScenario`, added `const SCENARIO = useScenario()` before `exampleQuestions` |
+| `components/DataSourceBar.tsx` | Import `useScenario`, added `const SCENARIO = useScenario()` at top; added `SCENARIO.name` to `useEffect` dep array |
+| `components/GraphTopologyViewer.tsx` | Import `useScenario`, added `const SCENARIO = useScenario()` at top of component |
+| `components/graph/GraphCanvas.tsx` | Import `useScenario`, added `const SCENARIO = useScenario()` inside `forwardRef` body before `scenarioNodeSizes` |
+| `hooks/useNodeColor.ts` | Import `useScenario` (replaced `SCENARIO` import); moved `scenarioNodeColors` inside hook body; added `scenarioNodeColors` to `useCallback` deps |
+
+**Notable implementation detail for `DataSourceBar.tsx`:** The `useEffect` dependency array was updated from `[]` to `[SCENARIO.name]` so the health check re-fetches when the scenario data loads:
+
+```tsx
+useEffect(() => {
+    const check = () =>
+      fetch(`${QUERY_API}/health/sources?scenario=${encodeURIComponent(SCENARIO.name)}`)
+        .then((r) => r.json())
+        .then((d) => setSources(d.sources || []))
+        .catch(() => {});
+
+    check();
+    const iv = setInterval(check, 30_000);
+    return () => clearInterval(iv);
+  }, [SCENARIO.name]);
+```
+
+**Notable implementation detail for `useNodeColor.ts`:** The original code had `const scenarioNodeColors = SCENARIO.graphStyles.nodeColors;` at module scope (outside the hook). This was moved inside the hook body to use `useScenario()` (hooks can only be called inside component/hook bodies):
+
+```typescript
+export function useNodeColor(nodeColorOverride: Record<string, string>) {
+  const scenarioNodeColors = useScenario().graphStyles.nodeColors;
+  return useCallback(
+    (label: string) =>
+      nodeColorOverride[label]
+      ?? scenarioNodeColors[label]
+      ?? autoColor(label),
+    [nodeColorOverride, scenarioNodeColors],
+  );
+}
+```
 
 ---
 
-## 7. Update `hooks/postprovision.sh`
+## 7. `hooks/postprovision.sh` ✅
 
-**Current hardcoded reference (actual line number):**
-
-| Line | Current Code | Change To |
+| What | Before | After |
 |---|---|---|
-| 25 | `DATA_DIR="$PROJECT_ROOT/data/scenarios/telco-noc/data/knowledge"` | `DATA_DIR="$PROJECT_ROOT/data/scenarios/${DEFAULT_SCENARIO}/data/knowledge"` |
+| `DATA_DIR` | `"$PROJECT_ROOT/data/scenarios/telco-noc/data/knowledge"` | `"$PROJECT_ROOT/data/scenarios/${DEFAULT_SCENARIO}/data/knowledge"` |
 
-`DEFAULT_SCENARIO` is available because we set it in azd env (step 1.4) and azd exports all env values to hooks automatically.
+`DEFAULT_SCENARIO` is available because `deploy.sh` sets it via `azd env set` and azd exports all env values to hooks automatically.
 
 ---
 
-## 8. Ensure `DEFAULT_SCENARIO` + index names flow into the Container App
+## 8. `infra/main.bicep` — Bicep parameterization ✅
 
-The Container App needs `DEFAULT_SCENARIO` as an env var so runtime services know which scenario YAML to load.
+### 8.1 New parameters
 
-### 8.1 Bicep: add `defaultScenario` parameter and parameterise index names
-
-**File: `infra/main.bicep`**
-
-Add parameters near the top:
+Added three parameters (lines 42–49 of `main.bicep`):
 
 ```bicep
+@description('Active scenario name (subfolder under data/scenarios/)')
 param defaultScenario string = ''
+
+@description('AI Search runbooks index name (from scenario.yaml)')
 param runbooksIndexName string = 'runbooks-index'
+
+@description('AI Search tickets index name (from scenario.yaml)')
 param ticketsIndexName string = 'tickets-index'
 ```
 
-Update the Container App `env` array (currently at line ~183):
+### 8.2 Container App env vars
+
+In the Container App `env` array (lines 204–211):
 
 ```bicep
-env: union([
-  // ... existing entries ...
-  { name: 'DEFAULT_SCENARIO', value: defaultScenario }
-  { name: 'RUNBOOKS_INDEX_NAME', value: runbooksIndexName }   // was hardcoded 'runbooks-index'
-  { name: 'TICKETS_INDEX_NAME', value: ticketsIndexName }     // was hardcoded 'tickets-index'
-  // ... rest ...
-], [])
+{ name: 'RUNBOOKS_INDEX_NAME', value: runbooksIndexName }
+{ name: 'TICKETS_INDEX_NAME', value: ticketsIndexName }
+// ...
+{ name: 'DEFAULT_SCENARIO', value: defaultScenario }
 ```
 
-**Lines to change (actual):**
-- Line 195: `{ name: 'RUNBOOKS_INDEX_NAME', value: 'runbooks-index' }` → `{ name: 'RUNBOOKS_INDEX_NAME', value: runbooksIndexName }`
-- Line 196: `{ name: 'TICKETS_INDEX_NAME', value: 'tickets-index' }` → `{ name: 'TICKETS_INDEX_NAME', value: ticketsIndexName }`
-- Add new entry: `{ name: 'DEFAULT_SCENARIO', value: defaultScenario }`
+Previously `RUNBOOKS_INDEX_NAME` and `TICKETS_INDEX_NAME` had hardcoded `'runbooks-index'` / `'tickets-index'` values.
 
-### 8.2 Wire via `azd env set`
+### 8.3 Wire via `azd env set`
 
-`deploy.sh` step 1.4 already runs:
-
-```bash
-azd env set DEFAULT_SCENARIO "$SCENARIO_NAME"
-azd env set RUNBOOKS_INDEX_NAME "$RUNBOOKS_INDEX_NAME"
-azd env set TICKETS_INDEX_NAME "$TICKETS_INDEX_NAME"
-```
-
-azd auto-maps env values to Bicep parameters using the naming convention. Verify by running `azd provision` — it should pick up the values from the env and pass them to the Bicep `param` declarations.
+`deploy.sh` step 1.4 runs `azd env set` for all three values. azd auto-maps env values to Bicep parameters using the naming convention (`DEFAULT_SCENARIO` → `defaultScenario`).
 
 ---
 
-## 9. Ensure `scenario.yaml` + scenario data get into the Docker image
+## 9. Dockerfile + `.dockerignore` ✅
 
-**CRITICAL: The unified Dockerfile does NOT currently copy `data/` into the container.**
+### 9.1 Dockerfile — `COPY data/scenarios/`
 
-The Dockerfile (lines 36–52) copies `graph-query-api/`, `api/`, and `scripts/agent_provisioner.py` but NOT `data/`. The runtime services will fail to find `scenario.yaml`.
-
-### 9.1 Add COPY line to Dockerfile
-
-After the existing `COPY scripts/agent_provisioner.py /app/scripts/` line (line 52), add:
+Added after the existing `COPY scripts/agent_provisioner.py /app/scripts/` line:
 
 ```dockerfile
 # ── Scenario data (YAML manifests for runtime config) ─────────────
 COPY data/scenarios/ /app/data/scenarios/
 ```
 
-**Image size note:** The `data/scenarios/` directory contains CSV files used only during provisioning (not at runtime). To keep the image lean, add a `.dockerignore` entry:
+### 9.2 `.dockerignore` — granular data exclusions
 
-```
-# Exclude bulk CSV data — only YAML manifests needed at runtime
-data/scenarios/*/data/entities/*.csv
-data/scenarios/*/data/telemetry/*.csv
-data/scenarios/*/data/knowledge/runbooks/*.md
-data/scenarios/*/data/knowledge/tickets/*.txt
-```
+The existing `.dockerignore` had a blanket `data` exclusion that would block the new `COPY`. Replaced with granular rules using Docker's last-match-wins semantics:
 
-Or alternatively, use a more targeted COPY with a multi-line RUN to cherry-pick only YAML files. The simpler approach (copy everything, ignore CSVs) is recommended.
-
-### 9.2 Verify `.dockerignore`
-
-Check if a `.dockerignore` exists. If it does, ensure it does NOT exclude `data/scenarios/`. If it excludes `data/`, add exceptions:
-
-```
+```ignore
+# Scenario data — bulk CSVs/docs excluded, YAML manifests included
+data
 !data/scenarios/
+!data/scenarios/*/
+!data/scenarios/*/scenario.yaml
+!data/scenarios/*/graph_schema.yaml
+!data/scenarios/*/data/
+!data/scenarios/*/data/prompts/
+!data/scenarios/*/data/prompts/**
+data/scenarios/*/data/entities/
+data/scenarios/*/data/telemetry/
+data/scenarios/*/data/knowledge/
+data/scenarios/*/scripts/
 ```
 
+**Design note:** The `!data/scenarios/*/data/prompts/**` exception comes after the blanket `data` exclusion and before the specific `data/scenarios/*/data/knowledge/` exclusion, so prompt files (needed at runtime for agent provisioning) are included while bulk knowledge docs and CSVs are excluded. This keeps the Docker image small while ensuring runtime config is available.
+
 ---
 
-## 10. Scenario data directory: `generate_all.sh`
+## 10. `data/scenarios/telco-noc/scripts/generate_all.sh` ✅
 
-**File:** `data/scenarios/telco-noc/scripts/generate_all.sh`
-
-| Lines | Current | Change |
+| What | Before | After |
 |---|---|---|
-| 2 | `# Generate all data for the telco-noc scenario` | `# Generate all data for this scenario` |
-| 5 | `echo "=== Generating telco-noc scenario data ==="` | `echo "=== Generating scenario data ==="` |
-
-Comments/echo only — cosmetic. This script generates data *for its own scenario directory* and is run manually.
+| Comment (line 2) | `# Generate all data for the telco-noc scenario` | `# Generate all data for this scenario` |
+| Echo (line 5) | `echo "=== Generating telco-noc scenario data ==="` | `echo "=== Generating scenario data ==="` |
 
 ---
 
-## 11. `data/scenarios/telco-noc/graph_schema.yaml`
+## 11. `data/scenarios/telco-noc/graph_schema.yaml` ✅
 
-**Current reference (actual line number):**
-
-| Line | Current Code | Change |
+| What | Before | After |
 |---|---|---|
-| 13 | `# The backwards-compat symlink data/network → scenarios/telco-noc/data/entities` | Update comment to be generic or remove if symlink is deprecated |
-
-Comment only — cosmetic.
+| Comment (line 13) | `data/network → scenarios/telco-noc/data/entities` | `data/network → scenarios/<name>/data/entities` |
 
 ---
 
-## 12. `README.md`
+## 12. `README.md` ✅
 
-**Current references (actual line numbers):**
-
-| Line | Current Code |
-|---|---|
-| 15 | `\| **telco-noc** \| Telecommunications \| Fibre cut ... \|` |
-| 154 | `- \`data/scenarios/telco-noc.tar.gz\`` |
-| 235 | `│       ├── telco-noc/          # Telco — fibre cut` |
-
-These are documentation. Update to show `telco-noc` as one example scenario among potentially many, and document the `--scenario` flag in the usage section.
+| What | Before | After |
+|---|---|---|
+| Deploy flags table | No `--scenario` row | Added `--scenario NAME` — "Scenario to deploy (auto-detected if only one exists)" |
+| Tarball reference (line 154) | `data/scenarios/telco-noc.tar.gz` | `data/scenarios/<name>.tar.gz` (e.g. `telco-noc.tar.gz`) |
+| Directory tree listing | `telco-noc/` entry | Unchanged — kept as an example scenario folder name |
+| Scenario table (line 15) | Lists `telco-noc` as one scenario | Unchanged — documentation listing available scenarios, not hardcoded config |
 
 ---
 
 ## 13. `.azure/` environment files
 
-**Current references:**
-- `.azure/cosmosv8/.env` line 5: `DEFAULT_SCENARIO="telco-noc"`
-- `.azure/cosmosv8/.env` line 8: `LOADED_SCENARIOS="telco-noc"`
-
-These are azd env values, not source code. They're created by `azd env new` and `azd env set`. After decoupling, `deploy.sh` sets `DEFAULT_SCENARIO` automatically (step 1.4). No manual code change needed — just awareness.
+No code changes. These are azd env values created by `azd env new` and `azd env set`. After decoupling, `deploy.sh` sets `DEFAULT_SCENARIO`, `RUNBOOKS_INDEX_NAME`, and `TICKETS_INDEX_NAME` automatically via `azd env set` (step 1.4).
 
 ---
 
-## 14. Execution Order
+## 14. Execution Order (as implemented)
 
-Implement in dependency order to keep the project deployable at every step:
+Implementation followed dependency order A → B → C → D → G → H → E → F → I → J:
 
-| Phase | Steps | Description | Risk |
+| Phase | Steps | Description | Status |
 |---|---|---|---|
-| **A** | 2 | Create `scenario_loader.py` | None — new file, nothing imports it yet |
-| **B** | 3.1–3.7 | Update scripts to use `scenario_loader` | Low — scripts only run manually |
-| **C** | 7 | Update `postprovision.sh` | Low — one-line change |
-| **D** | 9 | Add `COPY data/scenarios/` to Dockerfile | Low — needed before E/F deploy |
-| **E** | 4.1–4.5 | Update `graph-query-api/config.py` + dependents + pyproject.toml | Medium — runtime service |
-| **F** | 5.1–5.6 | Update `api/app/routers/config.py` + pyproject.toml | Medium — runtime service |
-| **G** | 1.1–1.6 | Update `deploy.sh` | Low — orchestration only |
-| **H** | 8 | Bicep: pass `DEFAULT_SCENARIO` + index names to Container App | Low — infra parameter |
-| **I** | 6.1–6.3 | Frontend: fetch scenario from API via context provider | Medium — requires API endpoint from F |
-| **J** | 10–12 | Cosmetic: comments, docstrings, README | Trivial |
-
-### Suggested implementation order: A → B → C → D → G → H → E → F → I → J
-
-This keeps scripts and deployment working at every step. The Dockerfile fix (D) must land before runtime services (E, F) are deployed. The frontend (I) is last because it requires the API endpoint from step F.
+| **A** | 2 | Created `scenario_loader.py` | ✅ |
+| **B** | 3.1–3.7 | Updated 7 provisioning scripts | ✅ |
+| **C** | 7 | Updated `postprovision.sh` | ✅ |
+| **D** | 9 | Dockerfile `COPY` + `.dockerignore` granular rules | ✅ |
+| **G** | 1.1–1.6 | `deploy.sh` — `--scenario` flag, YAML extraction, topology pass-through | ✅ |
+| **H** | 8 | Bicep: `defaultScenario` + index name params | ✅ |
+| **E** | 4.1–4.5 | `graph-query-api/config.py` + `router_health.py` + docstrings | ✅ |
+| **F** | 5.1–5.6 | `api/app/routers/config.py` — YAML-driven SCENARIO_CONFIG + `/scenario` endpoint | ✅ |
+| **I** | 6.1–6.3 | Frontend: config.ts rewrite, ScenarioContext.tsx, main.tsx, 7 components | ✅ |
+| **J** | 10–12 | Cosmetic: generate_all.sh, graph_schema.yaml, README | ✅ |
 
 ---
 
-## 15. Testing Checklist
+## 15. Verification ✅
 
-After implementation, verify with the existing `telco-noc` scenario:
-
-- [ ] `./deploy.sh --scenario telco-noc --provision-all --yes --skip-local` — full deployment works
-- [ ] `./deploy.sh --provision-all --yes --skip-local` — auto-detects `telco-noc` (only scenario present)
-- [ ] `DEFAULT_SCENARIO` is set in azd env after deploy
-- [ ] `RUNBOOKS_INDEX_NAME` in azd env matches `scenario.yaml` value (`telco-noc-runbooks-index`)
-- [ ] `TICKETS_INDEX_NAME` in azd env matches `scenario.yaml` value (`telco-noc-tickets-index`)
-- [ ] Agents are provisioned with correct prompt paths from `scenario.yaml`
-- [ ] AI Search indexes are created with names from `scenario.yaml` (e.g., `telco-noc-runbooks-index`)
-- [ ] Fabric resources (lakehouse, eventhouse, ontology) provision correctly
-- [ ] Frontend loads scenario name, graph styles, and example questions from `/api/config/scenario`
-- [ ] `/api/config/current` returns correct graph name (not hardcoded `telco-noc`)
-- [ ] `/api/config/resources` returns correct resource graph with scenario-derived labels
-- [ ] `/query/health/sources` probes correct data sources with correct index names
-- [ ] Container App has `DEFAULT_SCENARIO` env var set
-- [ ] `docker build` succeeds and container has `data/scenarios/` directory available
-- [ ] Container runs successfully — `scenario.yaml` is found at `/app/data/scenarios/telco-noc/scenario.yaml`
-
-### Zero-reference verification
+### Zero-reference check
 
 ```bash
 grep -rn "telco-noc" \
@@ -1039,44 +931,69 @@ grep -rn "telco-noc" \
   api/ graph-query-api/ frontend/src/ scripts/ hooks/ infra/
 ```
 
-Should return **zero** results. Only `data/scenarios/telco-noc/` and `documentation/` should contain `telco-noc`.
+Returns **zero** results. Only `data/scenarios/telco-noc/` (the scenario's own data files) and `documentation/` contain `telco-noc`.
+
+### Deployment testing checklist
+
+- [ ] `./deploy.sh --scenario telco-noc --provision-all --yes --skip-local` — full deployment
+- [ ] `./deploy.sh --provision-all --yes --skip-local` — auto-detects `telco-noc` (only scenario)
+- [ ] `DEFAULT_SCENARIO` set in azd env after deploy
+- [ ] `RUNBOOKS_INDEX_NAME` / `TICKETS_INDEX_NAME` in azd env match `scenario.yaml` values
+- [ ] Agents provisioned with correct prompt paths from `scenario.yaml`
+- [ ] AI Search indexes created with names from `scenario.yaml`
+- [ ] Fabric resources (lakehouse, eventhouse, ontology) provision correctly
+- [ ] Frontend loads scenario metadata from `/api/config/scenario`
+- [ ] `/api/config/current` returns correct graph name
+- [ ] `/api/config/resources` returns correct resource graph
+- [ ] `/query/health/sources` probes correct data sources with correct index names
+- [ ] Container App has `DEFAULT_SCENARIO` env var set
+- [ ] `docker build` succeeds; container has `data/scenarios/` directory
+- [ ] Container runs — `scenario.yaml` found at `/app/data/scenarios/<name>/scenario.yaml`
 
 ---
 
 ## 16. Files Changed — Summary
 
-| File | Change Type | Complexity |
+| File | Change Type | Status |
 |---|---|---|
-| `scripts/scenario_loader.py` | **New** | Low |
-| `frontend/src/ScenarioContext.tsx` | **New** | Low |
-| `deploy.sh` | Edit — add `--scenario` flag, YAML value extraction, topology `--scenario` pass-through | Low |
-| `hooks/postprovision.sh` | Edit — parameterise path (1 line) | Trivial |
-| `scripts/provision_search_index.py` | Edit — use `load_scenario()` for paths, index names, dict keys | Medium |
-| `scripts/provision_cosmos.py` | Edit — use `load_scenario()` for data dir + container defs from YAML | Medium |
-| `scripts/provision_agents.py` | Edit — use `load_scenario()` for prompts dir + graph name | Low |
-| `scripts/generate_topology_json.py` | Edit — default from env var + usage string | Trivial |
-| `scripts/fabric/provision_lakehouse.py` | Edit — remove fallback default, fail-fast | Trivial |
-| `scripts/fabric/provision_eventhouse.py` | Edit — remove fallback default, fail-fast | Trivial |
-| `scripts/agent_provisioner.py` | Edit — update comment (line 150) | Trivial |
-| `graph-query-api/config.py` | Edit — load from YAML instead of hardcoded, export `SCENARIO_NAME` | Medium |
-| `graph-query-api/pyproject.toml` | Edit — add `pyyaml` dependency | Trivial |
-| `graph-query-api/router_health.py` | Edit — import + use `SCENARIO_NAME`, `DEFAULT_GRAPH` from config | Low |
-| `graph-query-api/search_indexer.py` | Edit — docstring only | Trivial |
-| `graph-query-api/services/blob_uploader.py` | Edit — docstring only | Trivial |
-| `api/app/routers/config.py` | Edit — replace hardcoded SCENARIO_CONFIG + add `/scenario` endpoint | Medium |
-| `api/pyproject.toml` | Edit — add `pyyaml` dependency (if not present) | Trivial |
-| `frontend/src/config.ts` | Edit — replace hardcoded SCENARIO with async fetch + interface | Medium |
-| `frontend/src/App.tsx` | Edit — wrap with ScenarioProvider, use `useScenario()` | Low |
-| `frontend/src/components/Header.tsx` | Edit — use `useScenario()` hook | Trivial |
-| `frontend/src/components/InvestigationPanel.tsx` | Edit — use `useScenario()` hook | Trivial |
-| `frontend/src/components/DataSourceBar.tsx` | Edit — use `useScenario()` hook | Trivial |
-| `frontend/src/components/GraphTopologyViewer.tsx` | Edit — use `useScenario()` hook | Trivial |
-| `frontend/src/components/graph/GraphCanvas.tsx` | Edit — use `useScenario()` hook | Trivial |
-| `frontend/src/hooks/useNodeColor.ts` | Edit — use `useScenario()` hook | Trivial |
-| `Dockerfile` | Edit — add `COPY data/scenarios/` line | Trivial |
-| `infra/main.bicep` | Edit — add `defaultScenario` param, parameterise index names | Low |
-| `data/scenarios/telco-noc/scripts/generate_all.sh` | Edit — comments only | Trivial |
-| `data/scenarios/telco-noc/graph_schema.yaml` | Edit — comment only | Trivial |
-| `README.md` | Edit — document `--scenario` flag, update examples | Low |
+| `scripts/scenario_loader.py` | **New** | ✅ |
+| `frontend/src/ScenarioContext.tsx` | **New** | ✅ |
+| `deploy.sh` | Edit — `--scenario` flag, YAML extraction, topology pass-through, `azd env set` | ✅ |
+| `hooks/postprovision.sh` | Edit — parameterize path (1 line) | ✅ |
+| `scripts/provision_search_index.py` | Edit — `load_scenario()` for paths, index names, dict keys | ✅ |
+| `scripts/provision_cosmos.py` | Edit — `load_scenario()` for data dir + container defs from YAML | ✅ |
+| `scripts/provision_agents.py` | Edit — `load_scenario()` for prompts dir + graph name | ✅ |
+| `scripts/generate_topology_json.py` | Edit — default from env var, validation, usage string | ✅ |
+| `scripts/fabric/provision_lakehouse.py` | Edit — remove fallback default, fail-fast | ✅ |
+| `scripts/fabric/provision_eventhouse.py` | Edit — remove fallback default, fail-fast | ✅ |
+| `scripts/agent_provisioner.py` | Edit — comment update (line 150) | ✅ |
+| `graph-query-api/config.py` | Edit — YAML loader, `SCENARIO_NAME`/`DEFAULT_GRAPH` exports, `DATA_SOURCES` from YAML | ✅ |
+| `graph-query-api/router_health.py` | Edit — import `SCENARIO_NAME`/`DEFAULT_GRAPH`, use as defaults | ✅ |
+| `graph-query-api/search_indexer.py` | Edit — docstring only | ✅ |
+| `graph-query-api/services/blob_uploader.py` | Edit — docstring only | ✅ |
+| `api/app/routers/config.py` | Edit — YAML-driven `SCENARIO_CONFIG`, `_load_current_config()`, `/scenario` endpoint | ✅ |
+| `frontend/src/config.ts` | Edit — `ScenarioConfig` interface + async `getScenario()` + `SCENARIO_DEFAULTS` | ✅ |
+| `frontend/src/main.tsx` | Edit — wrap `<App />` in `<ScenarioProvider>` | ✅ |
+| `frontend/src/App.tsx` | Edit — `useScenario()` hook | ✅ |
+| `frontend/src/components/Header.tsx` | Edit — `useScenario()` hook | ✅ |
+| `frontend/src/components/InvestigationPanel.tsx` | Edit — `useScenario()` hook | ✅ |
+| `frontend/src/components/DataSourceBar.tsx` | Edit — `useScenario()` hook + `SCENARIO.name` in dep array | ✅ |
+| `frontend/src/components/GraphTopologyViewer.tsx` | Edit — `useScenario()` hook | ✅ |
+| `frontend/src/components/graph/GraphCanvas.tsx` | Edit — `useScenario()` hook | ✅ |
+| `frontend/src/hooks/useNodeColor.ts` | Edit — `useScenario()` hook, moved colors inside hook body, updated deps | ✅ |
+| `Dockerfile` | Edit — `COPY data/scenarios/` line | ✅ |
+| `.dockerignore` | Edit — granular data include/exclude rules | ✅ |
+| `infra/main.bicep` | Edit — `defaultScenario`/`runbooksIndexName`/`ticketsIndexName` params + env vars | ✅ |
+| `data/scenarios/telco-noc/scripts/generate_all.sh` | Edit — comments/echo only | ✅ |
+| `data/scenarios/telco-noc/graph_schema.yaml` | Edit — comment only | ✅ |
+| `README.md` | Edit — `--scenario` flag in table, tarball reference genericized | ✅ |
 
-**Total: 2 new files, 29 edits (14 trivial, 7 low, 5 medium, 0 high)**
+**Total: 2 new files, 29 edits — all complete.**
+
+### Files NOT changed (no changes needed)
+
+| File | Reason |
+|---|---|
+| `api/pyproject.toml` | `pyyaml` already present |
+| `graph-query-api/pyproject.toml` | `pyyaml` already present |
+| `.azure/` env files | Generated by `azd env set`, not source code |

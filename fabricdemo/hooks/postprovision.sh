@@ -22,7 +22,7 @@ echo "============================================"
 # 1. Upload runbooks + tickets to blob storage
 #    (RBAC may take a few minutes to propagate after deployment)
 # --------------------------------------------------------------------------
-DATA_DIR="$PROJECT_ROOT/data/scenarios/telco-noc/data/knowledge"
+DATA_DIR="$PROJECT_ROOT/data/scenarios/${DEFAULT_SCENARIO}/data/knowledge"
 MAX_ATTEMPTS=6
 WAIT_SECS=30
 

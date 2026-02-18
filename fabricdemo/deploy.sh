@@ -23,6 +23,7 @@
 #   --provision-all      Run all provisioning steps (fabric + data + agents)
 #   --env NAME           Use a specific azd environment name
 #   --location LOC       Azure location (default: swedencentral)
+#   --scenario NAME      Scenario name (subfolder under data/scenarios/)
 #   --yes                Skip all confirmation prompts
 #
 # ============================================================================
@@ -61,6 +62,7 @@ PROVISION_AGENTS=false
 AUTO_YES=false
 AZD_ENV_NAME=""
 AZURE_LOC=""
+SCENARIO_NAME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -73,6 +75,7 @@ while [[ $# -gt 0 ]]; do
     --yes|-y)            AUTO_YES=true; shift ;;
     --env)               AZD_ENV_NAME="$2"; shift 2 ;;
     --location)          AZURE_LOC="$2"; shift 2 ;;
+    --scenario)          SCENARIO_NAME="$2"; shift 2 ;;
     --help|-h)
       sed -n '2,/^set -euo/p' "$0" | head -n -1
       exit 0
@@ -92,6 +95,55 @@ PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
 CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
+
+# ── Scenario discovery ──────────────────────────────────────────────
+
+if [[ -z "$SCENARIO_NAME" ]]; then
+  SCENARIO_NAME="${DEFAULT_SCENARIO:-}"
+fi
+if [[ -z "$SCENARIO_NAME" ]]; then
+  SCENARIOS=( $(ls -d "$PROJECT_ROOT/data/scenarios"/*/ 2>/dev/null | xargs -I{} basename {}) )
+  if (( ${#SCENARIOS[@]} == 1 )); then
+    SCENARIO_NAME="${SCENARIOS[0]}"
+  elif (( ${#SCENARIOS[@]} > 1 )); then
+    if $AUTO_YES; then
+      fail "Multiple scenarios found. Pass --scenario <name>."
+      exit 1
+    fi
+    choose "Which scenario?" "${SCENARIOS[@]}"
+    SCENARIO_NAME="$CHOSEN"
+  else
+    fail "No scenarios found in data/scenarios/"
+    exit 1
+  fi
+fi
+
+SCENARIO_DIR="$PROJECT_ROOT/data/scenarios/$SCENARIO_NAME"
+SCENARIO_YAML="$SCENARIO_DIR/scenario.yaml"
+
+if [[ ! -f "$SCENARIO_YAML" ]]; then
+  fail "Scenario manifest not found: $SCENARIO_YAML"
+  exit 1
+fi
+
+export DEFAULT_SCENARIO="$SCENARIO_NAME"
+info "Scenario: $SCENARIO_NAME (from $SCENARIO_YAML)"
+
+# Extract index names from scenario.yaml for Bicep / env vars
+RUNBOOKS_INDEX_NAME=$(python3 -c "
+import yaml
+with open('$SCENARIO_YAML') as f:
+    c = yaml.safe_load(f)
+print(c.get('data_sources',{}).get('search_indexes',{}).get('runbooks',{}).get('index_name','runbooks-index'))
+")
+TICKETS_INDEX_NAME=$(python3 -c "
+import yaml
+with open('$SCENARIO_YAML') as f:
+    c = yaml.safe_load(f)
+print(c.get('data_sources',{}).get('search_indexes',{}).get('tickets',{}).get('index_name','tickets-index'))
+")
+export RUNBOOKS_INDEX_NAME TICKETS_INDEX_NAME
+info "Index names: runbooks=$RUNBOOKS_INDEX_NAME, tickets=$TICKETS_INDEX_NAME"
 
 # ── Helper: prompt user ────────────────────────────────────────────
 
@@ -498,10 +550,10 @@ TOPO_OUTPUT="$PROJECT_ROOT/graph-query-api/backends/fixtures/topology.json"
 if [[ -f "$TOPO_SCRIPT" ]]; then
   if command -v uv &>/dev/null; then
     info "Generating topology.json from scenario CSVs..."
-    (cd "$PROJECT_ROOT" && uv run python "$TOPO_SCRIPT") && ok "topology.json generated → $TOPO_OUTPUT" || warn "Topology generation failed — frontend will fall back to live queries"
+    (cd "$PROJECT_ROOT" && uv run python "$TOPO_SCRIPT" --scenario "$SCENARIO_NAME") && ok "topology.json generated → $TOPO_OUTPUT" || warn "Topology generation failed — frontend will fall back to live queries"
   elif command -v python3 &>/dev/null; then
     info "Generating topology.json from scenario CSVs (python3)..."
-    (cd "$PROJECT_ROOT" && python3 "$TOPO_SCRIPT") && ok "topology.json generated → $TOPO_OUTPUT" || warn "Topology generation failed — frontend will fall back to live queries"
+    (cd "$PROJECT_ROOT" && python3 "$TOPO_SCRIPT" --scenario "$SCENARIO_NAME") && ok "topology.json generated → $TOPO_OUTPUT" || warn "Topology generation failed — frontend will fall back to live queries"
   else
     warn "Neither uv nor python3 found — skipping topology generation"
   fi
@@ -556,6 +608,9 @@ else
   azd env set AZURE_LOCATION "$AZURE_LOC"
   azd env set GRAPH_BACKEND "fabric-gql"
   azd env set GPT_CAPACITY_1K_TPM "${GPT_CAPACITY_1K_TPM:-300}"
+  azd env set DEFAULT_SCENARIO "$SCENARIO_NAME"
+  azd env set RUNBOOKS_INDEX_NAME "$RUNBOOKS_INDEX_NAME"
+  azd env set TICKETS_INDEX_NAME "$TICKETS_INDEX_NAME"
 
   # Auto-detect dev IP for Cosmos DB firewall whitelist
   if [[ -z "${DEV_IP_ADDRESS:-}" ]]; then

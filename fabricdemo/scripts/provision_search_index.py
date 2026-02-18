@@ -5,9 +5,8 @@ Provision AI Search indexes — data source, index, skillset, indexer pipeline.
 Generalized AI Search provisioner that creates the full indexing pipeline:
   blob data source → index (HNSW + vectorizer) → skillset → indexer
 
-For the telco-noc demo, creates:
-  - runbooks-index:   blob container 'runbooks',  files from knowledge/runbooks/*.md
-  - tickets-index:    blob container 'tickets',    files from knowledge/tickets/*.txt
+For the active scenario, creates indexes as defined in scenario.yaml
+  (e.g. runbooks-index from knowledge/runbooks/*.md, tickets-index from knowledge/tickets/*.txt)
 
 Usage:
     source azure_config.env
@@ -67,7 +66,11 @@ from azure.search.documents.indexes.models import (
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-KNOWLEDGE_DIR = PROJECT_ROOT / "data" / "scenarios" / "telco-noc" / "data" / "knowledge"
+
+from scenario_loader import load_scenario
+
+sc = load_scenario()
+KNOWLEDGE_DIR = sc["paths"]["runbooks"].parent  # data/knowledge/
 
 # From azure_config.env
 SEARCH_SERVICE_NAME = os.environ.get("AI_SEARCH_NAME", "")
@@ -78,21 +81,21 @@ AI_FOUNDRY_NAME = os.environ.get("AI_FOUNDRY_NAME", "")
 AZURE_SUBSCRIPTION_ID = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
 AZURE_RESOURCE_GROUP = os.environ.get("AZURE_RESOURCE_GROUP", "")
 
-# Index definitions: name → config
+# Index definitions: name → config (derived from scenario.yaml)
 INDEX_CONFIGS = {
-    "runbooks-index": {
-        "blob_container": "runbooks",
-        "local_dir": KNOWLEDGE_DIR / "runbooks",
+    sc["runbooks_index_name"]: {
+        "blob_container": sc["runbooks_blob_container"],
+        "local_dir": sc["paths"]["runbooks"],
         "file_glob": "*.md",
         "description": "Operational runbooks for network incident response",
-        "semantic_config_name": "runbooks-semantic",
+        "semantic_config_name": f"{sc['runbooks_blob_container']}-semantic",
     },
-    "tickets-index": {
-        "blob_container": "tickets",
-        "local_dir": KNOWLEDGE_DIR / "tickets",
+    sc["tickets_index_name"]: {
+        "blob_container": sc["tickets_blob_container"],
+        "local_dir": sc["paths"]["tickets"],
         "file_glob": "*.txt",
         "description": "Historical incident tickets for pattern matching",
-        "semantic_config_name": "tickets-semantic",
+        "semantic_config_name": f"{sc['tickets_blob_container']}-semantic",
     },
 }
 

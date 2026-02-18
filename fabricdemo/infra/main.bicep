@@ -39,6 +39,15 @@ param fabricWorkspaceId string = ''
 @allowed(['F2', 'F4', 'F8', 'F16', 'F32', 'F64', 'F128', 'F256', 'F512', 'F1024', 'F2048'])
 param fabricCapacitySku string = 'F8'
 
+@description('Active scenario name (subfolder under data/scenarios/)')
+param defaultScenario string = ''
+
+@description('AI Search index name for runbooks')
+param runbooksIndexName string = 'runbooks-index'
+
+@description('AI Search index name for tickets')
+param ticketsIndexName string = 'tickets-index'
+
 @description('Admin email for Fabric capacity')
 param fabricAdminEmail string = ''
 
@@ -192,13 +201,14 @@ module app 'modules/container-app.bicep' = {
       { name: 'AZURE_RESOURCE_GROUP', value: rg.name }
       { name: 'AI_SEARCH_NAME', value: search.outputs.name }
       { name: 'AZURE_SEARCH_ENDPOINT', value: search.outputs.endpoint }
-      { name: 'RUNBOOKS_INDEX_NAME', value: 'runbooks-index' }
-      { name: 'TICKETS_INDEX_NAME', value: 'tickets-index' }
+      { name: 'RUNBOOKS_INDEX_NAME', value: runbooksIndexName }
+      { name: 'TICKETS_INDEX_NAME', value: ticketsIndexName }
       { name: 'STORAGE_ACCOUNT_NAME', value: storage.outputs.name }
       { name: 'AI_FOUNDRY_NAME', value: aiFoundry.outputs.foundryName }
       { name: 'EMBEDDING_MODEL', value: 'text-embedding-3-small' }
       { name: 'EMBEDDING_DIMENSIONS', value: '1536' }
       { name: 'FABRIC_WORKSPACE_ID', value: fabricWorkspaceId }
+      { name: 'DEFAULT_SCENARIO', value: defaultScenario }
     ], [])
     secrets: []
   }

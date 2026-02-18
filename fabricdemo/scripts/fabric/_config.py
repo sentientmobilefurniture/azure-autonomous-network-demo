@@ -37,7 +37,7 @@ FABRIC_SCOPE: str = os.getenv(
 # Common resource names (read from env with sensible defaults)
 # ---------------------------------------------------------------------------
 WORKSPACE_ID: str = os.getenv("FABRIC_WORKSPACE_ID", "")
-WORKSPACE_NAME: str = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
+WORKSPACE_NAME: str = os.getenv("FABRIC_WORKSPACE_NAME", "telco-autonomous-network")
 CAPACITY_ID: str = os.getenv("FABRIC_CAPACITY_ID", "")
 LAKEHOUSE_NAME: str = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
 EVENTHOUSE_NAME: str = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH_3117")

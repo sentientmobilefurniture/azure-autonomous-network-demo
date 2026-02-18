@@ -35,7 +35,9 @@ from _config import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")
+SCENARIO = os.environ.get("DEFAULT_SCENARIO", "")
+if not SCENARIO:
+    print("ERROR: DEFAULT_SCENARIO not set"); sys.exit(1)
 DATA_DIR = str(PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "data" / "telemetry")
 
 # Table schemas — column name → KQL type

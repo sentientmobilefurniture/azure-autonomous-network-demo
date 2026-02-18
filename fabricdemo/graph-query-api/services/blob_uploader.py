@@ -28,7 +28,7 @@ def upload_files_to_blob(
     overwriting existing blobs.
 
     Args:
-        container_name: Target blob container name (e.g. 'telco-noc-runbooks')
+        container_name: Target blob container name (e.g. 'runbooks')
         files: List of local file paths to upload
         on_progress: Optional callback(message) for progress updates
 

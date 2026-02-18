@@ -3,7 +3,7 @@ import type { StepEvent, ThinkingState, RunMeta } from '../types';
 import { AlertInput } from './AlertInput';
 import { AgentTimeline } from './AgentTimeline';
 import { ErrorBanner } from './ErrorBanner';
-import { SCENARIO } from '../config';
+import { useScenario } from '../ScenarioContext';
 
 interface InvestigationPanelProps {
   alert: string;
@@ -28,6 +28,7 @@ export function InvestigationPanel({
   runStarted,
   runMeta,
 }: InvestigationPanelProps) {
+  const SCENARIO = useScenario();
   const exampleQuestions = SCENARIO.exampleQuestions;
 
   return (

@@ -51,6 +51,9 @@ COPY api/app/ ./app/
 RUN mkdir -p /app/scripts
 COPY scripts/agent_provisioner.py /app/scripts/
 
+# ── Scenario data (YAML manifests for runtime config) ─────────────
+COPY data/scenarios/ /app/data/scenarios/
+
 # ── Frontend static files ─────────────────────────────────────────
 COPY --from=frontend-build /build/dist /usr/share/nginx/html
 

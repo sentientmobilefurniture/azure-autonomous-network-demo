@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import type { TopologyNode, TopologyEdge } from '../../hooks/useTopology';
 import { useNodeColor } from '../../hooks/useNodeColor';
-import { SCENARIO } from '../../config';
+import { useScenario } from '../../ScenarioContext';
 
 type GNode = NodeObject<TopologyNode>;
 type GLink = LinkObject<TopologyNode, TopologyEdge>;
@@ -58,6 +58,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
     const getNodeColor = useNodeColor(nodeColorOverride);
 
     // Size resolver (scenario sizes normalized to canvas scale)
+    const SCENARIO = useScenario();
     const scenarioNodeSizes = SCENARIO.graphStyles.nodeSizes;
     const getNodeSize = useCallback(
       (label: string) => {

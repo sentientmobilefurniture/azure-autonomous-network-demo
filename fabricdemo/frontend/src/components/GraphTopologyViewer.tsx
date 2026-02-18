@@ -6,7 +6,7 @@ import { GraphTooltip } from './graph/GraphTooltip';
 import { GraphContextMenu } from './graph/GraphContextMenu';
 import { usePausableSimulation } from '../hooks/usePausableSimulation';
 import { useTooltipTracking } from '../hooks/useTooltipTracking';
-import { SCENARIO } from '../config';
+import { useScenario } from '../ScenarioContext';
 
 interface GraphTopologyViewerProps {
   width: number;
@@ -14,6 +14,7 @@ interface GraphTopologyViewerProps {
 }
 
 export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps) {
+  const SCENARIO = useScenario();
   const { data, loading, error, refetch } = useTopology();
   const storagePrefix = SCENARIO.name;
   const canvasRef = useRef<GraphCanvasHandle>(null);

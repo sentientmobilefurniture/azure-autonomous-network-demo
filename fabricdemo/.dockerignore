@@ -24,8 +24,19 @@ deprecated
 # Frontend build artifacts (built inside Docker)
 frontend/dist
 
-# Scenario data (loaded via provisioning scripts, not baked into image)
+# Scenario data — bulk CSVs/docs excluded, YAML manifests included
 data
+!data/scenarios/
+!data/scenarios/*/
+!data/scenarios/*/scenario.yaml
+!data/scenarios/*/graph_schema.yaml
+!data/scenarios/*/data/
+!data/scenarios/*/data/prompts/
+!data/scenarios/*/data/prompts/**
+data/scenarios/*/data/entities/
+data/scenarios/*/data/telemetry/
+data/scenarios/*/data/knowledge/
+data/scenarios/*/scripts/
 
 # Custom skills (not needed at runtime)
 custom_skills

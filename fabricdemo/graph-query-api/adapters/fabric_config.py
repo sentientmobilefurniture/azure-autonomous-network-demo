@@ -29,7 +29,7 @@ FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
 # Provisioning defaults (used by provision scripts, not at runtime)
 # ---------------------------------------------------------------------------
 
-FABRIC_WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "AutonomousNetworkDemo")
+FABRIC_WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "telco-autonomous-network")
 FABRIC_LAKEHOUSE_NAME = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
 FABRIC_EVENTHOUSE_NAME = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH")
 FABRIC_ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")

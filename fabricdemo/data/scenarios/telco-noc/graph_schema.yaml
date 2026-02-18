@@ -10,7 +10,7 @@
 
 # Directory containing CSV files.
 # Use 'entities' when run via ScenarioLoader (relative to schema file).
-# The backwards-compat symlink data/network → scenarios/telco-noc/data/entities
+# The backwards-compat symlink data/network → scenarios/<name>/data/entities
 # ensures the old PROJECT_ROOT-relative resolution also works during transition.
 data_dir: data/entities
 

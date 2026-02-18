@@ -1,7 +1,7 @@
 """
-Health-check router — probes each data source for the telco-noc demo.
+Health-check router — probes each data source for the active scenario.
 
-GET /query/health/sources?scenario=telco-noc
+GET /query/health/sources?scenario=<name>
 
 Returns per-source health status including the exact query used,
 latency, and error details. Consumed by the frontend DataSourceBar.
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
 
-from config import DATA_SOURCES
+from config import DATA_SOURCES, SCENARIO_NAME, DEFAULT_GRAPH
 from backends import get_backend_for_graph
 
 logger = logging.getLogger("graph-query-api.health")
@@ -93,7 +93,7 @@ async def _ping_search_index(index_name: str) -> dict:
 
 
 @router.get("/health/sources")
-async def health_check_sources(scenario: str = Query(default="telco-noc", description="Scenario name")):
+async def health_check_sources(scenario: str = Query(default=SCENARIO_NAME, description="Scenario name")):
     """Probe each data source and return health status."""
     results = []
 
@@ -101,7 +101,7 @@ async def health_check_sources(scenario: str = Query(default="telco-noc", descri
     graph_def = DATA_SOURCES.get("graph", {})
     if graph_def:
         connector = graph_def.get("connector", "fabric-gql")
-        graph_name = graph_def.get("resource_name", "telco-noc-topology")
+        graph_name = graph_def.get("resource_name", DEFAULT_GRAPH)
         ping_result = await _ping_graph_backend(connector, {}, graph_name)
         results.append({
             "source_type": "graph",

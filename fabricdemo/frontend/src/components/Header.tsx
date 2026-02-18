@@ -3,9 +3,10 @@ import { AgentBar } from './AgentBar';
 import { DataSourceBar } from './DataSourceBar';
 import { ServiceHealthSummary } from './ServiceHealthSummary';
 import { ServiceHealthPopover } from './ServiceHealthPopover';
-import { SCENARIO } from '../config';
+import { useScenario } from '../ScenarioContext';
 
 export function Header() {
+  const SCENARIO = useScenario();
   const [healthOpen, setHealthOpen] = useState(false);
 
   return (

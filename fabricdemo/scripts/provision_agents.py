@@ -28,8 +28,10 @@ from agent_provisioner import (
 # ── Paths ─────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SCENARIO = os.environ.get("DEFAULT_SCENARIO", "telco-noc")
-PROMPTS_DIR = PROJECT_ROOT / "data" / "scenarios" / SCENARIO / "data" / "prompts"
+from scenario_loader import load_scenario
+
+sc = load_scenario()
+PROMPTS_DIR = sc["paths"]["prompts"]
 CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
 
 LANGUAGE_FILE_MAP = {
@@ -87,7 +89,7 @@ def _load_config() -> dict:
         "graph_query_api_uri": graph_query_api_uri,
         # Normalise: agent_provisioner uses "fabric" or "mock", not "fabric-gql"
         "graph_backend": "fabric" if "fabric" in os.environ.get("GRAPH_BACKEND", "fabric-gql").lower() else "mock",
-        "graph_name": os.environ.get("DEFAULT_SCENARIO", "telco-noc"),
+        "graph_name": sc["graph_name"],
     }
 
 

@@ -12,13 +12,14 @@ import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { TerminalPanel } from './components/TerminalPanel';
-import { SCENARIO } from './config';
+import { useScenario } from './ScenarioContext';
 import { formatTimeAgo } from './utils/formatTime';
 import type { Interaction } from './types';
 
 type AppTab = 'investigate' | 'resources';
 
 export default function App() {
+  const SCENARIO = useScenario();
   const {
     alert,
     setAlert,

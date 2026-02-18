@@ -147,7 +147,7 @@ def _load_openapi_spec(
     raw = raw.replace("{base_url}", graph_query_api_uri.rstrip("/"))
     spec = yaml.safe_load(raw)
     if keep_path and "paths" in spec:
-        # Prefix match: "/query/graph" matches "/query/graph/telco-noc-topology"
+        # Prefix match: "/query/graph" matches "/query/graph/<scenario>-topology"
         spec["paths"] = {k: v for k, v in spec["paths"].items() if k.startswith(keep_path)}
     return spec
 

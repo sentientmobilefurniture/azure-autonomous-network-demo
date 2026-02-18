@@ -3,11 +3,11 @@
 Provision Cosmos DB NoSQL containers — async bulk load.
 
 Generalized Cosmos DB provisioner that creates databases, containers,
-and bulk-loads CSV data. For the telco-noc demo, loads AlertStream
-and LinkTelemetry into Cosmos NoSQL.
+and bulk-loads CSV data. Loads containers defined in scenario.yaml
+into Cosmos NoSQL.
 
 Data source options:
-  (default)       Read CSVs from local data/scenarios/telco-noc/data/telemetry/
+  (default)       Read CSVs from local scenario telemetry directory
   --from-blob     Read CSVs from Azure Blob Storage ('telemetry-data' container)
 
 Usage:
@@ -44,7 +44,11 @@ from azure.identity.aio import DefaultAzureCredential
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "scenarios" / "telco-noc" / "data" / "telemetry"
+
+from scenario_loader import load_scenario
+
+sc = load_scenario()
+DATA_DIR = sc["paths"]["telemetry"]
 
 ENDPOINT = os.environ.get("COSMOS_NOSQL_ENDPOINT", "")
 DATABASE = os.environ.get("COSMOS_NOSQL_DATABASE", "telemetrydb")
@@ -57,21 +61,16 @@ BLOB_CONTAINER = "telemetry-data"
 # 50 is conservative and avoids 429 rate-limit storms.
 CONCURRENCY = 50
 
-# Container definitions: name → config
-CONTAINERS = {
-    "AlertStream": {
-        "partition_key": "/SourceNodeType",
-        "csv_file": "AlertStream.csv",
-        "id_field": "AlertId",
-        "numeric_fields": {"OpticalPowerDbm", "BitErrorRate", "CPUUtilPct", "PacketLossPct"},
-    },
-    "LinkTelemetry": {
-        "partition_key": "/LinkId",
-        "csv_file": "LinkTelemetry.csv",
-        "id_field": None,  # composite: LinkId + Timestamp
-        "numeric_fields": {"UtilizationPct", "OpticalPowerDbm", "BitErrorRate", "LatencyMs"},
-    },
-}
+# Container definitions: name → config (derived from scenario.yaml)
+_telemetry_cfg = sc["data_sources"]["telemetry"]["config"]
+CONTAINERS = {}
+for _c in _telemetry_cfg.get("containers", []):
+    CONTAINERS[_c["name"]] = {
+        "partition_key": _c["partition_key"],
+        "csv_file": _c["csv_file"],
+        "id_field": _c.get("id_field"),
+        "numeric_fields": set(_c.get("numeric_fields", [])),
+    }
 
 
 # ---------------------------------------------------------------------------

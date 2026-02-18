@@ -7,7 +7,7 @@ with the exact {topology_nodes, topology_edges} structure that
 router_topology.py / MockGraphBackend expects.
 
 Usage:
-    python scripts/generate_topology_json.py [--scenario telco-noc] [--output path]
+    python scripts/generate_topology_json.py [--scenario <name>] [--output path]
 
 Default output: graph-query-api/backends/fixtures/topology.json
 """
@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -163,7 +164,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--scenario",
-        default="telco-noc",
+        default=os.environ.get("DEFAULT_SCENARIO", ""),
         help="Scenario name (subfolder under data/scenarios/)",
     )
     parser.add_argument(
@@ -172,6 +173,9 @@ def main() -> None:
         help="Output path (default: graph-query-api/backends/fixtures/topology.json)",
     )
     args = parser.parse_args()
+
+    if not args.scenario:
+        parser.error("--scenario is required (or set DEFAULT_SCENARIO env var)")
 
     # Resolve paths relative to project root
     project_root = Path(__file__).resolve().parent.parent

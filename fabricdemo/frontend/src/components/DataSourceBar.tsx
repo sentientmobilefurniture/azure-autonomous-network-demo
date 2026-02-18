@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { DataSourceCard } from './DataSourceCard';
 import type { DataSourceHealth } from './DataSourceCard';
-import { SCENARIO } from '../config';
+import { useScenario } from '../ScenarioContext';
 
 const QUERY_API = '/query';
 
 export function DataSourceBar() {
+  const SCENARIO = useScenario();
   const [sources, setSources] = useState<DataSourceHealth[]>([]);
 
   useEffect(() => {
@@ -18,7 +19,7 @@ export function DataSourceBar() {
     check();
     const iv = setInterval(check, 30_000);
     return () => clearInterval(iv);
-  }, []);
+  }, [SCENARIO.name]);
 
   if (sources.length === 0) return null;
 

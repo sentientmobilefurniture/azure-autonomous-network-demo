@@ -79,8 +79,8 @@ def create_search_index(
     """Create a complete AI Search indexer pipeline and poll until done.
 
     Args:
-        index_name: Search index name (e.g. 'telco-noc-runbooks-index')
-        container_name: Blob container name (e.g. 'telco-noc-runbooks')
+        index_name: Search index name (e.g. '<scenario>-runbooks-index')
+        container_name: Blob container name (e.g. 'runbooks')
         on_progress: Optional callback(detail: str) for progress updates
 
     Returns:

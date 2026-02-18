@@ -3,13 +3,16 @@ Router: /api/config — runtime configuration and resource graph.
 
 GET  /api/config/current     — return current active configuration
 GET  /api/config/resources   — resource graph (agents, tools, data sources, infra)
+GET  /api/config/scenario    — active scenario metadata
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
+import yaml
 from fastapi import APIRouter, Request
 
 from app.paths import PROJECT_ROOT
@@ -21,71 +24,95 @@ router = APIRouter(prefix="/api/config", tags=["configuration"])
 
 
 # ---------------------------------------------------------------------------
-# Hardcoded scenario config for telco-noc (used by _build_resource_graph)
+# Scenario YAML loader
 # ---------------------------------------------------------------------------
 
-SCENARIO_CONFIG = {
-    "agents": [
-        {
-            "name": "GraphExplorerAgent",
-            "model": "gpt-4.1",
-            "is_orchestrator": False,
-            "tools": [{"type": "openapi", "spec_template": "graph", "data_source": "graph"}],
-            "connected_agents": [],
-        },
-        {
-            "name": "TelemetryAgent",
-            "model": "gpt-4.1",
-            "is_orchestrator": False,
-            "tools": [{"type": "openapi", "spec_template": "telemetry", "data_source": "telemetry"}],
-            "connected_agents": [],
-        },
-        {
-            "name": "RunbookKBAgent",
-            "model": "gpt-4.1",
-            "is_orchestrator": False,
-            "tools": [{"type": "azure_ai_search", "index": "runbooks-index", "data_source": "runbooks"}],
-            "connected_agents": [],
-        },
-        {
-            "name": "HistoricalTicketAgent",
-            "model": "gpt-4.1",
-            "is_orchestrator": False,
-            "tools": [{"type": "azure_ai_search", "index": "tickets-index", "data_source": "tickets"}],
-            "connected_agents": [],
-        },
-        {
-            "name": "Orchestrator",
-            "model": "gpt-4.1",
-            "is_orchestrator": True,
-            "tools": [],
-            "connected_agents": ["GraphExplorerAgent", "TelemetryAgent", "RunbookKBAgent", "HistoricalTicketAgent"],
-        },
-    ],
-    "data_sources": {
+SCENARIO_NAME = os.getenv("DEFAULT_SCENARIO", "")
+
+# Container path: /app/data/scenarios/<name>/scenario.yaml
+_SCENARIO_YAML_CANDIDATES = [
+    Path("/app/data/scenarios") / SCENARIO_NAME / "scenario.yaml",
+    PROJECT_ROOT / "data" / "scenarios" / SCENARIO_NAME / "scenario.yaml",
+]
+
+def _load_scenario_yaml() -> dict:
+    if not SCENARIO_NAME:
+        logger.warning("DEFAULT_SCENARIO not set — resource graph will be empty")
+        return {}
+    for p in _SCENARIO_YAML_CANDIDATES:
+        if p.exists():
+            with open(p) as f:
+                return yaml.safe_load(f)
+    logger.warning("scenario.yaml not found — resource graph will be empty")
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Build SCENARIO_CONFIG from YAML (replaces hardcoded dict)
+# ---------------------------------------------------------------------------
+
+def _build_scenario_config(manifest: dict) -> dict:
+    """Convert scenario.yaml into the internal SCENARIO_CONFIG format."""
+    agents = []
+    for ag in manifest.get("agents", []):
+        tools = []
+        for t in ag.get("tools", []):
+            tool_entry = {"type": t["type"]}
+            if t["type"] == "openapi":
+                tool_entry["spec_template"] = t.get("spec_template", "")
+                tool_entry["data_source"] = t.get("spec_template", "")  # graph/telemetry
+            elif t["type"] == "azure_ai_search":
+                # Resolve index key to actual index name from scenario.yaml
+                idx_key = t.get("index_key", "")
+                idx_name = manifest.get("data_sources", {}).get("search_indexes", {}).get(idx_key, {}).get("index_name", f"{idx_key}-index")
+                tool_entry["index"] = idx_name
+                tool_entry["data_source"] = idx_key
+            tools.append(tool_entry)
+
+        agents.append({
+            "name": ag["name"],
+            "model": ag.get("model", "gpt-4.1"),
+            "is_orchestrator": ag.get("is_orchestrator", False),
+            "tools": tools,
+            "connected_agents": ag.get("connected_agents", []),
+        })
+
+    ds = manifest.get("data_sources", {})
+    graph_cfg = ds.get("graph", {}).get("config", {})
+    graph_name = graph_cfg.get("graph", "")
+    search = ds.get("search_indexes", {})
+    runbooks_idx = search.get("runbooks", {}).get("index_name", "runbooks-index")
+    tickets_idx = search.get("tickets", {}).get("index_name", "tickets-index")
+
+    data_sources = {
         "graph": {
-            "type": "fabric_gql",
-            "label": "Fabric GQL (telco-noc-topology)",
+            "type": ds.get("graph", {}).get("connector", "fabric-gql") if ds else "fabric_gql",
+            "label": f"Fabric GQL ({graph_name})",
             "workspace": os.getenv("FABRIC_WORKSPACE_ID", ""),
             "graph_model": "(auto-discovered at runtime)",
         },
         "telemetry": {
-            "type": "fabric_kql",
+            "type": ds.get("telemetry", {}).get("connector", "fabric-kql") if ds else "fabric_kql",
             "label": "Fabric KQL (NetworkTelemetryEH)",
             "eventhouse": "(auto-discovered at runtime)",
         },
         "runbooks": {
             "type": "azure_ai_search",
-            "label": "AI Search (runbooks-index)",
-            "index": "runbooks-index",
+            "label": f"AI Search ({runbooks_idx})",
+            "index": runbooks_idx,
         },
         "tickets": {
             "type": "azure_ai_search",
-            "label": "AI Search (tickets-index)",
-            "index": "tickets-index",
+            "label": f"AI Search ({tickets_idx})",
+            "index": tickets_idx,
         },
-    },
-}
+    }
+
+    return {"agents": agents, "data_sources": data_sources}
+
+
+_manifest = _load_scenario_yaml()
+SCENARIO_CONFIG = _build_scenario_config(_manifest) if _manifest else {"agents": [], "data_sources": {}}
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +122,18 @@ SCENARIO_CONFIG = {
 
 def _load_current_config() -> dict:
     """Load current config from Foundry agent discovery + env-var defaults."""
+    _runbooks_default = (
+        _manifest.get("data_sources", {}).get("search_indexes", {}).get("runbooks", {}).get("index_name", "runbooks-index")
+        if _manifest else "runbooks-index"
+    )
+    _tickets_default = (
+        _manifest.get("data_sources", {}).get("search_indexes", {}).get("tickets", {}).get("index_name", "tickets-index")
+        if _manifest else "tickets-index"
+    )
     config = {
-        "graph": "telco-noc",
-        "runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", "runbooks-index"),
-        "tickets_index": os.getenv("TICKETS_INDEX_NAME", "tickets-index"),
+        "graph": SCENARIO_NAME,
+        "runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", _runbooks_default),
+        "tickets_index": os.getenv("TICKETS_INDEX_NAME", _tickets_default),
         "agents": None,
     }
 
@@ -260,5 +295,32 @@ def _infra_nodes_only() -> list[dict]:
 
 @router.get("/resources", summary="Get resource graph for visualization")
 async def get_resource_graph(request: Request):
-    """Build and return the nodes+edges resource graph from hardcoded config."""
-    return _build_resource_graph(SCENARIO_CONFIG, "telco-noc")
+    """Build and return the nodes+edges resource graph from active scenario."""
+    return _build_resource_graph(SCENARIO_CONFIG, SCENARIO_NAME)
+
+
+@router.get("/scenario", summary="Active scenario metadata")
+async def get_scenario():
+    """Return scenario-level metadata loaded from scenario.yaml.
+
+    The frontend uses this to populate titles, graph styles,
+    example questions, and data-source labels without hardcoding.
+    """
+    if not _manifest:
+        return {"name": SCENARIO_NAME, "display_name": SCENARIO_NAME, "data_sources": {}}
+
+    ds = _manifest.get("data_sources", {})
+    search = ds.get("search_indexes", {})
+    graph_cfg = ds.get("graph", {}).get("config", {})
+
+    return {
+        "name": SCENARIO_NAME,
+        "display_name": _manifest.get("display_name", SCENARIO_NAME),
+        "graph_name": graph_cfg.get("graph", ""),
+        "graph_styles": _manifest.get("graph_styles", {}),
+        "example_questions": _manifest.get("example_questions", []),
+        "data_sources": {
+            "runbooks_index": search.get("runbooks", {}).get("index_name", "runbooks-index"),
+            "tickets_index": search.get("tickets", {}).get("index_name", "tickets-index"),
+        },
+    }

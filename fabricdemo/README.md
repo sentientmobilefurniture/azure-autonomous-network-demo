@@ -119,6 +119,7 @@ and agent configuration happen via the UI after deployment.
 
 | Flag | Effect |
 |------|--------|
+| `--scenario NAME` | Scenario to deploy (auto-detected if only one exists) |
 | `--skip-infra` | Skip `azd up` (reuse existing Azure resources) |
 | `--skip-local` | Skip starting local API + frontend |
 | `--env NAME` | azd environment name |
@@ -151,7 +152,7 @@ Generate tarballs from the included scenarios:
 ```
 
 This creates:
-- `data/scenarios/telco-noc.tar.gz`
+- `data/scenarios/<name>.tar.gz` (e.g. `telco-noc.tar.gz`)
 - `data/scenarios/cloud-outage.tar.gz`
 - `data/scenarios/customer-recommendation.tar.gz`
 

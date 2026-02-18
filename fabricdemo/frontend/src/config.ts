@@ -1,54 +1,52 @@
-// Hardcoded scenario configuration — single-scenario showcase.
-// Replaces the dynamic ScenarioContext with compile-time constants.
+// Scenario configuration — fetched from /api/config/scenario at runtime.
+// Replaces the previous hardcoded SCENARIO const.
 
-export const SCENARIO = {
-  name: "telco-noc",
-  displayName: "Australian Telco NOC — Fibre Cut Incident",
-  graph: "telco-noc-topology",
-  runbooksIndex: "runbooks-index",
-  ticketsIndex: "tickets-index",
-  description:
-    "A fibre cut on the Sydney-Melbourne corridor triggers a cascading alert " +
-    "storm affecting enterprise VPNs, broadband, and mobile services. The AI " +
-    "investigates root cause, blast radius, and remediation.",
+export interface ScenarioConfig {
+  name: string;
+  displayName: string;
+  description: string;
+  graph: string;
+  runbooksIndex: string;
+  ticketsIndex: string;
   graphStyles: {
-    nodeColors: {
-      CoreRouter: "#38BDF8",
-      AggSwitch: "#FB923C",
-      BaseStation: "#A78BFA",
-      TransportLink: "#3B82F6",
-      MPLSPath: "#C084FC",
-      Service: "#CA8A04",
-      SLAPolicy: "#FB7185",
-      BGPSession: "#F472B6",
-    } as Record<string, string>,
-    nodeSizes: {
-      CoreRouter: 28,
-      AggSwitch: 22,
-      BaseStation: 18,
-      TransportLink: 16,
-      MPLSPath: 14,
-      Service: 20,
-      SLAPolicy: 12,
-      BGPSession: 14,
-    } as Record<string, number>,
-    nodeIcons: {
-      CoreRouter: "router",
-      AggSwitch: "switch",
-      BaseStation: "antenna",
-      TransportLink: "link",
-      MPLSPath: "path",
-      Service: "service",
-      SLAPolicy: "policy",
-      BGPSession: "session",
-    } as Record<string, string>,
-  },
-  exampleQuestions: [
-    "What caused the alert storm on the Sydney-Melbourne corridor?",
-    "Which enterprise services are affected by the fibre cut?",
-    "How are MPLS paths rerouting around the failed transport link?",
-    "What BGP sessions are down and what's their blast radius?",
-    "Which SLA policies are at risk of being breached?",
-    "Show me the correlation between optical power drops and service degradation",
-  ],
+    nodeColors: Record<string, string>;
+    nodeSizes: Record<string, number>;
+    nodeIcons: Record<string, string>;
+  };
+  exampleQuestions: string[];
+  useCases: string[];
+}
+
+let _cached: ScenarioConfig | null = null;
+let _fetchPromise: Promise<ScenarioConfig> | null = null;
+
+export async function getScenario(): Promise<ScenarioConfig> {
+  if (_cached) return _cached;
+  if (!_fetchPromise) {
+    _fetchPromise = fetch("/api/config/scenario")
+      .then((r) => r.json())
+      .then((data: ScenarioConfig) => {
+        _cached = data;
+        return data;
+      });
+  }
+  return _fetchPromise;
+}
+
+// Synchronous fallback for initial render — populated after first fetch
+export const SCENARIO_DEFAULTS: ScenarioConfig = {
+  name: "",
+  displayName: "Loading...",
+  description: "",
+  graph: "",
+  runbooksIndex: "",
+  ticketsIndex: "",
+  graphStyles: { nodeColors: {}, nodeSizes: {}, nodeIcons: {} },
+  exampleQuestions: [],
+  useCases: [],
 };
+
+// Backward-compat: synchronous access (returns cached or defaults)
+export function getScenarioSync(): ScenarioConfig {
+  return _cached ?? SCENARIO_DEFAULTS;
+}
