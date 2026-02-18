@@ -1,6 +1,17 @@
 // Scenario configuration — fetched from /api/config/scenario at runtime.
 // Replaces the previous hardcoded SCENARIO const.
 
+export interface DemoFlowStep {
+  prompt: string;
+  expect: string;
+}
+
+export interface DemoFlow {
+  title: string;
+  description: string;
+  steps: DemoFlowStep[];
+}
+
 export interface ScenarioConfig {
   name: string;
   displayName: string;
@@ -15,6 +26,7 @@ export interface ScenarioConfig {
   };
   exampleQuestions: string[];
   useCases: string[];
+  demoFlows: DemoFlow[];
 }
 
 let _cached: ScenarioConfig | null = null;
@@ -44,6 +56,7 @@ export const SCENARIO_DEFAULTS: ScenarioConfig = {
   graphStyles: { nodeColors: {}, nodeSizes: {}, nodeIcons: {} },
   exampleQuestions: [],
   useCases: [],
+  demoFlows: [],
 };
 
 // Backward-compat: synchronous access (returns cached or defaults)

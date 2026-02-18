@@ -25,7 +25,7 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
         Submit Alert
       </span>
       <textarea
-        className="glass-input w-full rounded-lg p-3 text-sm text-text-primary placeholder-text-muted focus:outline-none resize-none"
+        className="glass-input w-full rounded-lg p-3 text-sm text-text-primary placeholder-text-muted focus:outline-none resize-y min-h-[3.5rem]"
         rows={2}
         value={alert}
         onChange={(e) => onAlertChange(e.target.value)}

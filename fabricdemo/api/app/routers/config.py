@@ -320,6 +320,7 @@ async def get_scenario():
             "graphStyles": {"nodeColors": {}, "nodeSizes": {}, "nodeIcons": {}},
             "exampleQuestions": [],
             "useCases": [],
+            "demoFlows": [],
         }
 
     ds = _manifest.get("data_sources", {})
@@ -353,4 +354,5 @@ async def get_scenario():
         },
         "exampleQuestions": _manifest.get("example_questions", []),
         "useCases": _manifest.get("use_cases", []),
+        "demoFlows": _manifest.get("demo_flows", []),
     }

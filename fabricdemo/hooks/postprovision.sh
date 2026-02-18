@@ -101,6 +101,9 @@ cat > "$CONFIG_FILE" <<EOF
 # Last updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 # ============================================================================
 
+# --- Scenario ---
+DEFAULT_SCENARIO=${DEFAULT_SCENARIO:-telecom-playground}
+
 # --- Core Azure settings (AUTO: from deployment) ---
 AZURE_SUBSCRIPTION_ID=$SUB_ID
 AZURE_RESOURCE_GROUP=$RG

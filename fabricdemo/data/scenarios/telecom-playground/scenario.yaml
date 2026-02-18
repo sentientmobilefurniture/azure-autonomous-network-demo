@@ -190,3 +190,122 @@ telemetry_baselines:
     - metric: BitErrorRate
       normal: "< 1e-9"
       anomalous: "> 1e-6"
+
+# ---------------------------------------------------------------------------
+# Demo flows — guided walkthroughs for live demonstrations
+# ---------------------------------------------------------------------------
+
+demo_flows:
+  - title: "Fibre Cut Incident — Full Root Cause Analysis"
+    description: >
+      It's 2:31 PM and the Fabric Eventhouse anomaly detector fires. Twenty
+      correlated alerts land within a single second — VPN tunnels down, broadband
+      degraded, mobile backhaul failing across both Sydney and Melbourne. The
+      anomaly detector groups the burst and triggers the agentic investigation
+      flow automatically, passing the raw alert batch as input.
+    steps:
+      - prompt: |
+          [AUTOMATED TRIGGER — Fabric Eventhouse Anomaly Detector]
+          An anomaly burst has been detected: 20 correlated alerts within 1 second across the SYD-MEL corridor. Raw alert data below.
+
+
+          14:31:14.077 WARNING MOB-5G-MEL-3011 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.124 WARNING MOB-5G-SYD-2042 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.133 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.161 CRITICAL VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.185 WARNING MOB-5G-SYD-2041 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.222 WARNING MOB-5G-MEL-3011 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.259 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.289 MAJOR BB-BUNDLE-SYD-NORTH SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.518 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.551 WARNING MOB-5G-MEL-3011 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.558 WARNING MOB-5G-SYD-2042 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.565 WARNING MOB-5G-SYD-2041 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.657 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.704 CRITICAL VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.808 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.847 CRITICAL VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.847 WARNING MOB-5G-SYD-2041 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.902 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.968 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.986 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+        expect: >
+          The AI should parse the raw alert storm, deduplicate the events, identify
+          the SYD-MEL transport corridor as the common factor, trace to the fibre cut
+          as root cause, and surface the physical conduit as the shared failure domain.
+      - prompt: "Which enterprise services are affected by the fibre cut?"
+        expect: >
+          Maps blast radius across BGP sessions, MPLS paths, and end-customer
+          services. Should highlight SLA policies at risk and quantify the
+          number of impacted customers.
+      - prompt: "How are MPLS paths rerouting around the failed transport link?"
+        expect: >
+          Shows active MPLS path failovers, highlights capacity constraints
+          on backup paths, and flags any paths that have no redundancy.
+      - prompt: "Which SLA policies are at risk of being breached?"
+        expect: >
+          Identifies SLA policies with breach timers approaching threshold,
+          ranks by business impact, and suggests prioritisation for remediation.
+
+  - title: "Shared Conduit Risk Discovery"
+    description: >
+      The fibre cut is repaired, but the post-incident review raises an uncomfortable
+      question. The network was designed with two 'redundant' paths between Sydney and
+      Melbourne — yet both went down simultaneously. The infrastructure planning team
+      suspects the supposedly independent fibre routes may share a physical conduit
+      somewhere along the corridor. Time to interrogate the network graph.
+    steps:
+      - prompt: "Do our 'redundant' SYD-MEL fibres share a physical conduit?"
+        expect: >
+          The graph explorer should trace physical conduit relationships and
+          reveal shared-fate risk between supposedly redundant fibre paths.
+      - prompt: "Which amplifiers service the SYD-MEL fibre and when were they last calibrated?"
+        expect: >
+          Lists amplifier sites along the corridor with calibration dates,
+          highlighting any that are overdue for maintenance.
+      - prompt: "Show me the correlation between optical power drops and service degradation"
+        expect: >
+          Cross-references telemetry data (optical power, BER) with service-level
+          impact metrics to demonstrate causal chain from physical layer to
+          customer experience.
+
+  - title: "Firmware Advisory & Proactive Risk"
+    description: >
+      Monday morning — a Cisco PSIRT advisory lands in the security team's Outlook
+      inbox. An Outlook rule detects the PSIRT sender and triggers the agentic
+      investigation flow, forwarding the advisory body as input. A high-severity
+      OSPF bug affects ASR-9000 routers running IOS-XR 7.9.x — the exact platform
+      deployed on the Sydney-Melbourne backbone. The system needs to determine which
+      routers are exposed, what sessions they carry, and whether any past incidents
+      match the pattern.
+    steps:
+      - prompt: |
+          [AUTOMATED TRIGGER — Outlook Agentic Action]
+          A Cisco PSIRT advisory has been forwarded from the security team mailbox. Advisory content below.
+
+          CISCO PSIRT ADVISORY — CSCwi82345
+          Severity: HIGH
+          Title: OSPF adjacency flap under high BGP churn
+          Affected: IOS-XR 7.9.1, IOS-XR 7.9.2 on ASR-9000 series
+          Detail: OSPF adjacency may drop when BGP table exceeds 500K prefixes
+          during reconvergence. Fixed in IOS-XR 7.10.1.
+        expect: >
+          The AI should parse the advisory, extract the affected firmware versions
+          (IOS-XR 7.9.1, 7.9.2) and platform (ASR-9000), query the network graph
+          for matching routers, and identify CORE-SYD-01 and CORE-MEL-01 as exposed.
+          Should also flag that these are backbone routers carrying critical transit traffic.
+      - prompt: "Are any routers running firmware affected by known vendor advisories?"
+        expect: >
+          Broadens the search beyond the single Cisco advisory to check all routers
+          against all known advisories in the graph. Should additionally surface
+          ADV-CISCO-2025-002 (BFD false positives) affecting the same Cisco routers,
+          and ADV-JUNIPER-2025-001 (MPLS LDP reset) affecting CORE-BNE-01.
+      - prompt: "What BGP sessions are down and what's their blast radius?"
+        expect: >
+          Enumerates down BGP sessions, traces upstream/downstream impact through
+          the topology graph, and quantifies affected services and customers.
+      - prompt: "What historical tickets match this incident pattern?"
+        expect: >
+          Searches the ticket knowledge base for similar past incidents,
+          surfaces resolution playbooks, and estimates time-to-resolve
+          based on historical data.

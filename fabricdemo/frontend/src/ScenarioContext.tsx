@@ -6,6 +6,10 @@ export const useScenario = () => useContext(ScenarioCtx);
 
 export const ScenarioProvider: React.FC<{children: React.ReactNode}> = ({children}) => {
   const [scenario, setScenario] = useState<ScenarioConfig>(SCENARIO_DEFAULTS);
-  useEffect(() => { getScenario().then(setScenario); }, []);
+  useEffect(() => {
+    getScenario()
+      .then(setScenario)
+      .catch((err) => console.error('[ScenarioContext] Failed to fetch scenario:', err));
+  }, []);
   return <ScenarioCtx.Provider value={scenario}>{children}</ScenarioCtx.Provider>;
 };

@@ -11,12 +11,13 @@ import { InteractionSidebar } from './components/InteractionSidebar';
 import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
+import { ScenarioPanel } from './components/ScenarioPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { useScenario } from './ScenarioContext';
 import { formatTimeAgo } from './utils/formatTime';
 import type { Interaction } from './types';
 
-type AppTab = 'investigate' | 'resources';
+type AppTab = 'investigate' | 'resources' | 'scenario';
 
 export default function App() {
   const SCENARIO = useScenario();
@@ -118,6 +119,8 @@ export default function App() {
           <div className="h-full flex" role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={activeTab}>
             {activeTab === 'resources' ? (
               <ResourceVisualizer />
+            ) : activeTab === 'scenario' ? (
+              <ScenarioPanel onUsePrompt={(q) => { setAlert(q); setActiveTab('investigate'); }} />
             ) : (
               <PanelGroup orientation="horizontal" className="h-full" id="content-sidebar-layout"
                 defaultLayout={contentSidebar.defaultLayout}
