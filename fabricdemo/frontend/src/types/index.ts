@@ -157,3 +157,52 @@ export interface TopologyMeta {
   query_time_ms: number;
   labels: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Chat / Session types (persistent async conversations)
+// ---------------------------------------------------------------------------
+
+export type ChatRole = 'user' | 'orchestrator';
+
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  timestamp: string;
+
+  // User messages
+  text?: string;
+
+  // Orchestrator messages
+  steps?: StepEvent[];
+  thinking?: string[];
+  diagnosis?: string;
+  runMeta?: RunMeta;
+  status?: 'thinking' | 'investigating' | 'complete' | 'error';
+  errorMessage?: string;
+}
+
+export interface SessionSummary {
+  id: string;
+  scenario: string;
+  alert_text: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+  step_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SessionDetail {
+  id: string;
+  scenario: string;
+  alert_text: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  event_log: Array<{ event: string; data: string; turn?: number; timestamp?: string }>;
+  steps: StepEvent[];
+  diagnosis: string;
+  run_meta: RunMeta | null;
+  error_detail: string;
+  thread_id: string | null;
+  turn_count: number;
+}

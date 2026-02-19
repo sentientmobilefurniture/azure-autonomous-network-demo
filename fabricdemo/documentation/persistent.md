@@ -1714,50 +1714,39 @@ Nothing ever escapes the viewport.
 The chat UI redesign (Part 2) is the natural moment to break out of the viewport-locked model. With the Investigation+Diagnosis split replaced by a single chat thread, we can simplify dramatically:
 
 ```
-┌─ min-h-screen (scrollable page) ──────────────────┐
-│                                                    │
-│ Header (sticky top-0)                              │
-│ TabBar (sticky, below header)                      │
-│                                                    │
-│ ┌─ Main Content ────────────────────┬─ Sidebar ──┐│
-│ │                                   │            ││
-│ │  MetricsBar / Graph Topology      │  Sessions  ││
-│ │  (natural height, ~200-300px)     │  (sticky   ││
-│ │                                   │   position ││
-│ │──────────────────────────────────│   within   ││
-│ │                                   │   scroll)  ││
-│ │  Chat Thread                      │            ││
-│ │  (grows with content)             │            ││
-│ │                                   │            ││
-│ │  ┌─ User Bubble ──────────────┐   │            ││
-│ │  └────────────────────────────┘   │            ││
-│ │  ┌─ Orchestrator Bubble ──────┐   │            ││
-│ │  │  ▸ Steps (collapsed)       │   │            ││
-│ │  │  ▾ Diagnosis (expanded)    │   │            ││
-│ │  │    ## Incident Summary     │   │            ││
-│ │  │    At 14:31 UTC, ...       │   │            ││
-│ │  │    ...                     │   │            ││
-│ │  │    ...                     │   │            ││
-│ │  └────────────────────────────┘   │            ││
-│ │  ┌─ User Bubble ──────────────┐   │            ││
-│ │  └────────────────────────────┘   │            ││
-│ │  ┌─ Orchestrator Bubble ──────┐   │            ││
-│ │  │  ...                       │   │            ││
-│ │  └────────────────────────────┘   │            ││
-│ │                                   │            ││
-│ └───────────────────────────────────┴────────────┘│
-│                                                    │
-│ ┌─ Terminal (collapsible) ────────────────────────┐│
-│ │  (fixed / sticky bottom, or below content)      ││
-│ └─────────────────────────────────────────────────┘│
-│                                                    │
-│ ┌─ Chat Input (sticky bottom) ────────────────────┐│
-│ │  Ask a follow-up...                   [Send]    ││
-│ └─────────────────────────────────────────────────┘│
-└────────────────────────────────────────────────────┘
+┌─ min-h-screen (scrollable page) ──────────────────────────────┐
+│                                                                │
+│ Header (sticky top-0)                                          │
+│ TabBar (sticky, below header)                                  │
+│                                                                │
+│ ┌─ Main Content ──────────────────────────┬─ Sidebar ─────────┐│
+│ │                                         │ ◀── drag handle   ││
+│ │  Graph Topology                         │                   ││
+│ │  (user-resizable, drag bottom edge)     │  Sessions list    ││
+│ │  ═══════════════════════════════════    │  (sticky within   ││
+│ │                                         │   viewport,       ││
+│ │  Chat Thread                            │   overflow-y-auto ││
+│ │  (grows with content, page scrolls)     │   internally)     ││
+│ │                                         │                   ││
+│ │  ┌─ User Bubble ─────────────────────┐  │                   ││
+│ │  └───────────────────────────────────┘  │                   ││
+│ │  ┌─ Orchestrator Bubble ─────────────┐  │                   ││
+│ │  │  ▸ Steps (collapsed)              │  │                   ││
+│ │  │  ▾ Diagnosis (expanded, inline)   │  │                   ││
+│ │  └───────────────────────────────────┘  │                   ││
+│ │  ...                                    │                   ││
+│ └─────────────────────────────────────────┴───────────────────┘│
+│                                                                │
+│ ┌─ Terminal (drag top edge to resize) ────────────────────────┐│
+│ │  fixed bottom, overlay/drawer                               ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ Chat Input (sticky bottom-0, above terminal if open) ─────┐│
+│ │  Ask a follow-up...                              [Send]     ││
+│ └─────────────────────────────────────────────────────────────┘│
+└────────────────────────────────────────────────────────────────┘
 
-0 nested PanelGroups for the chat view.
-1 page scroll. Content grows naturally.
+0 nested PanelGroups. 1 page scroll. 3 lightweight resize handles.
 ```
 
 ---
@@ -1787,15 +1776,17 @@ The current layout has 4 nested `PanelGroup` instances:
 With the chat UI, #3 and #4 are eliminated entirely. #1 changes behavior (terminal becomes a sticky/collapsible footer rather than a resizable panel). Only #2 (content + sidebar) may survive, but as a simpler CSS Grid/Flexbox rather than a PanelGroup.
 
 ```tsx
-// After — Investigate tab layout (no PanelGroups):
+// After — Investigate tab layout (no PanelGroups, 3 resize handles):
 {activeTab === 'investigate' && (
   <div className="flex-1 flex">
     {/* Main scrollable content */}
     <main className="flex-1 min-w-0 flex flex-col">
-      {/* Metrics bar — natural height */}
-      <MetricsBar />
+      {/* Graph topology — resizable from bottom edge */}
+      <ResizableGraph>
+        <MetricsBar />
+      </ResizableGraph>
 
-      {/* Chat thread — grows with content */}
+      {/* Chat thread — grows with content, page scrolls */}
       <ChatPanel
         messages={messages}
         currentThinking={thinking}
@@ -1806,12 +1797,17 @@ With the chat UI, #3 and #4 are eliminated entirely. #1 changes behavior (termin
       />
     </main>
 
-    {/* Session sidebar — sticky within scroll */}
-    <aside className="w-72 shrink-0 border-l border-border sticky top-12 h-[calc(100vh-3rem)] overflow-y-auto">
+    {/* Session sidebar — resizable from left edge, sticky */}
+    <ResizableSidebar>
       <SessionSidebar ... />
-    </aside>
+    </ResizableSidebar>
   </div>
 )}
+
+{/* Terminal — resizable from top edge, fixed-bottom drawer */}
+<ResizableTerminal visible={terminalVisible}>
+  <TerminalPanel />
+</ResizableTerminal>
 ```
 
 ### 21.3 Sticky Elements
@@ -1824,18 +1820,276 @@ Three things should stay fixed while the page scrolls:
 | **Chat Input** | `sticky bottom-0 z-40` — always accessible at bottom of viewport |
 | **Session Sidebar** | `sticky top-12 h-[calc(100vh-3rem)]` — scrolls internally but stays in viewport |
 
-The **Terminal panel** has two options:
+The **Terminal panel** is a collapsible bottom drawer (overlay), toggled via the tab bar. See §21.6.
 
-| Option | Behavior |
-|---|---|
-| A) Sticky footer | `sticky bottom-0` below the chat input — always visible, like VS Code's terminal |
-| B) Collapsible drawer | Hidden by default, toggled via tab bar — slides up from bottom |
+### 21.4 Resizable Peripheral Panels
 
-Option B is cleaner for the chat layout since the terminal is a debug tool, not a primary interaction surface. The tab bar already has a "Terminal" section — it can toggle a bottom drawer overlay.
+Three panels get lightweight drag-to-resize handles. Critically, none of these
+touch the chat thread — they're all **outside** the document flow that produces
+page scroll. The chat thread simply fills whatever space remains between the
+graph and the bottom of the page.
 
-### 21.4 ChatPanel Becomes Non-Scrolling
+#### Why this doesn't break conversation flow
 
-Critical change: in Part 2, `ChatPanel` had `overflow-y-auto` on the thread container. For full-page scroll, this is removed — the chat thread **participates in the page scroll** instead of creating its own scroll container:
+The old `PanelGroup` layout broke page scroll because it forced *every* element
+(including the chat content) into a fixed-height slot. The new approach is
+different: only the **peripheral panels** (graph, sidebar, terminal) have
+controlled dimensions. The chat thread has **no height constraint** — it grows
+with content and participates in normal page scroll. Resizing a peripheral
+panel doesn't trap the chat content; it just shifts how much viewport space the
+chat area occupies.
+
+```
+                 ┌──────────────────────────────────────┐
+  Graph          │  d3 canvas                           │
+  (resizable)    │                                      │
+                 ├══════════╤═══════════════════════════╡ ← drag handle (bottom edge)
+                 │          │                           │
+  Chat Thread    │  bubbles │   Sidebar (resizable)     │
+  (no height     │  ...     │◀─ drag handle (left edge) │
+   constraint,   │  ...     │                           │
+   page scrolls) │  ...     │   SessionCard             │
+                 │  ...     │   SessionCard             │
+                 │          │   SessionCard             │
+                 ├──────────┴───────────────────────────┤
+  Terminal       │  logs                                │
+  (resizable)    ├══════════════════════════════════════╡ ← drag handle (top edge)
+                 │                                      │
+                 └──────────────────────────────────────┘
+```
+
+#### 21.4.1 Graph Topology — Bottom-Edge Resize
+
+The graph viewer has a fixed initial height (e.g. 280px). A drag handle on its
+bottom edge lets the user expand/collapse it. The chat thread below simply
+reflows.
+
+```tsx
+function ResizableGraph({ children }: { children: React.ReactNode }) {
+  const [height, setHeight] = useState(280);
+  const dragging = useRef(false);
+  const startY = useRef(0);
+  const startH = useRef(0);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    dragging.current = true;
+    startY.current = e.clientY;
+    startH.current = height;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragging.current) return;
+    const delta = e.clientY - startY.current;
+    setHeight(Math.max(100, Math.min(600, startH.current + delta)));
+  };
+
+  const onPointerUp = () => {
+    dragging.current = false;
+    // Persist to localStorage
+    localStorage.setItem('graph-height', String(height));
+  };
+
+  return (
+    <div style={{ height }} className="border-b border-border relative">
+      {children}
+      {/* Drag handle — bottom edge */}
+      <div
+        className="absolute bottom-0 left-0 right-0 h-1.5 cursor-row-resize
+                   hover:bg-brand/20 active:bg-brand/40 transition-colors z-10"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      />
+    </div>
+  );
+}
+```
+
+**Key point:** This does NOT use a `PanelGroup`. It's a simple `div` with a
+controlled `height` state and pointer events on a 6px handle. The chat content
+below is not constrained — it flows after the graph and pushes down
+into page scroll.
+
+#### 21.4.2 Session Sidebar — Left-Edge Resize
+
+The sidebar is `sticky` and positioned to fill the viewport height. A drag
+handle on its left edge lets the user widen or narrow it. The main content
+area uses `flex-1` and automatically absorbs the width change.
+
+```tsx
+function ResizableSidebar({ children }: { children: React.ReactNode }) {
+  const [width, setWidth] = useState(288); // 18rem default
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const startW = useRef(0);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    dragging.current = true;
+    startX.current = e.clientX;
+    startW.current = width;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragging.current) return;
+    // Moving left = wider sidebar (negative delta = grow)
+    const delta = startX.current - e.clientX;
+    setWidth(Math.max(200, Math.min(500, startW.current + delta)));
+  };
+
+  const onPointerUp = () => {
+    dragging.current = false;
+    localStorage.setItem('sidebar-width', String(width));
+  };
+
+  return (
+    <aside
+      style={{ width }}
+      className="shrink-0 border-l border-border sticky top-12
+                 h-[calc(100vh-3rem)] overflow-y-auto relative"
+    >
+      {/* Drag handle — left edge */}
+      <div
+        className="absolute top-0 left-0 bottom-0 w-1.5 cursor-col-resize
+                   hover:bg-brand/20 active:bg-brand/40 transition-colors z-10"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      />
+      <div className="pl-2">{children}</div>
+    </aside>
+  );
+}
+```
+
+**Why this doesn't affect scroll:** The sidebar is `sticky` with its own
+`overflow-y-auto`. It doesn't contribute to document height. Changing its
+width just adjusts how much horizontal space the `flex-1` chat area gets.
+
+#### 21.4.3 Terminal Panel — Top-Edge Resize
+
+The terminal is a `position: fixed` bottom drawer. A drag handle on its top
+edge lets the user pull it taller or shorter. Since it's an overlay (fixed
+position), it doesn't participate in document flow at all.
+
+```tsx
+function ResizableTerminal({ children, visible }: {
+  children: React.ReactNode;
+  visible: boolean;
+}) {
+  const [height, setHeight] = useState(200);
+  const dragging = useRef(false);
+  const startY = useRef(0);
+  const startH = useRef(0);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    dragging.current = true;
+    startY.current = e.clientY;
+    startH.current = height;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragging.current) return;
+    // Moving up = taller terminal (negative delta = grow)
+    const delta = startY.current - e.clientY;
+    setHeight(Math.max(100, Math.min(500, startH.current + delta)));
+  };
+
+  const onPointerUp = () => {
+    dragging.current = false;
+    localStorage.setItem('terminal-height', String(height));
+  };
+
+  if (!visible) return null;
+
+  return (
+    <div
+      style={{ height }}
+      className="fixed bottom-0 left-0 right-0 z-30
+                 bg-neutral-bg2 border-t border-border shadow-lg"
+    >
+      {/* Drag handle — top edge */}
+      <div
+        className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize
+                   hover:bg-brand/20 active:bg-brand/40 transition-colors"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      />
+      <div className="h-full pt-1.5 overflow-hidden">
+        {children}
+      </div>
+    </div>
+  );
+}
+```
+
+**Interaction with Chat Input:** When the terminal drawer is open, the Chat
+Input needs to sit just above it:
+
+```tsx
+<div
+  className="sticky z-40 border-t border-border p-3 bg-neutral-bg2"
+  style={{ bottom: terminalVisible ? terminalHeight : 0 }}
+>
+  <ChatInput ... />
+</div>
+```
+
+#### 21.4.4 Extracted Hook: `useResizable`
+
+All three panels share the same pointer-drag pattern. This can be a reusable hook:
+
+```tsx
+function useResizable(axis: 'x' | 'y', {
+  initial, min, max, storageKey, invert = false,
+}: {
+  initial: number; min: number; max: number;
+  storageKey: string; invert?: boolean;
+}) {
+  const [size, setSize] = useState(() => {
+    const saved = localStorage.getItem(storageKey);
+    return saved ? Number(saved) : initial;
+  });
+  const dragging = useRef(false);
+  const startPos = useRef(0);
+  const startSize = useRef(0);
+
+  const handleProps = {
+    onPointerDown: (e: React.PointerEvent) => {
+      dragging.current = true;
+      startPos.current = axis === 'x' ? e.clientX : e.clientY;
+      startSize.current = size;
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      if (!dragging.current) return;
+      const pos = axis === 'x' ? e.clientX : e.clientY;
+      const delta = invert
+        ? startPos.current - pos    // sidebar (left edge), terminal (top edge)
+        : pos - startPos.current;   // graph (bottom edge)
+      setSize(Math.max(min, Math.min(max, startSize.current + delta)));
+    },
+    onPointerUp: () => {
+      dragging.current = false;
+      localStorage.setItem(storageKey, String(size));
+    },
+  };
+
+  return { size, handleProps };
+}
+
+// Usage:
+const graph = useResizable('y', { initial: 280, min: 100, max: 600, storageKey: 'graph-h' });
+const sidebar = useResizable('x', { initial: 288, min: 200, max: 500, storageKey: 'sidebar-w', invert: true });
+const terminal = useResizable('y', { initial: 200, min: 100, max: 500, storageKey: 'terminal-h', invert: true });
+```
+
+### 21.5 ChatPanel Becomes Non-Scrolling
+
+Critical change: the chat thread has **no height constraint and no overflow**. It participates in page scroll — the chat thread **participates in the page scroll** instead of creating its own scroll container:
 
 ```tsx
 // Part 2 (scroll within panel):
@@ -1851,18 +2105,13 @@ Critical change: in Part 2, `ChatPanel` had `overflow-y-auto` on the thread cont
 
 The `flex-1 overflow-y-auto` is what traps content. Removing it lets bubbles push the page height and scroll naturally.
 
-### 21.5 MetricsBar / Graph Topology
+### 21.6 MetricsBar / Graph Topology
 
-The graph topology viewer currently lives in a `Panel` with a fixed height. In the new layout it needs an explicit height since it won't be constrained by a PanelGroup:
-
-```tsx
-// Graph topology gets a defined container height
-<div className="h-[280px] border-b border-border">
-  <MetricsBar />
-</div>
-```
-
-This is a natural height — the graph is a fixed-size d3 canvas, not scrollable content. It doesn't need to grow.
+The graph topology viewer is wrapped in `ResizableGraph` (§21.4.1) with a
+user-controllable height (default 280px, range 100–600px). The d3 canvas
+resizes to fit via `ResizeObserver` or by reading the container dimensions
+on each render — this is already how the current `GraphTopologyViewer`
+works (it reads its parent's `clientWidth`/`clientHeight`).
 
 ---
 
@@ -1926,12 +2175,12 @@ When clicking a completed session in the sidebar, the page scrolls to top and th
 
 | Current | After |
 |---|---|
-| `react-resizable-panels` PanelGroup (for chat tab) | Plain CSS Flexbox/Grid |
-| 4 layout persistence keys in localStorage | 0 (no resizable panels to remember) |
+| `react-resizable-panels` PanelGroup (for chat tab) | Plain CSS Flexbox + `useResizable` hook |
+| 4 layout persistence keys in localStorage | 3 lightweight keys (graph-h, sidebar-w, terminal-h) |
 | `useDefaultLayout` hook calls | Removed |
-| `PanelResizeHandle` dividers | Removed |
-| `panelRef` / `isCollapsed` sidebar logic | CSS `sticky` + toggle visibility |
-| Per-panel `overflow-y-auto` | Single page scroll |
+| `PanelResizeHandle` dividers | Lightweight pointer-event handles (6px) |
+| `panelRef` / `isCollapsed` sidebar logic | CSS `sticky` + controlled width |
+| Per-panel `overflow-y-auto` | Single page scroll (sidebar/terminal keep internal scroll) |
 | `min-h-0` hack on every flex container | Not needed — content isn't trapped |
 
 **Note:** The Resources and Scenario tabs can keep their current PanelGroup layouts if needed — those are data-visualization screens where viewport-locking makes sense (d3 canvases, tables). The scrollable layout only applies to the Investigate/chat tab.
@@ -1950,7 +2199,9 @@ This layout change is best done **simultaneously with the chat UI** (Part 2, Pha
 | `ChatInput` | `sticky bottom-0` |
 | `Header` | `sticky top-0 z-50` |
 | `SessionSidebar` | `sticky top-12`, `h-[calc(100vh-3rem)]`, internal `overflow-y-auto` |
-| `MetricsBar` wrapper | Explicit `h-[280px]` instead of PanelGroup-controlled |
-| `TerminalPanel` | Becomes a collapsible bottom drawer (overlay) |
+| `MetricsBar` wrapper | `ResizableGraph` — bottom-edge drag, default 280px (§21.4.1) |
+| `SessionSidebar` | `ResizableSidebar` — left-edge drag, default 288px (§21.4.2) |
+| `TerminalPanel` | `ResizableTerminal` — top-edge drag, fixed-bottom drawer (§21.4.3) |
+| `useResizable` hook | New: shared pointer-drag logic + localStorage persistence (§21.4.4) |
 | Auto-scroll hook | New: `useAutoScroll()` — tracks page position, scrolls on new content |
 | Scroll-to-bottom FAB | New floating button when user scrolled up |

@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("app").setLevel(logging.DEBUG)
 
-from app.routers import alert, agents, logs, config  # noqa: E402
+from app.routers import alert, agents, logs, config, sessions  # noqa: E402
 
 # Load project-level config (CORS_ORIGINS, etc.)
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", "azure_config.env"))
@@ -49,6 +49,7 @@ app.include_router(alert.router)
 app.include_router(agents.router)
 app.include_router(logs.router)
 app.include_router(config.router)
+app.include_router(sessions.router)
 
 logger = logging.getLogger("app")
 
