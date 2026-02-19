@@ -56,15 +56,6 @@ function statusDot(s: ItemStatus, size = 'h-2 w-2'): string {
   }
 }
 
-function statusChar(s: ItemStatus): string {
-  switch (s) {
-    case 'idle':     return '─';
-    case 'checking': return '🟠';
-    case 'ok':       return '🟢';
-    case 'error':    return '🔴';
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /*  ServicesPanel                                                       */
 /* ------------------------------------------------------------------ */
