@@ -48,14 +48,6 @@ Thumbs.db
 htmlcov/
 .mypy_cache/
 
-# --- Generated data (recreated by scenario scripts) ---
-data/scenarios/*/data/entities/
-data/scenarios/*/data/telemetry/
-data/scenarios/*.tar.gz
-data/network/
-data/telemetry/
-data/cosmosdb/
-
 # --- Generated topology JSON (created by deploy.sh / generate_topology_json.py) ---
 graph-query-api/backends/fixtures/topology.json
 

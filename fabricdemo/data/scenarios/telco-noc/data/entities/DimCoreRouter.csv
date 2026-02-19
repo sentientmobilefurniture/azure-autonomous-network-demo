@@ -1,0 +1,4 @@
+RouterId,City,Region,Vendor,Model
+CORE-SYD-01,Sydney,NSW,Cisco,ASR-9922
+CORE-MEL-01,Melbourne,VIC,Cisco,ASR-9922
+CORE-BNE-01,Brisbane,QLD,Juniper,MX10008
