@@ -103,6 +103,24 @@ body {
   @apply bg-neutral-bg6;
 }
 
+/* Prose (Tailwind Typography) — inherit themed text colors */
+.prose {
+  --tw-prose-body: var(--color-text-primary);
+  --tw-prose-headings: var(--color-text-primary);
+  --tw-prose-bold: var(--color-text-primary);
+  --tw-prose-links: var(--color-brand);
+  --tw-prose-counters: var(--color-text-secondary);
+  --tw-prose-bullets: var(--color-text-muted);
+  --tw-prose-hr: var(--color-border-default);
+  --tw-prose-quotes: var(--color-text-secondary);
+  --tw-prose-quote-borders: var(--color-border-default);
+  --tw-prose-code: var(--color-text-primary);
+  --tw-prose-pre-code: var(--color-text-primary);
+  --tw-prose-pre-bg: var(--color-bg-3);
+  --tw-prose-th-borders: var(--color-border-default);
+  --tw-prose-td-borders: var(--color-border-subtle);
+}
+
 /* Fabric card utility classes */
 @layer components {
   .glass-card {

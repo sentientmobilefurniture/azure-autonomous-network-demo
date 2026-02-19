@@ -40,6 +40,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewingInteraction, setViewingInteraction] = useState<Interaction | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('investigate');
+  const [showTabs, setShowTabs] = useState(true);
   const sidebarPanelRef = useRef<PanelImperativeHandle>(null);
 
   const handleSidebarToggle = () => {
@@ -101,10 +102,10 @@ export default function App() {
       transition={{ duration: 0.3 }}
     >
       {/* Zone 1: Header */}
-      <Header />
+      <Header showTabs={showTabs} onToggleTabs={() => setShowTabs((v) => !v)} />
 
       {/* Tab bar */}
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      {showTabs && <TabBar activeTab={activeTab} onTabChange={setActiveTab} />}
 
       {/* Outer vertical split: main content (top) + terminal panel (bottom) */}
       <PanelGroup

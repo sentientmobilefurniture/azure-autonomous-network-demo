@@ -39,6 +39,8 @@ export const HEADER_TOOLTIPS: Record<string, string> = {
   'agents-hide': 'Hide the agent bar to reclaim vertical space.',
   'health-show': 'Show the health-check bar with manual connectivity buttons.',
   'health-hide': 'Hide the health-check bar to reclaim vertical space.',
+  'tabs-show':   'Show the navigation tabs (Investigate, Resources, Scenario).',
+  'tabs-hide':   'Hide the navigation tabs to reclaim vertical space.',
   'services':    'Open the detailed service health popover.',
   'dark-mode':   'Switch to dark mode.',
   'light-mode':  'Switch to light mode.',

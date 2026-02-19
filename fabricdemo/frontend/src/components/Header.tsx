@@ -54,7 +54,12 @@ function ToggleBtn({
   );
 }
 
-export function Header() {
+interface HeaderProps {
+  showTabs: boolean;
+  onToggleTabs: () => void;
+}
+
+export function Header({ showTabs, onToggleTabs }: HeaderProps) {
   const SCENARIO = useScenario();
   const { theme, toggleTheme } = useTheme();
   const [healthOpen, setHealthOpen] = useState(false);
@@ -66,12 +71,9 @@ export function Header() {
       <header className="h-12 flex-shrink-0 bg-neutral-bg2 border-b border-border flex items-center px-6 justify-between">
         <div className="flex items-center gap-3">
           <span className="text-brand text-lg leading-none">◆</span>
-          <h1 className="text-lg font-semibold text-text-primary leading-none">
-            AI Incident Investigator
+          <h1 className="text-sm font-semibold text-text-primary leading-none">
+            3IQ Demo — Fabric Graphs + Foundry Agents
           </h1>
-          <span className="text-xs text-text-muted ml-1 hidden sm:inline">
-            Multi-agent diagnosis
-          </span>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand/10 text-brand border border-brand/20 font-medium">
             {SCENARIO.displayName}
           </span>
@@ -90,6 +92,13 @@ export function Header() {
             onClick={() => setShowHealth((v) => !v)}
             icon={showHealth ? '👁' : '👁‍🗨'}
             tooltip={showHealth ? HEADER_TOOLTIPS['health-hide'] : HEADER_TOOLTIPS['health-show']}
+          />
+          <ToggleBtn
+            label="Tabs"
+            active={showTabs}
+            onClick={onToggleTabs}
+            icon={showTabs ? '👁' : '👁‍🗨'}
+            tooltip={showTabs ? HEADER_TOOLTIPS['tabs-hide'] : HEADER_TOOLTIPS['tabs-show']}
           />
           <button
             onClick={() => setHealthOpen(!healthOpen)}
