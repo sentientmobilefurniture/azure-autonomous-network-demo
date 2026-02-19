@@ -733,9 +733,6 @@ TICKETS_INDEX_NAME=${TICKETS_INDEX_NAME:-tickets-index}
 # --- Azure Storage (AUTO: from deployment/discovery) ---
 STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
 
-# --- Deployment settings (USER) ---
-GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
-
 # --- App / CORS (USER) ---
 CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
 
@@ -975,10 +972,10 @@ else
   warn "Continuing anyway — agent provisioning may fail if the API is down."
 fi
 
-# ── Step 9: Start local services (optional — all services deployed to Azure) ──
+# ── Step 8: Start local services (optional — all services deployed to Azure) ──
 
 if $SKIP_LOCAL; then
-  step "Step 9: Local services (SKIPPED)"
+  step "Step 8: Local services (SKIPPED)"
   echo ""
   ok "Deployment complete! All services are running in Azure."
   echo ""
@@ -996,10 +993,10 @@ if $SKIP_LOCAL; then
   echo ""
   echo "   Open http://localhost:5173"
 else
-  step "Step 9: Starting local API + Frontend"
+  step "Step 8: Starting local API + Frontend"
 
   # Kill any existing processes on our ports
-  lsof -ti:8000,5173 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+  lsof -ti:8000,8100,5173 2>/dev/null | xargs -r kill -9 2>/dev/null || true
   sleep 1
 
   # Install frontend deps

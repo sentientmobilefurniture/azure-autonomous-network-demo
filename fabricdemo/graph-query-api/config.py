@@ -47,7 +47,6 @@ AI_SEARCH_NAME = os.getenv("AI_SEARCH_NAME", "")
 # Env var overrides are still honoured if set explicitly.
 # ---------------------------------------------------------------------------
 
-FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
 # FABRIC_GRAPH_MODEL_ID, EVENTHOUSE_QUERY_URI, FABRIC_KQL_DB_NAME are
 # resolved lazily via fabric_discovery.get_fabric_config(). Do NOT
 # read them from os.getenv() at module level — use the discovery module.

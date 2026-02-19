@@ -13,6 +13,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY *.py ./
 COPY backends/ ./backends/
 COPY openapi/ ./openapi/
+COPY stores/ ./stores/
+COPY adapters/ ./adapters/
+COPY services/ ./services/
 
 # Expose port
 EXPOSE 8100

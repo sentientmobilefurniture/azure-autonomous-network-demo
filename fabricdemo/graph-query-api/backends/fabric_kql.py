@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 logger = logging.getLogger("graph-query-api.fabric-kql")
 
@@ -37,10 +36,10 @@ class FabricKQLBackend:
 
         # Rebuild client if URI changed (e.g., after cache refresh)
         if self._client is None or self._last_uri != uri:
-            from azure.identity import DefaultAzureCredential
+            from config import get_credential
             from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 
-            credential = DefaultAzureCredential()
+            credential = get_credential()
             kcsb = KustoConnectionStringBuilder.with_azure_token_credential(
                 uri, credential,
             )

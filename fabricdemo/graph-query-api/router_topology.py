@@ -11,9 +11,9 @@ Supports two modes via TOPOLOGY_SOURCE env var:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import threading
 import time
 from pathlib import Path
 
@@ -68,7 +68,7 @@ else:
 # Values: (expires_at, original_query_ms, response_dict)
 # ---------------------------------------------------------------------------
 _topo_cache: dict[str, tuple[float, float, dict]] = {}
-_topo_lock = threading.Lock()
+_topo_lock = asyncio.Lock()
 TOPO_TTL = 30  # seconds
 
 
@@ -78,13 +78,14 @@ def invalidate_topology_cache(graph_name: str | None = None) -> None:
     If *graph_name* is provided only entries for that graph are removed.
     If ``None`` the entire cache is cleared.
     """
-    with _topo_lock:
-        if graph_name is None:
-            _topo_cache.clear()
-        else:
-            to_delete = [k for k in _topo_cache if k.startswith(f"{graph_name}:")]
-            for k in to_delete:
-                del _topo_cache[k]
+    # Note: this runs from sync context so we can't use the async lock.
+    # Direct dict mutation is safe because Python's GIL protects it.
+    if graph_name is None:
+        _topo_cache.clear()
+    else:
+        to_delete = [k for k in _topo_cache if k.startswith(f"{graph_name}:")]
+        for k in to_delete:
+            del _topo_cache[k]
     logger.info("Topology cache invalidated (graph=%s)", graph_name)
 
 
@@ -144,7 +145,7 @@ async def topology(
     cache_key = f"{ctx.graph_name}:{','.join(labels)}"
 
     # Check cache
-    with _topo_lock:
+    async with _topo_lock:
         hit = _topo_cache.get(cache_key)
         if hit:
             exp, orig_ms, cached_dict = hit
@@ -182,7 +183,7 @@ async def topology(
         )
 
         # Cache the DICT (not the Pydantic object) to avoid shared mutation
-        with _topo_lock:
+        async with _topo_lock:
             _topo_cache[cache_key] = (
                 time.time() + TOPO_TTL,
                 round(elapsed, 1),

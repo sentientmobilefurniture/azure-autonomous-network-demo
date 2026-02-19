@@ -33,11 +33,10 @@ ONTOLOGY_NAME_PREFIX = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntolog
 EVENTHOUSE_NAME_PREFIX = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH")
 
 # ---------------------------------------------------------------------------
-# Fabric API constants
+# Fabric API constants — imported from adapters.fabric_config (single source of truth)
 # ---------------------------------------------------------------------------
 
-FABRIC_API_URL = os.getenv("FABRIC_API_URL", "https://api.fabric.microsoft.com/v1")
-FABRIC_SCOPE = os.getenv("FABRIC_SCOPE", "https://api.fabric.microsoft.com/.default")
+from adapters.fabric_config import FABRIC_API_URL, FABRIC_SCOPE
 
 # ---------------------------------------------------------------------------
 # TTL-based cache (thread-safe)
@@ -45,8 +44,8 @@ FABRIC_SCOPE = os.getenv("FABRIC_SCOPE", "https://api.fabric.microsoft.com/.defa
 
 _CACHE_TTL = float(os.getenv("FABRIC_DISCOVERY_TTL", "600"))  # 10 min default
 
-_credential = None
 _cache_lock = threading.Lock()
+_discovery_in_progress = False
 
 
 @dataclass
@@ -64,15 +63,12 @@ _cached_at: float = 0.0
 
 
 # ---------------------------------------------------------------------------
-# Credential management
+# Credential management — uses shared credential from config module
 # ---------------------------------------------------------------------------
 
 def _get_credential():
-    global _credential
-    if _credential is None:
-        from azure.identity import DefaultAzureCredential
-        _credential = DefaultAzureCredential()
-    return _credential
+    from config import get_credential
+    return get_credential()
 
 
 def _get_fabric_token() -> str:
@@ -236,25 +232,36 @@ def get_fabric_config() -> FabricConfig:
     with _cache_lock:
         if _cached_config is not None and (time.time() - _cached_at) < _CACHE_TTL:
             return _cached_config
+        # Check if another thread is already discovering
+        global _discovery_in_progress
+        if _discovery_in_progress:
+            # Another thread is discovering; return stale cache if available
+            if _cached_config is not None:
+                return _cached_config
+        _discovery_in_progress = True
 
-    # --- Discover ---
-    discovered = _discover_fabric_config(env_workspace)
+    # --- Discover (outside lock, but guarded by _discovery_in_progress) ---
+    try:
+        discovered = _discover_fabric_config(env_workspace)
 
-    # Apply env var overrides on top of discovered values
-    if env_graph_model:
-        discovered.graph_model_id = env_graph_model
-        discovered.source = "partial"
-    if env_query_uri:
-        discovered.eventhouse_query_uri = env_query_uri
-        discovered.source = "partial"
-    if env_kql_db:
-        discovered.kql_db_name = env_kql_db
-        discovered.source = "partial"
+        # Apply env var overrides on top of discovered values
+        if env_graph_model:
+            discovered.graph_model_id = env_graph_model
+            discovered.source = "partial"
+        if env_query_uri:
+            discovered.eventhouse_query_uri = env_query_uri
+            discovered.source = "partial"
+        if env_kql_db:
+            discovered.kql_db_name = env_kql_db
+            discovered.source = "partial"
 
-    # Cache the result
-    with _cache_lock:
-        _cached_config = discovered
-        _cached_at = time.time()
+        # Cache the result
+        with _cache_lock:
+            _cached_config = discovered
+            _cached_at = time.time()
+    finally:
+        with _cache_lock:
+            _discovery_in_progress = False
 
     return discovered
 

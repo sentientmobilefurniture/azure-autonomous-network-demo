@@ -26,6 +26,10 @@ param tags = {
   environment: readEnvironmentVariable('AZURE_ENV_NAME', 'noc-demo')
   graphBackend: 'fabric-gql'
 }
+param defaultScenario = readEnvironmentVariable('DEFAULT_SCENARIO', '')
+param runbooksIndexName = readEnvironmentVariable('RUNBOOKS_INDEX_NAME', 'runbooks-index')
+param ticketsIndexName = readEnvironmentVariable('TICKETS_INDEX_NAME', 'tickets-index')
+param corsOrigins = readEnvironmentVariable('CORS_ORIGINS', 'http://localhost:5173')
 
 // Deploy:
 //   azd up    # Uses fabric-gql backend

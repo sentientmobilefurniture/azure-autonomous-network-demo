@@ -31,12 +31,9 @@ _config = Path(__file__).resolve().parent.parent / "azure_config.env"
 if _config.exists():
     load_dotenv(_config, override=True)
 
-import asyncio
-import json
 import logging
 import time as _time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,6 +73,9 @@ async def _lifespan(app: FastAPI):
     yield
 
     await close_graph_backend()
+    # Close the Cosmos DB client if it was initialized
+    from cosmos_helpers import close_cosmos_client
+    close_cosmos_client()
 
 
 app = FastAPI(

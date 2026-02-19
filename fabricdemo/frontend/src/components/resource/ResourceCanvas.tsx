@@ -1,6 +1,6 @@
 import {
-  useRef, useCallback, useEffect,
-  forwardRef, useImperativeHandle, useState,
+  useRef, useCallback, useEffect, useState,
+  forwardRef, useImperativeHandle,
 } from 'react';
 import ForceGraph2D, {
   ForceGraphMethods, NodeObject, LinkObject,
@@ -37,13 +37,20 @@ interface ResourceCanvasProps {
   highlightIds?: Set<string>;
 }
 
-// ── Shape helpers ───────────────────────────────────────────────────────────
+// ── Shape helpers (accept cached theme colors) ─────────────────────────────────────────────────
 
-function drawCircle(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, doubleBorder = false) {
-  const styles = getComputedStyle(document.documentElement);
-  const borderDefault = styles.getPropertyValue('--color-border-default').trim();
-  const borderStrong = styles.getPropertyValue('--color-border-strong').trim();
-  const textSecondary = styles.getPropertyValue('--color-text-secondary').trim();
+interface ThemeColors {
+  textPrimary: string;
+  textSecondary: string;
+  textMuted: string;
+  borderDefault: string;
+  borderStrong: string;
+}
+
+function drawCircle(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, doubleBorder = false, tc?: ThemeColors) {
+  const borderDefault = tc?.borderDefault ?? getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
+  const borderStrong = tc?.borderStrong ?? getComputedStyle(document.documentElement).getPropertyValue('--color-border-strong').trim();
+  const textSecondary = tc?.textSecondary ?? getComputedStyle(document.documentElement).getPropertyValue('--color-text-secondary').trim();
 
   ctx.beginPath();
   ctx.arc(x, y, r, 0, 2 * Math.PI);
@@ -61,8 +68,8 @@ function drawCircle(ctx: CanvasRenderingContext2D, x: number, y: number, r: numb
   }
 }
 
-function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
-  const borderDefault = getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
+function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, tc?: ThemeColors) {
+  const borderDefault = tc?.borderDefault ?? getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
   ctx.beginPath();
   ctx.moveTo(x, y - r);
   ctx.lineTo(x + r, y);
@@ -76,8 +83,8 @@ function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: num
   ctx.stroke();
 }
 
-function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
-  const borderDefault = getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
+function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, tc?: ThemeColors) {
+  const borderDefault = tc?.borderDefault ?? getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
   const w = r * 2.2;
   const h = r * 1.4;
   const radius = 3;
@@ -99,8 +106,8 @@ function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, r: n
   ctx.stroke();
 }
 
-function drawHexagon(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
-  const borderStrong = getComputedStyle(document.documentElement).getPropertyValue('--color-border-strong').trim();
+function drawHexagon(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, tc?: ThemeColors) {
+  const borderStrong = tc?.borderStrong ?? getComputedStyle(document.documentElement).getPropertyValue('--color-border-strong').trim();
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
     const angle = (Math.PI / 3) * i - Math.PI / 6;
@@ -128,6 +135,32 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
   ) {
     const fgRef = useRef<ForceGraphMethods<GNode, GLink> | undefined>(undefined);
     const [frozen, setFrozen] = useState(false);
+
+    // Cache CSS custom properties (re-read on theme changes)
+    const [themeColors, setThemeColors] = useState<ThemeColors>(() => {
+      const s = getComputedStyle(document.documentElement);
+      return {
+        textPrimary: s.getPropertyValue('--color-text-primary').trim(),
+        textSecondary: s.getPropertyValue('--color-text-secondary').trim(),
+        textMuted: s.getPropertyValue('--color-text-muted').trim(),
+        borderDefault: s.getPropertyValue('--color-border-default').trim(),
+        borderStrong: s.getPropertyValue('--color-border-strong').trim(),
+      };
+    });
+    useEffect(() => {
+      const observer = new MutationObserver(() => {
+        const s = getComputedStyle(document.documentElement);
+        setThemeColors({
+          textPrimary: s.getPropertyValue('--color-text-primary').trim(),
+          textSecondary: s.getPropertyValue('--color-text-secondary').trim(),
+          textMuted: s.getPropertyValue('--color-text-muted').trim(),
+          borderDefault: s.getPropertyValue('--color-border-default').trim(),
+          borderStrong: s.getPropertyValue('--color-border-strong').trim(),
+        });
+      });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+      return () => observer.disconnect();
+    }, []);
 
     useImperativeHandle(ref, () => ({
       zoomToFit: () => fgRef.current?.zoomToFit(400, 60),
@@ -177,7 +210,7 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
     const nodeCanvasObject = useCallback(
       (node: GNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const size = RESOURCE_NODE_SIZES[node.type] ?? 8;
-        const color = RESOURCE_NODE_COLORS[node.type] ?? getComputedStyle(document.documentElement).getPropertyValue('--color-text-muted').trim();
+        const color = RESOURCE_NODE_COLORS[node.type] ?? themeColors.textMuted;
         const dimmed = highlightIds && highlightIds.size > 0 && !highlightIds.has(node.id);
         const alpha = dimmed ? 0.2 : 1;
 
@@ -185,47 +218,43 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
 
         switch (node.type) {
           case 'orchestrator':
-            drawCircle(ctx, node.x!, node.y!, size, color, true);
+            drawCircle(ctx, node.x!, node.y!, size, color, true, themeColors);
             break;
           case 'agent':
-            drawCircle(ctx, node.x!, node.y!, size, color);
+            drawCircle(ctx, node.x!, node.y!, size, color, false, themeColors);
             break;
           case 'tool':
-            drawDiamond(ctx, node.x!, node.y!, size, color);
+            drawDiamond(ctx, node.x!, node.y!, size, color, themeColors);
             break;
           case 'datasource':
           case 'search-index':
-            drawRoundRect(ctx, node.x!, node.y!, size, color);
+            drawRoundRect(ctx, node.x!, node.y!, size, color, themeColors);
             break;
           // Infrastructure — hexagons for services, round-rects for sub-resources
           case 'foundry':
           case 'storage':
           case 'search-service':
           case 'container-app':
-            drawHexagon(ctx, node.x!, node.y!, size, color);
+            drawHexagon(ctx, node.x!, node.y!, size, color, themeColors);
             break;
           case 'blob-container':
-            drawRoundRect(ctx, node.x!, node.y!, size, color);
+            drawRoundRect(ctx, node.x!, node.y!, size, color, themeColors);
             break;
           default:
-            drawCircle(ctx, node.x!, node.y!, size, color);
+            drawCircle(ctx, node.x!, node.y!, size, color, false, themeColors);
         }
 
         // Label
-        const styles = getComputedStyle(document.documentElement);
-        const textPrimary = styles.getPropertyValue('--color-text-primary').trim();
-        const textSecondary = styles.getPropertyValue('--color-text-secondary').trim();
-
         const fontSize = Math.max(10 / globalScale, 3);
         ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = dimmed ? textSecondary : textPrimary;
+        ctx.fillStyle = dimmed ? themeColors.textSecondary : themeColors.textPrimary;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         ctx.fillText(node.label, node.x!, node.y! + size + 3);
 
         ctx.globalAlpha = 1;
       },
-      [highlightIds],
+      [highlightIds, themeColors],
     );
 
     // Edge rendering with dash patterns
@@ -240,15 +269,13 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
         const midY = (src.y! + tgt.y!) / 2;
         const fontSize = Math.max(8 / globalScale, 2.5);
 
-        const textMuted = getComputedStyle(document.documentElement).getPropertyValue('--color-text-muted').trim();
-
         ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = textMuted;
+        ctx.fillStyle = themeColors.textMuted;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(link.label, midX, midY);
       },
-      [],
+      [themeColors],
     );
 
     // Link colour + dash
@@ -256,9 +283,9 @@ export const ResourceCanvas = forwardRef<ResourceCanvasHandle, ResourceCanvasPro
       (link: GLink) => {
         const edgeColor = RESOURCE_EDGE_COLORS[link.type];
         if (edgeColor) return edgeColor;
-        return getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
+        return themeColors.borderDefault;
       },
-      [],
+      [themeColors],
     );
     const linkDash = useCallback(
       (link: GLink) => {

@@ -54,6 +54,9 @@ param fabricAdminEmail string = ''
 @description('Developer IP for local Cosmos DB access (leave empty in CI/CD)')
 param devIpAddress string = ''
 
+@description('Comma-separated CORS origins for the container app')
+param corsOrigins string = 'http://localhost:5173'
+
 
 // ---------------------------------------------------------------------------
 // Variables
@@ -193,7 +196,7 @@ module app 'modules/container-app.bicep' = {
       { name: 'PROJECT_ENDPOINT', value: aiFoundry.outputs.projectEndpoint }
       { name: 'AI_FOUNDRY_PROJECT_NAME', value: aiFoundry.outputs.projectName }
       { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
-      { name: 'CORS_ORIGINS', value: '*' }
+      { name: 'CORS_ORIGINS', value: corsOrigins }
       { name: 'GRAPH_BACKEND', value: graphBackend }
       { name: 'TOPOLOGY_SOURCE', value: topologySource }
       { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosNoSql.outputs.cosmosNoSqlEndpoint }

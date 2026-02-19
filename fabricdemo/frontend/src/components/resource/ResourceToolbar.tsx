@@ -4,7 +4,7 @@ import { RESOURCE_NODE_COLORS, RESOURCE_TYPE_LABELS } from './resourceConstants'
 /** All node types in display order — grouped: agents → tools → data → infrastructure */
 const ALL_TYPES: ResourceNodeType[] = [
   'orchestrator', 'agent', 'tool',
-  'datasource', 'search-index',
+  'datasource', 'search-index', 'blob-container',
   'foundry', 'storage', 'search-service', 'container-app',
 ];
 

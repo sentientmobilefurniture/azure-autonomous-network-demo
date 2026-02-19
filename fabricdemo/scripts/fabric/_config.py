@@ -40,7 +40,7 @@ WORKSPACE_ID: str = os.getenv("FABRIC_WORKSPACE_ID", "")
 WORKSPACE_NAME: str = os.getenv("FABRIC_WORKSPACE_NAME", "telco-autonomous-network")
 CAPACITY_ID: str = os.getenv("FABRIC_CAPACITY_ID", "")
 LAKEHOUSE_NAME: str = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
-EVENTHOUSE_NAME: str = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH_3117")
+EVENTHOUSE_NAME: str = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH")
 KQL_DB_NAME: str = os.getenv("FABRIC_KQL_DB_NAME", "")
 ONTOLOGY_NAME: str = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
 

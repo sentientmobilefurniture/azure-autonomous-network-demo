@@ -39,7 +39,7 @@ function InteractionCard({ interaction, onClick, onDelete, isActive }: Interacti
 
       {/* Scenario badge */}
       <span className="inline-block text-[10px] font-medium px-1.5 py-0.5 rounded
-                       bg-accent/15 text-accent mb-1">
+                       bg-brand/15 text-brand mb-1">
         {interaction.scenario}
       </span>
 

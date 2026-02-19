@@ -18,6 +18,10 @@ echo "  Storage : $STORAGE_ACCOUNT"
 echo "  RG      : $RG"
 echo "============================================"
 
+# Ensure DEFAULT_SCENARIO is set (may not be in env when running azd up directly)
+DEFAULT_SCENARIO="${DEFAULT_SCENARIO:-$(azd env get-values 2>/dev/null | grep '^DEFAULT_SCENARIO=' | cut -d'=' -f2 | tr -d '"' || true)}"
+DEFAULT_SCENARIO="${DEFAULT_SCENARIO:-telecom-playground}"
+
 # --------------------------------------------------------------------------
 # 1. Upload runbooks + tickets to blob storage
 #    (RBAC may take a few minutes to propagate after deployment)

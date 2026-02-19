@@ -19,19 +19,14 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import AsyncGenerator
 
-from dotenv import load_dotenv
-
-from app.paths import PROJECT_ROOT, CONFIG_FILE
+import app.paths  # noqa: F401  # side-effect: loads .env
 from app.agent_ids import load_agent_ids, get_agent_names, get_agent_list
 
 logger = logging.getLogger(__name__)
 
-# load_dotenv already called by app.paths import
-
-# Cached credential singleton — avoids re-probing credential sources on every request
+# Cached credential singleton — shared with agent_ids module
 _credential = None
 
 def _get_credential():
@@ -74,19 +69,18 @@ def _get_project_client():
     """Create an AIProjectClient with the project-scoped endpoint."""
     from azure.ai.projects import AIProjectClient
 
-    endpoint = os.environ["PROJECT_ENDPOINT"].rstrip("/")
-    project_name = os.environ["AI_FOUNDRY_PROJECT_NAME"]
+    endpoint = os.environ.get("PROJECT_ENDPOINT", "")
+    project_name = os.environ.get("AI_FOUNDRY_PROJECT_NAME", "")
+    if not endpoint or not project_name:
+        raise RuntimeError(
+            "PROJECT_ENDPOINT and AI_FOUNDRY_PROJECT_NAME must be set"
+        )
+    endpoint = endpoint.rstrip("/")
     # Ensure endpoint uses services.ai.azure.com and has /api/projects/ path
     if "/api/projects/" not in endpoint:
         endpoint = endpoint.replace("cognitiveservices.azure.com", "services.ai.azure.com")
         endpoint = f"{endpoint}/api/projects/{project_name}"
     return AIProjectClient(endpoint=endpoint, credential=_get_credential())
-
-
-def load_agents_from_file() -> list[dict] | None:
-    """Load agent list via Foundry discovery. Returns None if unavailable."""
-    agents = get_agent_list()
-    return agents if agents else None
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +294,11 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
     MAX_RUN_ATTEMPTS = 2  # initial + 1 retry on failure
 
     def _thread_target():
+        overall_t0 = time.monotonic()
+        total_steps = 0
+        total_tokens = 0
+        error_emitted = False
+
         try:
             _put("run_start", {
                 "run_id": "",
@@ -352,6 +351,10 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     ) as stream:
                         stream.until_done()
 
+                    # Accumulate totals across retry attempts
+                    total_steps += handler.ui_step
+                    total_tokens += handler.total_tokens
+
                     # Check if the run failed
                     if handler.run_failed:
                         last_error_detail = handler.run_error_detail
@@ -363,10 +366,11 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                             continue
                         else:
                             # Final attempt also failed — emit the error
+                            error_emitted = True
                             _put("error", {
                                 "message": (
                                     f"Agent run interrupted — A backend query returned an error. "
-                                    f"{handler.ui_step} steps completed before the error. "
+                                    f"{total_steps} steps completed before the error. "
                                     f"Retried {MAX_RUN_ATTEMPTS} times.\n\n"
                                     f"Error detail: {last_error_detail}"
                                 ),
@@ -405,20 +409,22 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                             continue
                         else:
                             # Final attempt also failed — emit what we have
+                            error_emitted = True
                             _put("error", {
                                 "message": (
                                     f"Investigation did not produce a final response "
                                     f"after {MAX_RUN_ATTEMPTS} attempts. "
-                                    f"{handler.ui_step} steps were completed."
+                                    f"{total_steps} steps were completed."
                                 ),
                             })
 
-                # Only emit run_complete on success (error event already sent on failure)
-                if not handler.run_failed:
+                # Only emit run_complete if no error was emitted
+                if not error_emitted:
+                    overall_elapsed = f"{time.monotonic() - overall_t0:.1f}s"
                     _put("run_complete", {
-                        "steps": handler.ui_step,
-                        "tokens": handler.total_tokens,
-                        "time": handler._elapsed(),
+                        "steps": total_steps,
+                        "tokens": total_tokens,
+                        "time": overall_elapsed,
                     })
 
         except Exception as e:

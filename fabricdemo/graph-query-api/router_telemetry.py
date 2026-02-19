@@ -8,7 +8,6 @@ Uses hardcoded ScenarioContext (no X-Graph header routing).
 from __future__ import annotations
 
 import logging
-import time
 
 from fastapi import APIRouter
 
@@ -21,6 +20,10 @@ from models import TelemetryQueryRequest, TelemetryQueryResponse
 logger = logging.getLogger("graph-query-api")
 
 router = APIRouter()
+
+# Module-level singleton to preserve KustoClient cache across requests
+from backends.fabric_kql import FabricKQLBackend  # noqa: E402
+_kql_backend = FabricKQLBackend()
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +60,7 @@ async def _query_fabric_kql(
         req.query,
     )
     try:
-        backend = FabricKQLBackend()
-        result = await backend.execute_query(req.query)
+        result = await _kql_backend.execute_query(req.query)
         if "error" in result:
             return TelemetryQueryResponse(
                 columns=[], rows=[],

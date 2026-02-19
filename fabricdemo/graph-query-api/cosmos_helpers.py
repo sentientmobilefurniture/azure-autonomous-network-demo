@@ -30,12 +30,15 @@ _cosmos_client: CosmosClient | None = None
 
 
 def get_cosmos_client() -> CosmosClient:
-    """Cached data-plane CosmosClient singleton."""
+    """Cached data-plane CosmosClient singleton.
+    
+    Raises RuntimeError instead of HTTPException so this can be safely
+    called during module init without crashing the entire app.
+    """
     global _cosmos_client
     if _cosmos_client is None:
         if not COSMOS_NOSQL_ENDPOINT:
-            from fastapi import HTTPException
-            raise HTTPException(503, "COSMOS_NOSQL_ENDPOINT not configured")
+            raise RuntimeError("COSMOS_NOSQL_ENDPOINT not configured")
         _cosmos_client = CosmosClient(url=COSMOS_NOSQL_ENDPOINT, credential=get_credential())
     return _cosmos_client
 

@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 
 from app.paths import PROJECT_ROOT
 from app.agent_ids import load_agent_ids
@@ -41,8 +41,12 @@ def _load_scenario_yaml() -> dict:
         return {}
     for p in _SCENARIO_YAML_CANDIDATES:
         if p.exists():
-            with open(p) as f:
-                return yaml.safe_load(f)
+            try:
+                with open(p) as f:
+                    return yaml.safe_load(f) or {}
+            except yaml.YAMLError as e:
+                logger.error("Invalid YAML in %s: %s", p, e)
+                return {}
     logger.warning("scenario.yaml not found — resource graph will be empty")
     return {}
 
@@ -60,7 +64,7 @@ def _build_scenario_config(manifest: dict) -> dict:
             tool_entry = {"type": t["type"]}
             if t["type"] == "openapi":
                 tool_entry["spec_template"] = t.get("spec_template", "")
-                tool_entry["data_source"] = t.get("spec_template", "")  # graph/telemetry
+                tool_entry["data_source"] = t.get("data_source", "")  # graph/telemetry
             elif t["type"] == "azure_ai_search":
                 # Resolve index key to actual index name from scenario.yaml
                 idx_key = t.get("index_key", "")
@@ -294,7 +298,7 @@ def _infra_nodes_only() -> list[dict]:
 
 
 @router.get("/resources", summary="Get resource graph for visualization")
-async def get_resource_graph(request: Request):
+async def get_resource_graph():
     """Build and return the nodes+edges resource graph from active scenario."""
     return _build_resource_graph(SCENARIO_CONFIG, SCENARIO_NAME)
 

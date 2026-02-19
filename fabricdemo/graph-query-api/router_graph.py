@@ -10,8 +10,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from backends import get_backend_for_context, close_all_backends, GraphBackend
-from config import GRAPH_BACKEND, ScenarioContext, get_scenario_context
+from backends import get_backend_for_context, close_all_backends
+from config import get_scenario_context
 from models import GraphQueryRequest, GraphQueryResponse
 
 logger = logging.getLogger("graph-query-api")

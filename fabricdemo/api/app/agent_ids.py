@@ -37,6 +37,7 @@ AGENT_NAMES = {
 _cache: dict | None = None
 _cache_time: float = 0.0
 _cache_lock = threading.Lock()
+_refresh_in_progress = False
 _CACHE_TTL = float(os.getenv("AGENT_DISCOVERY_TTL", "300"))  # 5 min default
 
 # Cached credential singleton
@@ -141,16 +142,24 @@ def _discover_agents() -> dict:
 
 def _get_cached() -> dict:
     """Return cached discovery result, refreshing if TTL expired."""
-    global _cache, _cache_time
+    global _cache, _cache_time, _refresh_in_progress
     with _cache_lock:
         now = time.time()
         if _cache is not None and (now - _cache_time) < _CACHE_TTL:
             return _cache
+        # Prevent thundering herd: if another thread is refreshing, return stale
+        if _refresh_in_progress and _cache is not None:
+            return _cache
+        _refresh_in_progress = True
     # Refresh outside the lock (network call)
-    result = _discover_agents()
-    with _cache_lock:
-        _cache = result
-        _cache_time = time.time()
+    try:
+        result = _discover_agents()
+        with _cache_lock:
+            _cache = result
+            _cache_time = time.time()
+    finally:
+        with _cache_lock:
+            _refresh_in_progress = False
     return result
 
 

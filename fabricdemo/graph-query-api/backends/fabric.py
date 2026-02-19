@@ -410,7 +410,9 @@ used by other backends so routers don't need changes.
         if self._client and not self._client.is_closed:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._client.aclose())
+                if not loop.is_closing():
+                    loop.create_task(self._client.aclose())
+                # If loop is closing, the client will be GC'd
             except RuntimeError:
                 # No event loop — shouldn't happen in prod
                 pass

@@ -27,21 +27,20 @@ class LogBroadcaster:
 
     def __init__(self, max_buffer: int = 100, max_queue: int = 500):
         self._lock = threading.Lock()
-        self._subscribers: set[asyncio.Queue] = set()
+        self._subscribers: dict[asyncio.Queue, asyncio.AbstractEventLoop] = {}
         self._buffer: deque[dict] = deque(maxlen=max_buffer)
         self._max_queue = max_queue
-        self._event_loop: asyncio.AbstractEventLoop | None = None
 
     def broadcast(self, record: dict) -> None:
         """Push a log record dict to every subscriber (thread-safe)."""
         with self._lock:
             self._buffer.append(record)
-            snapshot = list(self._subscribers)
+            snapshot = list(self._subscribers.items())
         dead: list[asyncio.Queue] = []
-        for q in snapshot:
+        for q, loop in snapshot:
             try:
-                if self._event_loop is not None and self._event_loop.is_running():
-                    self._event_loop.call_soon_threadsafe(q.put_nowait, record)
+                if loop is not None and loop.is_running():
+                    loop.call_soon_threadsafe(q.put_nowait, record)
                 else:
                     q.put_nowait(record)
             except (asyncio.QueueFull, RuntimeError):
@@ -49,15 +48,15 @@ class LogBroadcaster:
         if dead:
             with self._lock:
                 for q in dead:
-                    self._subscribers.discard(q)
+                    self._subscribers.pop(q, None)
 
     async def subscribe(self) -> AsyncGenerator[str, None]:
         """Async generator yielding SSE-formatted log events."""
-        self._event_loop = asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue(maxsize=self._max_queue)
         with self._lock:
             buffered = list(self._buffer)
-            self._subscribers.add(q)
+            self._subscribers[q] = loop
         try:
             for rec in buffered:
                 yield f"event: log\ndata: {json.dumps(rec)}\n\n"
@@ -66,7 +65,7 @@ class LogBroadcaster:
                 yield f"event: log\ndata: {json.dumps(rec)}\n\n"
         finally:
             with self._lock:
-                self._subscribers.discard(q)
+                self._subscribers.pop(q, None)
 
     def get_handler(self, level: int = logging.INFO) -> logging.Handler:
         """Return a logging.Handler that broadcasts to this instance."""

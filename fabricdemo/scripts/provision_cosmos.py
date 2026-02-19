@@ -124,11 +124,26 @@ async def _load_csv_blob(credential: DefaultAzureCredential, csv_file: str) -> l
         return list(reader)
 
 
-async def _clear_container(container) -> int:
-    """Delete all items from a Cosmos DB container (async)."""
+async def _clear_container(container, partition_key_path: str = "") -> int:
+    """Delete all items from a Cosmos DB container (async).
+    
+    Args:
+        container: The Cosmos container proxy.
+        partition_key_path: The partition key field name (e.g. 'SourceNodeType').
+                           If empty, attempts common field names as fallback.
+    """
+    # Determine the partition key field to SELECT
+    pk_field = partition_key_path.lstrip("/") if partition_key_path else ""
+    
+    # Build query to fetch id + partition key field
+    if pk_field:
+        select_fields = f"c.id, c.{pk_field}"
+    else:
+        select_fields = "c.id, c.SourceNodeType, c.LinkId"
+    
     items = []
     async for item in container.query_items(
-        query="SELECT c.id, c.SourceNodeType, c.LinkId FROM c",
+        query=f"SELECT {select_fields} FROM c",
     ):
         items.append(item)
 
@@ -140,7 +155,10 @@ async def _clear_container(container) -> int:
 
     async def _delete_one(item: dict):
         nonlocal deleted
-        pk = item.get("SourceNodeType") or item.get("LinkId") or ""
+        if pk_field:
+            pk = item.get(pk_field, "")
+        else:
+            pk = item.get("SourceNodeType") or item.get("LinkId") or ""
         async with sem:
             try:
                 await container.delete_item(item=item["id"], partition_key=pk)
@@ -245,7 +263,7 @@ async def run(args: argparse.Namespace) -> None:
             # Clear existing data
             if not args.no_clear:
                 print("  Clearing existing data...")
-                deleted = await _clear_container(container)
+                deleted = await _clear_container(container, config["partition_key"])
                 if deleted:
                     print(f"  Deleted {deleted} existing documents")
 

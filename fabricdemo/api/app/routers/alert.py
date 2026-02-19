@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -39,7 +38,7 @@ def _load_stub_agent_names() -> list[str]:
         from app.agent_ids import get_agent_list
         agents = get_agent_list()
         return [a["name"] for a in agents if not a.get("is_orchestrator")]
-    except (FileNotFoundError, json.JSONDecodeError):
+    except Exception:
         return ["Agent1", "Agent2"]
 
 

@@ -22,7 +22,7 @@ if [ -f "$CONFIG_FILE" ]; then
 
   # Sync selected variables to azd env for Bicep
   # (POSIX-compatible — no associative arrays)
-  for var_name in AZURE_LOCATION GPT_CAPACITY_1K_TPM GRAPH_BACKEND FABRIC_WORKSPACE_ID AZURE_FABRIC_ADMIN FABRIC_CAPACITY_SKU; do
+  for var_name in AZURE_LOCATION GPT_CAPACITY_1K_TPM GRAPH_BACKEND FABRIC_WORKSPACE_ID AZURE_FABRIC_ADMIN FABRIC_CAPACITY_SKU DEFAULT_SCENARIO RUNBOOKS_INDEX_NAME TICKETS_INDEX_NAME CORS_ORIGINS; do
     value=""
     case "$var_name" in
       AZURE_LOCATION)        value="${AZURE_LOCATION:-}" ;;
@@ -31,6 +31,10 @@ if [ -f "$CONFIG_FILE" ]; then
       FABRIC_WORKSPACE_ID)   value="${FABRIC_WORKSPACE_ID:-}" ;;
       AZURE_FABRIC_ADMIN)    value="${AZURE_FABRIC_ADMIN:-}" ;;
       FABRIC_CAPACITY_SKU)   value="${FABRIC_CAPACITY_SKU:-}" ;;
+      DEFAULT_SCENARIO)      value="${DEFAULT_SCENARIO:-}" ;;
+      RUNBOOKS_INDEX_NAME)   value="${RUNBOOKS_INDEX_NAME:-}" ;;
+      TICKETS_INDEX_NAME)    value="${TICKETS_INDEX_NAME:-}" ;;
+      CORS_ORIGINS)          value="${CORS_ORIGINS:-}" ;;
     esac
     if [ -n "$value" ]; then
       azd env set "$var_name" "$value"

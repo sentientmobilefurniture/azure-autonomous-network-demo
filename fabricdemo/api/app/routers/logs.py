@@ -36,7 +36,7 @@ _data_ops_broadcaster = LogBroadcaster(max_buffer=200, max_queue=500)
 _data_ops_handler = _data_ops_broadcaster.get_handler(level=logging.DEBUG)
 _data_ops_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 _data_ops_handler.addFilter(
-    lambda r: r.name.startswith(("app.fabric", "api.config"))
+    lambda r: r.name.startswith(("app.routers.config", "app.routers.fabric"))
 )
 logging.getLogger().addHandler(_data_ops_handler)
 

@@ -18,12 +18,19 @@ logger = logging.getLogger("graph-query-api")
 # ---------------------------------------------------------------------------
 
 _FIXTURE_PATH = Path(__file__).parent / "fixtures" / "mock_topology.json"
-_fixture = json.loads(_FIXTURE_PATH.read_text())
-
-_CORE_ROUTERS = _fixture["core_routers"]
-_CORE_ROUTER_COLUMNS = _fixture["core_router_columns"]
-_TOPOLOGY_NODES: list[dict] = _fixture["topology_nodes"]
-_TOPOLOGY_EDGES: list[dict] = _fixture["topology_edges"]
+try:
+    _fixture = json.loads(_FIXTURE_PATH.read_text())
+    _CORE_ROUTERS = _fixture["core_routers"]
+    _CORE_ROUTER_COLUMNS = _fixture["core_router_columns"]
+    _TOPOLOGY_NODES: list[dict] = _fixture["topology_nodes"]
+    _TOPOLOGY_EDGES: list[dict] = _fixture["topology_edges"]
+except (FileNotFoundError, json.JSONDecodeError, KeyError) as _e:
+    import logging as _log
+    _log.getLogger("graph-query-api").warning("Mock fixture not found or invalid: %s", _e)
+    _CORE_ROUTERS = []
+    _CORE_ROUTER_COLUMNS = []
+    _TOPOLOGY_NODES = []
+    _TOPOLOGY_EDGES = []
 
 
 class MockGraphBackend:

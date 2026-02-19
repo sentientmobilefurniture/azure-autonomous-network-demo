@@ -99,8 +99,9 @@ async def get_interaction(interaction_id: str, scenario: str = Query(...)):
         return await store.get(interaction_id, partition_key=scenario)
     except (KeyError, ValueError):
         raise HTTPException(status_code=404, detail="Interaction not found")
-    except Exception:
-        raise HTTPException(status_code=404, detail="Interaction not found")
+    except Exception as e:
+        logger.exception("Failed to get interaction %s", interaction_id)
+        raise HTTPException(status_code=500, detail=f"Internal error: {type(e).__name__}")
 
 
 @router.delete("/interactions/{interaction_id}", summary="Delete an interaction")
@@ -111,6 +112,7 @@ async def delete_interaction(interaction_id: str, scenario: str = Query(...)):
         await store.delete(interaction_id, partition_key=scenario)
     except (KeyError, ValueError):
         raise HTTPException(status_code=404, detail="Interaction not found")
-    except Exception:
-        raise HTTPException(status_code=404, detail="Interaction not found")
+    except Exception as e:
+        logger.exception("Failed to delete interaction %s", interaction_id)
+        raise HTTPException(status_code=500, detail=f"Internal error: {type(e).__name__}")
     return {"deleted": interaction_id}

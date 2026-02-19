@@ -36,10 +36,17 @@ export async function getScenario(): Promise<ScenarioConfig> {
   if (_cached) return _cached;
   if (!_fetchPromise) {
     _fetchPromise = fetch("/api/config/scenario")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data: ScenarioConfig) => {
         _cached = data;
         return data;
+      })
+      .catch((err) => {
+        _fetchPromise = null;
+        throw err;
       });
   }
   return _fetchPromise;

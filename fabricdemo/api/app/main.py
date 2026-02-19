@@ -40,8 +40,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _cors_origins.split(",")],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Mount REST routers
@@ -95,7 +95,7 @@ async def services_health():
     # AI Foundry
     ep = os.getenv("PROJECT_ENDPOINT", "")
     if ep:
-        services.append({"name": "AI Foundry", "group": "AI", "status": "connected", "details": os.getenv("AI_FOUNDRY_NAME", "")})
+        services.append({"name": "AI Foundry", "group": "AI", "status": "configured", "details": os.getenv("AI_FOUNDRY_NAME", "")})
         connected += 1
     else:
         services.append({"name": "AI Foundry", "group": "AI", "status": "not_configured"})
@@ -103,7 +103,7 @@ async def services_health():
     # AI Search
     search = os.getenv("AI_SEARCH_NAME", "")
     if search:
-        services.append({"name": "AI Search", "group": "Data", "status": "connected", "details": search})
+        services.append({"name": "AI Search", "group": "Data", "status": "configured", "details": search})
         connected += 1
     else:
         services.append({"name": "AI Search", "group": "Data", "status": "not_configured"})
@@ -111,7 +111,7 @@ async def services_health():
     # Cosmos DB
     cosmos = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
     if cosmos:
-        services.append({"name": "Cosmos DB", "group": "Data", "status": "connected", "details": "NoSQL interactions store"})
+        services.append({"name": "Cosmos DB", "group": "Data", "status": "configured", "details": "NoSQL interactions store"})
         connected += 1
     else:
         services.append({"name": "Cosmos DB", "group": "Data", "status": "not_configured"})
@@ -119,7 +119,7 @@ async def services_health():
     # Graph Query API
     gq = os.getenv("GRAPH_QUERY_API_URI", "")
     if gq:
-        services.append({"name": "Graph Query API", "group": "Backend", "status": "connected", "details": "Fabric GQL"})
+        services.append({"name": "Graph Query API", "group": "Backend", "status": "configured", "details": "Fabric GQL"})
         connected += 1
     else:
         services.append({"name": "Graph Query API", "group": "Backend", "status": "not_configured"})

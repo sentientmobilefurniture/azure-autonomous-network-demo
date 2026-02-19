@@ -36,15 +36,6 @@ paths:
                     A query string (natural language or formal syntax).
                     The mock backend returns representative sample data.
                     Example: "find all core routers"
-      parameters:
-        - name: X-Graph
-          in: header
-          required: true
-          schema:
-            type: string
-            enum: ["{graph_name}"]
-          description: |
-            The graph name to route this request to. Always use the value shown.
       responses:
         "200":
           description: Query results (check 'error' field for query failures)
@@ -82,15 +73,6 @@ paths:
         Returns columns and rows of alert or telemetry data.
         Tables available: AlertStream (~5000 rows), LinkTelemetry (~8640 rows).
         Use standard KQL syntax: table | where | project | order by | take.
-      parameters:
-        - name: X-Graph
-          in: header
-          required: true
-          schema:
-            type: string
-            enum: ["{graph_name}"]
-          description: |
-            The graph name to route this request to. Always use the value shown.
       requestBody:
         required: true
         content:
@@ -99,20 +81,12 @@ paths:
               type: object
               required:
                 - query
-                - container_name
               properties:
                 query:
                   type: string
                   description: |
                     A KQL query string.
                     Example: AlertStream | where Severity == 'CRITICAL' | order by Timestamp desc | take 5
-                container_name:
-                  type: string
-                  enum: ["AlertStream", "LinkTelemetry"]
-                  description: |
-                    The KQL table to query.
-                    Use "AlertStream" for network alerts.
-                    Use "LinkTelemetry" for link telemetry readings.
       responses:
         "200":
           description: Query results (check 'error' field for query failures)

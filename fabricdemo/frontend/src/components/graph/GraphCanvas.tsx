@@ -57,6 +57,30 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
     // Color resolver (centralized: override → scenario → constants → auto)
     const getNodeColor = useNodeColor(nodeColorOverride);
 
+    // Cache CSS custom properties (re-read on theme changes via MutationObserver)
+    const [themeColors, setThemeColors] = useState(() => {
+      const s = getComputedStyle(document.documentElement);
+      return {
+        textPrimary: s.getPropertyValue('--color-text-primary').trim(),
+        textMuted: s.getPropertyValue('--color-text-muted').trim(),
+        borderDefault: s.getPropertyValue('--color-border-default').trim(),
+        borderStrong: s.getPropertyValue('--color-border-strong').trim(),
+      };
+    });
+    useEffect(() => {
+      const observer = new MutationObserver(() => {
+        const s = getComputedStyle(document.documentElement);
+        setThemeColors({
+          textPrimary: s.getPropertyValue('--color-text-primary').trim(),
+          textMuted: s.getPropertyValue('--color-text-muted').trim(),
+          borderDefault: s.getPropertyValue('--color-border-default').trim(),
+          borderStrong: s.getPropertyValue('--color-border-strong').trim(),
+        });
+      });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+      return () => observer.disconnect();
+    }, []);
+
     // Size resolver (scenario sizes normalized to canvas scale)
     const SCENARIO = useScenario();
     const scenarioNodeSizes = SCENARIO.graphStyles.nodeSizes;
@@ -75,10 +99,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
         const size = getNodeSize(node.label);
         const color = getNodeColor(node.label);
 
-        // Read theme tokens from CSS custom properties
-        const styles = getComputedStyle(document.documentElement);
-        const textPrimary = styles.getPropertyValue('--color-text-primary').trim();
-        const borderDefault = styles.getPropertyValue('--color-border-default').trim();
+        // Use cached theme tokens
+        const { textPrimary, borderDefault } = themeColors;
 
         // Circle
         ctx.beginPath();
@@ -102,7 +124,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
         ctx.textBaseline = 'top';
         ctx.fillText(label, node.x!, node.y! + size + 2);
       },
-      [getNodeColor, getNodeSize, nodeDisplayField],
+      [getNodeColor, getNodeSize, nodeDisplayField, themeColors],
     );
 
     // Edge label rendering
@@ -117,15 +139,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
         const midY = (src.y! + tgt.y!) / 2;
         const fontSize = Math.max(8 / globalScale, 2.5);
 
-        const textMuted = getComputedStyle(document.documentElement).getPropertyValue('--color-text-muted').trim();
-
         ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = textMuted;
+        ctx.fillStyle = themeColors.textMuted;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(link.label, midX, midY);
       },
-      [],
+      [themeColors],
     );
 
     // Double-click handler: center + zoom to specific node
@@ -163,17 +183,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
           // Edge rendering
           linkSource="source"
           linkTarget="target"
-          linkColor={() => {
-            const borderDefault = getComputedStyle(document.documentElement).getPropertyValue('--color-border-default').trim();
-            return borderDefault;
-          }}
+          linkColor={() => themeColors.borderDefault}
           linkWidth={1.5}
           linkDirectionalArrowLength={4}
           linkDirectionalArrowRelPos={0.9}
-          linkDirectionalArrowColor={() => {
-            const borderStrong = getComputedStyle(document.documentElement).getPropertyValue('--color-border-strong').trim();
-            return borderStrong;
-          }}
+          linkDirectionalArrowColor={() => themeColors.borderStrong}
           linkCanvasObjectMode={linkCanvasObjectMode}
           linkCanvasObject={linkCanvasObject}
           // Interaction

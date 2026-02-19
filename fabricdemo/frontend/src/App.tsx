@@ -61,7 +61,7 @@ export default function App() {
   // Fetch interactions on mount
   useEffect(() => {
     fetchInteractions(SCENARIO.name);
-  }, [fetchInteractions]);
+  }, [fetchInteractions, SCENARIO.name]);
 
   // Auto-save interaction when investigation completes.
   const prevRunningRef = useRef(running);

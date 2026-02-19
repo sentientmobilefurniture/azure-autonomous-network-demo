@@ -164,8 +164,7 @@ except ImportError:
     )
 
 try:
-    from .fabric_kql import FabricKQLBackend
-    register_backend("fabric-kql", FabricKQLBackend)
+    from .fabric_kql import FabricKQLBackend  # noqa: F401 — imported for availability
 except ImportError:
     import logging
     logging.getLogger("graph-query-api").warning(
