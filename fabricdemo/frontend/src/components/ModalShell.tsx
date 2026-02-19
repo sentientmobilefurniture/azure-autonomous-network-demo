@@ -29,7 +29,7 @@ export function ModalShell({ title, onClose, footer, children, className }: Moda
       onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
     >
       <div
-        className={`bg-white border border-border rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl ${className ?? ''}`}
+        className={`bg-neutral-bg1 border border-border rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl ${className ?? ''}`}
         role="dialog"
         aria-modal="true"
       >

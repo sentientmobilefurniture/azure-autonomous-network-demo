@@ -1,6 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  darkMode: 'class',
   theme: {
     extend: {
       fontFamily: {
@@ -8,35 +9,35 @@ export default {
       },
       colors: {
         brand: {
-          DEFAULT: '#117865',
-          hover: '#0E6658',
-          light: '#1A9C85',
-          subtle: 'rgba(17, 120, 101, 0.08)',
+          DEFAULT: 'var(--color-brand)',
+          hover: 'var(--color-brand-hover)',
+          light: 'var(--color-brand-light)',
+          subtle: 'var(--color-brand-subtle)',
         },
         neutral: {
-          bg1: '#FFFFFF',
-          bg2: '#FAF9F8',
-          bg3: '#F3F2F1',
-          bg4: '#EDEBE9',
-          bg5: '#E1DFDD',
-          bg6: '#D2D0CE',
+          bg1: 'var(--color-bg-1)',
+          bg2: 'var(--color-bg-2)',
+          bg3: 'var(--color-bg-3)',
+          bg4: 'var(--color-bg-4)',
+          bg5: 'var(--color-bg-5)',
+          bg6: 'var(--color-bg-6)',
         },
         text: {
-          primary: '#242424',
-          secondary: '#616161',
-          muted: '#A19F9D',
-          tertiary: '#C8C6C4',
+          primary: 'var(--color-text-primary)',
+          secondary: 'var(--color-text-secondary)',
+          muted: 'var(--color-text-muted)',
+          tertiary: 'var(--color-text-tertiary)',
         },
         border: {
-          subtle: '#F0F0F0',
-          DEFAULT: '#E0E0E0',
-          strong: '#D1D1D1',
+          subtle: 'var(--color-border-subtle)',
+          DEFAULT: 'var(--color-border-default)',
+          strong: 'var(--color-border-strong)',
         },
         status: {
-          success: '#107C10',
-          warning: '#F7630C',
-          error: '#A4262C',
-          info: '#0078D4',
+          success: 'var(--color-success)',
+          warning: 'var(--color-warning)',
+          error: 'var(--color-error)',
+          info: 'var(--color-info)',
         },
       },
     },

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useScenario } from '../ScenarioContext';
+import { HEALTH_BUTTON_TOOLTIPS } from '../config/tooltips';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -75,6 +76,9 @@ function HealthButton({ def, scenario }: { def: ButtonDef; scenario: string }) {
   const [status, setStatus] = useState<CheckStatus>('idle');
   const [detail, setDetail] = useState<string>('');
   const [elapsed, setElapsed] = useState<number>(0);
+  const [showTip, setShowTip] = useState(false);
+
+  const tooltip = HEALTH_BUTTON_TOOLTIPS[def.key];
 
   const run = useCallback(async () => {
     setStatus('checking');
@@ -131,30 +135,44 @@ function HealthButton({ def, scenario }: { def: ButtonDef; scenario: string }) {
   }, [def, scenario]);
 
   return (
-    <button
-      onClick={run}
-      disabled={status === 'checking'}
-      className={`
-        inline-flex items-center gap-1.5 px-2.5 py-1 rounded
-        border text-[11px] transition-all select-none
-        ${statusRing(status)}
-        ${status === 'checking'
-          ? 'bg-status-warning/5 cursor-wait'
-          : 'bg-neutral-bg3 hover:bg-neutral-bg4 cursor-pointer'}
-      `}
-      title={detail || def.label}
+    <div
+      className="relative"
+      onMouseEnter={() => setShowTip(true)}
+      onMouseLeave={() => setShowTip(false)}
     >
-      <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${statusDot(status)}`} />
-      <span className="text-text-secondary">{def.label}</span>
-      {status === 'checking' && (
-        <span className="text-status-warning font-mono text-[10px]">{elapsed}s</span>
+      <button
+        onClick={run}
+        disabled={status === 'checking'}
+        className={`
+          inline-flex items-center gap-1.5 px-2.5 py-1 rounded
+          border text-[11px] transition-all select-none
+          ${statusRing(status)}
+          ${status === 'checking'
+            ? 'bg-status-warning/5 cursor-wait'
+            : 'bg-neutral-bg3 hover:bg-neutral-bg4 cursor-pointer'}
+        `}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${statusDot(status)}`} />
+        <span className="text-text-secondary">{def.label}</span>
+        {status === 'checking' && (
+          <span className="text-status-warning font-mono text-[10px]">{elapsed}s</span>
+        )}
+        {status !== 'idle' && status !== 'checking' && detail && (
+          <span className={`text-[10px] ${status === 'ok' ? 'text-status-success' : 'text-status-error'}`}>
+            — {detail}
+          </span>
+        )}
+      </button>
+
+      {showTip && tooltip && (
+        <div className="absolute left-0 top-full mt-1.5 z-50 w-64
+                        bg-neutral-bg3 border border-border rounded-lg
+                        shadow-xl px-3 py-2 text-[11px] text-text-secondary
+                        leading-relaxed pointer-events-none">
+          {tooltip}
+        </div>
       )}
-      {status !== 'idle' && status !== 'checking' && detail && (
-        <span className={`text-[10px] ${status === 'ok' ? 'text-status-success' : 'text-status-error'}`}>
-          — {detail}
-        </span>
-      )}
-    </button>
+    </div>
   );
 }
 

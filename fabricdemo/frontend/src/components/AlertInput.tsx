@@ -87,7 +87,7 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
           className={clsx(
             'flex-1 py-2.5 text-sm font-medium rounded-lg transition-colors',
             'bg-brand hover:bg-brand-hover text-white',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-white',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-bg1',
             'disabled:opacity-50 disabled:cursor-not-allowed',
           )}
           onClick={onSubmit}
