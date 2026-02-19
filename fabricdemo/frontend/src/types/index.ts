@@ -1,3 +1,59 @@
+// ---------------------------------------------------------------------------
+// Visualization types (Story 1)
+// ---------------------------------------------------------------------------
+
+export type VisualizationType = 'graph' | 'table' | 'documents';
+
+export interface VisualizationColumn {
+  name: string;
+  type: string;
+}
+
+export interface GraphVisualizationData {
+  type: 'graph';
+  data: {
+    columns: VisualizationColumn[];
+    data: Record<string, unknown>[];
+    query: string;
+  };
+}
+
+export interface TableVisualizationData {
+  type: 'table';
+  data: {
+    columns: VisualizationColumn[];
+    rows: Record<string, unknown>[];
+    query: string;
+  };
+}
+
+export interface SearchHit {
+  score: number;
+  title: string;
+  content: string;
+  chunk_id: string;
+}
+
+export interface DocumentVisualizationData {
+  type: 'documents';
+  data: {
+    content: string;
+    agent: string;
+    citations?: string;
+    searchHits?: SearchHit[];
+    indexName?: string;
+  };
+}
+
+export type VisualizationData =
+  | GraphVisualizationData
+  | TableVisualizationData
+  | DocumentVisualizationData;
+
+// ---------------------------------------------------------------------------
+// Core event types
+// ---------------------------------------------------------------------------
+
 export interface StepEvent {
   step: number;
   agent: string;
@@ -5,6 +61,7 @@ export interface StepEvent {
   query?: string;
   response?: string;
   error?: boolean;
+  visualization?: VisualizationData;
 }
 
 export interface ThinkingState {

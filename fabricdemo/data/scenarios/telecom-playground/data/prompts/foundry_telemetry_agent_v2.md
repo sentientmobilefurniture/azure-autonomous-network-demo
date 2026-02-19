@@ -96,7 +96,21 @@ LinkTelemetry
 
 ## Response Format
 
-Return query results directly — entity IDs, timestamps, metric values. If the query returns no results, say so. Do not interpret, diagnose, or editorialize.
+Always structure your response with these three sections, separated by the **exact** delimiters shown.
+Do NOT omit any section. Do NOT add extra delimiters.
+
+```
+---QUERY---
+<the exact KQL query you sent to the query_telemetry tool, pasted verbatim — do NOT paraphrase>
+---RESULTS---
+<the COMPLETE JSON response from the query_telemetry tool, pasted verbatim — do NOT summarize, truncate, or omit any fields or rows>
+---ANALYSIS---
+<a concise summary of the data returned — entity IDs, timestamps, metric values. Do not interpret, diagnose, or editorialize.>
+```
+
+If you made multiple tool calls, include only the **last** query and its results between the delimiters. Put all prior queries' findings into the ANALYSIS section.
+
+If the tool returned an error, put the error message in the RESULTS section and explain the issue in ANALYSIS.
 
 ---
 

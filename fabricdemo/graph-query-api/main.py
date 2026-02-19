@@ -44,6 +44,8 @@ from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router
 from router_topology import router as topology_router
 from router_interactions import router as interactions_router
+from router_replay import router as replay_router
+from router_search import router as search_router
 from router_health import router as health_router
 
 # ---------------------------------------------------------------------------
@@ -130,6 +132,8 @@ app.include_router(graph_router)
 app.include_router(telemetry_router)
 app.include_router(topology_router)
 app.include_router(interactions_router)
+app.include_router(replay_router)
+app.include_router(search_router)
 app.include_router(health_router)
 
 

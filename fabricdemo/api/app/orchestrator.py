@@ -13,9 +13,11 @@ Falls back to stub responses when the orchestrator isn't configured
 """
 
 import asyncio
+import ast
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -169,7 +171,11 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             return tc_type
 
         def _extract_arguments(self, tc) -> str:
-            """Parse and extract arguments from a tool call."""
+            """Parse and extract arguments from a tool call.
+
+            BUG 1 fix: if parsed JSON is a dict with a single 'query' or
+            'input' key, unwrap it to return just the value string.
+            """
             tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
             tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
             if tc_type != "connected_agent":
@@ -180,9 +186,123 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 return ""
             try:
                 obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-                return obj if isinstance(obj, str) else json.dumps(obj)
+                if isinstance(obj, str):
+                    return obj
+                if isinstance(obj, dict):
+                    # Unwrap single-key dicts like {"query": "..."} or {"input": "..."}
+                    for key in ("query", "input"):
+                        if key in obj and len(obj) == 1:
+                            return str(obj[key])
+                    return json.dumps(obj)
+                return json.dumps(obj)
             except Exception:
                 return str(args_raw)
+
+        def _parse_structured_output(self, agent_name: str, raw_output: str) -> tuple:
+            """Parse sub-agent output into (summary_text, visualization_payload).
+
+            Returns:
+                (response_text, visualization_dict_or_None)
+            """
+            if not raw_output:
+                return "", None
+
+            # Try to extract delimited sections
+            query_match = re.search(
+                r'---QUERY---\s*(.+?)\s*---(?:RESULTS|ANALYSIS)---',
+                raw_output, re.DOTALL,
+            )
+            results_match = re.search(
+                r'---RESULTS---\s*(.+?)\s*---ANALYSIS---',
+                raw_output, re.DOTALL,
+            )
+            analysis_match = re.search(
+                r'---ANALYSIS---\s*(.+)',
+                raw_output, re.DOTALL,
+            )
+            citations_match = re.search(
+                r'---CITATIONS---\s*(.+?)\s*---ANALYSIS---',
+                raw_output, re.DOTALL,
+            )
+
+            # Determine viz type from agent name
+            viz_type = {
+                "GraphExplorerAgent": "graph",
+                "TelemetryAgent": "table",
+            }.get(agent_name, "documents")
+
+            # For graph/table agents with delimited output
+            if query_match and results_match:
+                actual_query = query_match.group(1).strip()
+                raw_results = results_match.group(1).strip()
+                summary = analysis_match.group(1).strip() if analysis_match else raw_output
+
+                # Try JSON first, then Python dict syntax (LLM often uses
+                # single quotes and None instead of null)
+                results_json = None
+                try:
+                    results_json = json.loads(raw_results)
+                except (json.JSONDecodeError, ValueError):
+                    try:
+                        results_json = ast.literal_eval(raw_results)
+                    except (ValueError, SyntaxError):
+                        logger.warning(
+                            "Failed to parse structured results for %s "
+                            "(neither JSON nor Python literal)",
+                            agent_name,
+                        )
+
+                if results_json and isinstance(results_json, dict):
+                    # Remove 'error' key if it's None (common in tool responses)
+                    results_json.pop("error", None)
+                    viz_data = {
+                        "type": viz_type,
+                        "data": {
+                            **results_json,
+                            "query": actual_query,
+                        },
+                    }
+                    return summary, viz_data
+
+                # Parse failed but we still have delimiters — return the
+                # ANALYSIS section as clean display text, not the raw blob
+                return summary, {
+                    "type": "documents",
+                    "data": {"content": summary, "agent": agent_name},
+                }
+
+            # For AI Search agents with citations
+            if citations_match and analysis_match:
+                citations = citations_match.group(1).strip()
+                summary = analysis_match.group(1).strip()
+                return summary, {
+                    "type": "documents",
+                    "data": {
+                        "content": summary,
+                        "citations": citations,
+                        "agent": agent_name,
+                    },
+                }
+
+            # No delimiters found — graceful fallback
+            if agent_name in (
+                "RunbookKBAgent", "HistoricalTicketAgent", "AzureAISearch",
+            ):
+                return raw_output, {
+                    "type": "documents",
+                    "data": {"content": raw_output, "agent": agent_name},
+                }
+
+            # Graph/Telemetry agent didn't follow format — fall back to documents
+            logger.warning(
+                "Agent %s did not emit structured delimiters — "
+                "falling back to documents view",
+                agent_name,
+            )
+            return raw_output, {
+                "type": "documents",
+                "data": {"content": raw_output, "agent": agent_name},
+            }
 
         # -- Step lifecycle --------------------------------------------------
 
@@ -245,6 +365,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     agent_name = self._resolve_agent_name(tc)
                     query = self._extract_arguments(tc)
                     response = ""
+                    visualization = None
 
                     # Extract response (sub-agent output for connected_agent)
                     tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
@@ -257,9 +378,13 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         )
                         out = getattr(ca, "output", None) or ca.get("output", None)
                         if out:
-                            response = str(out)
+                            response, visualization = self._parse_structured_output(
+                                agent_name, str(out),
+                            )
+                            if not response:
+                                response = str(out)
 
-                    # Truncate for the frontend
+                    # Truncate display text for the frontend
                     if len(query) > 500:
                         query = query[:500] + "…"
                     if len(response) > 2000:
@@ -271,14 +396,18 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     if response:
                         logger.info("  ↳ response (%d chars): %s", len(response), response[:200])
 
-                    _put("step_start", {"step": self.ui_step, "agent": agent_name})
-                    _put("step_complete", {
+                    event_data = {
                         "step": self.ui_step,
                         "agent": agent_name,
                         "duration": duration,
                         "query": query,
                         "response": response,
-                    })
+                    }
+                    if visualization:
+                        event_data["visualization"] = visualization
+
+                    _put("step_start", {"step": self.ui_step, "agent": agent_name})
+                    _put("step_complete", event_data)
 
         # -- Streaming message text ------------------------------------------
 

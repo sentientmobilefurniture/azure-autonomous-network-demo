@@ -92,6 +92,8 @@ class InteractionStep(BaseModel):
     query: str | None = None
     response: str | None = None
     error: bool = False
+    visualization: dict[str, Any] | None = None
+    reasoning: str | None = None  # Story 2 compatibility
 
 
 class InteractionRunMeta(BaseModel):
@@ -105,3 +107,8 @@ class InteractionSaveRequest(BaseModel):
     steps: list[InteractionStep]
     diagnosis: str
     run_meta: InteractionRunMeta | None = None
+
+
+class ReplayRequest(BaseModel):
+    agent: str
+    query: str

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import type { StepEvent, ThinkingState, RunMeta } from '../types';
 import { StepCard } from './StepCard';
@@ -19,7 +19,24 @@ export function AgentTimeline({
   runStarted,
   runMeta,
 }: AgentTimelineProps) {
-  const [allExpanded, setAllExpanded] = useState(false);
+  // Track expanded state for each step, keyed by step number
+  const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({});
+
+  const toggleStep = useCallback((stepNum: number) => {
+    setExpandedSteps((prev) => ({ ...prev, [stepNum]: !prev[stepNum] }));
+  }, []);
+
+  const expandAll = useCallback(() => {
+    const all: Record<number, boolean> = {};
+    for (const s of steps) all[s.step] = true;
+    setExpandedSteps(all);
+  }, [steps]);
+
+  const collapseAll = useCallback(() => {
+    setExpandedSteps({});
+  }, []);
+
+  const allExpanded = steps.length > 0 && steps.every((s) => expandedSteps[s.step]);
 
   // Nothing to show yet
   if (!runStarted && steps.length === 0) return null;
@@ -30,12 +47,15 @@ export function AgentTimeline({
         <span className="text-[10px] uppercase tracking-wider font-medium text-text-muted">
           Investigation
         </span>
-        {steps.length > 1 && (
+        {steps.length > 0 && (
           <button
-            onClick={() => setAllExpanded(v => !v)}
-            className="text-[10px] text-text-muted hover:text-text-primary transition-colors"
+            onClick={allExpanded ? collapseAll : expandAll}
+            className="text-[10px] font-medium text-text-muted hover:text-brand
+                       transition-colors px-1.5 py-0.5 rounded
+                       hover:bg-brand/8"
+            title={allExpanded ? 'Collapse all steps' : 'Expand all steps'}
           >
-            {allExpanded ? '▾ Collapse all' : '▸ Expand all'}
+            {allExpanded ? '▴ Collapse All' : '▾ Expand All'}
           </button>
         )}
       </div>
@@ -52,7 +72,12 @@ export function AgentTimeline({
 
       {/* Step cards */}
       {steps.map((s) => (
-        <StepCard key={s.step} step={s} forceExpanded={allExpanded} />
+        <StepCard
+          key={s.step}
+          step={s}
+          expanded={expandedSteps[s.step] ?? false}
+          onToggle={() => toggleStep(s.step)}
+        />
       ))}
 
       {/* Thinking dots */}
