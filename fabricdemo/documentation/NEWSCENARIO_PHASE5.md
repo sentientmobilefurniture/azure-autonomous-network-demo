@@ -307,6 +307,52 @@ export function ActionEmailModal({ isOpen, onClose, action }: ActionEmailModalPr
 
 ---
 
+## 5. Update `ChatPanel.tsx`
+
+> **AUDIT NOTE:** The original plan referenced `OrchestratorBubble.tsx` and `StepGroup.tsx` — neither exists. Steps are rendered flat in `ChatPanel.tsx`. The conditional must be a **ternary inside the existing wrapper `<div key={s.step}>`**, NOT an early return from `.map()`. An early return would lose the `key` prop and skip `OrchestratorThoughts` rendering for action steps.
+
+File: `frontend/src/components/ChatPanel.tsx`
+
+### Change:
+
+In the `steps.map()` loop (currently lines 61–79), replace the unconditional `<StepCard>` with a ternary:
+
+```tsx
+import { ActionCard } from './ActionCard';  // NEW import
+
+// Inside the steps.map() callback — the key/wrapper div stays the same:
+{steps.map((s) => (
+  <div key={s.step}>
+    {s.reasoning && (
+      <>
+        <OrchestratorThoughts
+          reasoning={s.reasoning}
+          expanded={expandedThoughts[`${msg.id}-t-${s.step}`] ?? false}
+          onToggle={() => toggleThought(msg.id, s.step)}
+        />
+        <div className="ml-4 h-1.5 border-l-2 border-brand/20" aria-hidden="true" />
+      </>
+    )}
+    {/* NEW: Branch on is_action — ternary, not early return */}
+    {s.is_action
+      ? <ActionCard step={s} />
+      : <StepCard
+          step={s}
+          expanded={expandedSteps[`${msg.id}-${s.step}`] ?? false}
+          onToggle={() => toggleStep(msg.id, s.step)}
+        />
+    }
+  </div>
+))}
+```
+
+**Why ternary, not early return:**
+- The wrapper `<div key={s.step}>` provides React's reconciliation key — removing it would cause re-mount issues.
+- `OrchestratorThoughts` renders the reasoning annotation above each step. Action steps may also have reasoning (the orchestrator explains why it's dispatching). Skipping this would lose important context.
+- When `s.is_action` is `undefined` (all existing steps, all pre-upgrade sessions), the ternary evaluates the falsy branch → existing `StepCard` renders unchanged. **Zero regression risk.**
+
+---
+
 ## 6. Update `useSession.ts` — Handle `action_executed` SSE Event
 
 File: `frontend/src/hooks/useSession.ts`

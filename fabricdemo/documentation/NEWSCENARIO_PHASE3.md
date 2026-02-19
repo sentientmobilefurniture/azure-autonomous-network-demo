@@ -5,6 +5,8 @@
 > **Outcome:** The Orchestrator agent can call `dispatch_field_engineer()`, which is auto-executed at runtime. The SSE stream emits a new `action_executed` event type with the dispatch details.
 >
 > **AUDIT STATUS:** Multiple corrections applied after SDK source verification. See § Audit Corrections below.
+>
+> **DEPLOYMENT NOTE:** Phase 3 and Phase 5 should be deployed together. If Phase 3 ships without Phase 5: (1) `action_executed` SSE events are silently dropped by the frontend (no crash), (2) the thinking spinner may not clear during action execution, (3) action steps in saved sessions will be invisible when replayed. No data loss or corruption — just invisible actions until the frontend catches up.
 
 ---
 
