@@ -29,8 +29,17 @@ logger = logging.getLogger("graph-query-api.fabric-discovery")
 # Convention names — must match what provisioning scripts create
 # ---------------------------------------------------------------------------
 
-ONTOLOGY_NAME_PREFIX = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
-EVENTHOUSE_NAME_PREFIX = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH")
+def _require_env(name: str) -> str:
+    """Return env var value or raise with a clear message."""
+    val = os.getenv(name)
+    if not val:
+        raise EnvironmentError(
+            f"{name} is not set. Set it in azure_config.env before running."
+        )
+    return val
+
+ONTOLOGY_NAME_PREFIX = _require_env("FABRIC_ONTOLOGY_NAME")
+EVENTHOUSE_NAME_PREFIX = _require_env("FABRIC_EVENTHOUSE_NAME")
 
 # ---------------------------------------------------------------------------
 # Fabric API constants — imported from adapters.fabric_config (single source of truth)

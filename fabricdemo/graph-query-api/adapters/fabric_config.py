@@ -26,11 +26,20 @@ FABRIC_SCOPE = os.getenv("FABRIC_SCOPE", "https://api.fabric.microsoft.com/.defa
 FABRIC_WORKSPACE_ID = os.getenv("FABRIC_WORKSPACE_ID", "")
 
 # ---------------------------------------------------------------------------
-# Provisioning defaults (used by provision scripts, not at runtime)
+# Resource names (must be set in azure_config.env — no defaults)
 # ---------------------------------------------------------------------------
 
-FABRIC_WORKSPACE_NAME = os.getenv("FABRIC_WORKSPACE_NAME", "telco-autonomous-network")
-FABRIC_LAKEHOUSE_NAME = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
-FABRIC_EVENTHOUSE_NAME = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH")
-FABRIC_ONTOLOGY_NAME = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
+def _require_env(name: str) -> str:
+    """Return env var value or raise with a clear message."""
+    val = os.getenv(name)
+    if not val:
+        raise EnvironmentError(
+            f"{name} is not set. Set it in azure_config.env before running."
+        )
+    return val
+
+FABRIC_WORKSPACE_NAME = _require_env("FABRIC_WORKSPACE_NAME")
+FABRIC_LAKEHOUSE_NAME = _require_env("FABRIC_LAKEHOUSE_NAME")
+FABRIC_EVENTHOUSE_NAME = _require_env("FABRIC_EVENTHOUSE_NAME")
+FABRIC_ONTOLOGY_NAME = _require_env("FABRIC_ONTOLOGY_NAME")
 FABRIC_CAPACITY_ID = os.getenv("FABRIC_CAPACITY_ID", "")

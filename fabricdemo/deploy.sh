@@ -98,6 +98,7 @@ PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
 CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
+CONFIG_TEMPLATE="$PROJECT_ROOT/azure_config.env.template"
 
 # ── Helper: prompt user ────────────────────────────────────────────
 
@@ -107,6 +108,24 @@ confirm() {
   echo -en "${YELLOW}?${NC}  ${msg} [y/N] "
   read -r answer
   [[ "$answer" =~ ^[Yy] ]]
+}
+
+# Write a key=value pair into azure_config.env.
+# If the key already exists (even if empty), update it in place.
+# If not, append it.
+set_config() {
+  local key="$1" val="$2"
+  # Use SOH (\x01) as sed delimiter to avoid conflicts with URLs/paths
+  local d=$'\x01'
+  # Escape sed special chars in the replacement value (& = matched text, \ = escape)
+  local escaped_val="${val//\\/\\\\}"
+  escaped_val="${escaped_val//&/\\&}"
+  if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    sed -i "s${d}^${key}=.*${d}${key}=${escaped_val}${d}" "$CONFIG_FILE"
+  else
+    echo "${key}=${val}" >> "$CONFIG_FILE"
+  fi
+  export "$key=$val"
 }
 
 choose() {
@@ -162,6 +181,41 @@ fi
 export DEFAULT_SCENARIO="$SCENARIO_NAME"
 info "Scenario: $SCENARIO_NAME (from $SCENARIO_YAML)"
 
+# ── Fabric Resource Names ───────────────────────────────────────────
+
+DEFAULT_FABRIC_WS="TelcoAutonomousNetwork"
+DEFAULT_FABRIC_LH="NetworkTopologyLH"
+DEFAULT_FABRIC_EH="NetworkTelemetryEH"
+DEFAULT_FABRIC_ONT="NetworkTopologyOntology"
+
+if $AUTO_YES; then
+  FABRIC_WORKSPACE_NAME="${FABRIC_WORKSPACE_NAME:-$DEFAULT_FABRIC_WS}"
+  FABRIC_LAKEHOUSE_NAME="${FABRIC_LAKEHOUSE_NAME:-$DEFAULT_FABRIC_LH}"
+  FABRIC_EVENTHOUSE_NAME="${FABRIC_EVENTHOUSE_NAME:-$DEFAULT_FABRIC_EH}"
+  FABRIC_ONTOLOGY_NAME="${FABRIC_ONTOLOGY_NAME:-$DEFAULT_FABRIC_ONT}"
+else
+  echo -en "${YELLOW}?${NC}  Fabric workspace name [${BOLD}${DEFAULT_FABRIC_WS}${NC}]: "
+  read -r _input
+  FABRIC_WORKSPACE_NAME="${_input:-$DEFAULT_FABRIC_WS}"
+
+  echo -en "${YELLOW}?${NC}  Fabric lakehouse name [${BOLD}${DEFAULT_FABRIC_LH}${NC}]: "
+  read -r _input
+  FABRIC_LAKEHOUSE_NAME="${_input:-$DEFAULT_FABRIC_LH}"
+
+  echo -en "${YELLOW}?${NC}  Fabric eventhouse name [${BOLD}${DEFAULT_FABRIC_EH}${NC}]: "
+  read -r _input
+  FABRIC_EVENTHOUSE_NAME="${_input:-$DEFAULT_FABRIC_EH}"
+
+  echo -en "${YELLOW}?${NC}  Fabric ontology name [${BOLD}${DEFAULT_FABRIC_ONT}${NC}]: "
+  read -r _input
+  FABRIC_ONTOLOGY_NAME="${_input:-$DEFAULT_FABRIC_ONT}"
+fi
+# These will be written to azure_config.env in Step 2 after template copy.
+info "Fabric workspace: $FABRIC_WORKSPACE_NAME"
+info "Fabric lakehouse: $FABRIC_LAKEHOUSE_NAME"
+info "Fabric eventhouse: $FABRIC_EVENTHOUSE_NAME"
+info "Fabric ontology: $FABRIC_ONTOLOGY_NAME"
+
 # Extract index names from scenario.yaml for Bicep / env vars
 RUNBOOKS_INDEX_NAME=$(python3 -c "
 import yaml
@@ -194,12 +248,16 @@ discover_resources_from_rg() {
 
   # Subscription
   AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv 2>/dev/null || true)
+  [[ -n "$AZURE_SUBSCRIPTION_ID" ]] && set_config AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
+  set_config AZURE_RESOURCE_GROUP "$rg"
 
   # AI Foundry (CognitiveServices account of kind AIServices)
   AI_FOUNDRY_NAME=$(az cognitiveservices account list -g "$rg" \
     --query "[?kind=='AIServices'].name | [0]" -o tsv 2>/dev/null || true)
   if [[ -n "$AI_FOUNDRY_NAME" ]]; then
     AI_FOUNDRY_ENDPOINT="https://${AI_FOUNDRY_NAME}.cognitiveservices.azure.com/"
+    set_config AI_FOUNDRY_NAME "$AI_FOUNDRY_NAME"
+    set_config AI_FOUNDRY_ENDPOINT "$AI_FOUNDRY_ENDPOINT"
     ok "AI Foundry:   $AI_FOUNDRY_NAME"
   fi
 
@@ -211,22 +269,24 @@ discover_resources_from_rg() {
     local suffix="${AI_FOUNDRY_NAME#aif-}"
     AI_FOUNDRY_PROJECT_NAME="proj-${suffix}"
   fi
+  [[ -n "$AI_FOUNDRY_PROJECT_NAME" ]] && set_config AI_FOUNDRY_PROJECT_NAME "$AI_FOUNDRY_PROJECT_NAME"
 
   # Build the correct project endpoint (services.ai.azure.com, not cognitiveservices)
   if [[ -n "$AI_FOUNDRY_NAME" && -n "$AI_FOUNDRY_PROJECT_NAME" ]]; then
     PROJECT_ENDPOINT="https://${AI_FOUNDRY_NAME}.services.ai.azure.com/api/projects/${AI_FOUNDRY_PROJECT_NAME}"
+    set_config PROJECT_ENDPOINT "$PROJECT_ENDPOINT"
     ok "Project EP:   $PROJECT_ENDPOINT"
   fi
 
   # AI Search
   AI_SEARCH_NAME=$(az search service list -g "$rg" \
     --query "[0].name" -o tsv 2>/dev/null || true)
-  [[ -n "$AI_SEARCH_NAME" ]] && ok "AI Search:    $AI_SEARCH_NAME"
+  [[ -n "$AI_SEARCH_NAME" ]] && { set_config AI_SEARCH_NAME "$AI_SEARCH_NAME"; ok "AI Search:    $AI_SEARCH_NAME"; }
 
   # Storage Account
   STORAGE_ACCOUNT_NAME=$(az storage account list -g "$rg" \
     --query "[0].name" -o tsv 2>/dev/null || true)
-  [[ -n "$STORAGE_ACCOUNT_NAME" ]] && ok "Storage:      $STORAGE_ACCOUNT_NAME"
+  [[ -n "$STORAGE_ACCOUNT_NAME" ]] && { set_config STORAGE_ACCOUNT_NAME "$STORAGE_ACCOUNT_NAME"; ok "Storage:      $STORAGE_ACCOUNT_NAME"; }
 
   # Cosmos DB NoSQL
   local cosmos_name
@@ -235,7 +295,7 @@ discover_resources_from_rg() {
   if [[ -n "$cosmos_name" ]]; then
     COSMOS_NOSQL_ENDPOINT=$(az cosmosdb show -n "$cosmos_name" -g "$rg" \
       --query "documentEndpoint" -o tsv 2>/dev/null || true)
-    [[ -n "$COSMOS_NOSQL_ENDPOINT" ]] && ok "Cosmos DB:    $cosmos_name"
+    [[ -n "$COSMOS_NOSQL_ENDPOINT" ]] && { set_config COSMOS_NOSQL_ENDPOINT "$COSMOS_NOSQL_ENDPOINT"; ok "Cosmos DB:    $cosmos_name"; }
   fi
 
   # Container App (unified app)
@@ -251,13 +311,15 @@ discover_resources_from_rg() {
     GRAPH_QUERY_API_URI="$APP_URI"
     APP_PRINCIPAL_ID=$(az containerapp show -n "$ca_name" -g "$rg" \
       --query "identity.principalId" -o tsv 2>/dev/null || true)
-    [[ -n "$APP_URI" ]] && ok "App URI:      $APP_URI"
+    [[ -n "$APP_URI" ]] && { set_config APP_URI "$APP_URI"; set_config GRAPH_QUERY_API_URI "$GRAPH_QUERY_API_URI"; ok "App URI:      $APP_URI"; }
+    [[ -n "$APP_PRINCIPAL_ID" ]] && set_config APP_PRINCIPAL_ID "$APP_PRINCIPAL_ID"
   fi
 
   # Fabric admin from azd env (preserved across runs)
   if [[ -z "${AZURE_FABRIC_ADMIN:-}" ]]; then
     AZURE_FABRIC_ADMIN=$(azd env get-values 2>/dev/null | grep "^AZURE_FABRIC_ADMIN=" | cut -d'"' -f2 || true)
   fi
+  [[ -n "${AZURE_FABRIC_ADMIN:-}" ]] && set_config AZURE_FABRIC_ADMIN "$AZURE_FABRIC_ADMIN"
 
   ok "Auto-discovery complete"
 }
@@ -500,25 +562,45 @@ fi
 
 step "Step 2: Configuring for Fabric GQL backend"
 
-# Nuke stale config — every deploy starts clean.
-# User-configurable values (model names, SKU, admin email) are extracted
-# before deletion and re-injected.  AUTO values (resource IDs,
-# endpoints, workspace IDs) are always re-discovered from Azure.
+# Start fresh from the template every deploy.
+# The template has comments + structure; set_config fills in values as they surface.
+# If a config already exists, extract all non-empty values first so they survive
+# the template copy (e.g. previously discovered endpoints, Fabric IDs).
+declare -A _PREV_VALS
 if [[ -f "$CONFIG_FILE" ]]; then
-  info "Extracting user-set values from existing azure_config.env..."
+  info "Preserving existing config values..."
   while IFS='=' read -r key val; do
-    case "$key" in
-      MODEL_DEPLOYMENT_NAME|EMBEDDING_MODEL|EMBEDDING_DIMENSIONS|GPT_CAPACITY_1K_TPM|\
-      CORS_ORIGINS|FABRIC_CAPACITY_SKU|AZURE_FABRIC_ADMIN)
-        val="${val%\"}"; val="${val#\"}"
-        val="${val%\'}"; val="${val#\'}"
-        export "$key=$val"
-        ;;
-    esac
+    # Skip comments and empty lines
+    [[ -z "$key" || "$key" =~ ^# ]] && continue
+    # Strip quotes
+    val="${val%\"}"; val="${val#\"}"
+    val="${val%\'}"; val="${val#\'}"
+    # Only preserve non-empty values
+    if [[ -n "$val" ]]; then
+      _PREV_VALS["$key"]="$val"
+    fi
   done < <(grep -E '^[A-Z_]+=' "$CONFIG_FILE" 2>/dev/null || true)
-  info "Deleting stale azure_config.env (will be regenerated from Azure state)"
-  rm -f "$CONFIG_FILE"
+  info "  Preserved ${#_PREV_VALS[@]} values from existing config"
 fi
+
+info "Creating azure_config.env from template..."
+cp "$CONFIG_TEMPLATE" "$CONFIG_FILE"
+ok "Copied template → azure_config.env"
+
+# Restore previously discovered values into the fresh template
+for key in "${!_PREV_VALS[@]}"; do
+  set_config "$key" "${_PREV_VALS[$key]}"
+done
+unset _PREV_VALS
+
+# Write all values known so far into the config immediately
+set_config DEFAULT_SCENARIO "$SCENARIO_NAME"
+set_config FABRIC_WORKSPACE_NAME "$FABRIC_WORKSPACE_NAME"
+set_config FABRIC_LAKEHOUSE_NAME "$FABRIC_LAKEHOUSE_NAME"
+set_config FABRIC_EVENTHOUSE_NAME "$FABRIC_EVENTHOUSE_NAME"
+set_config FABRIC_ONTOLOGY_NAME "$FABRIC_ONTOLOGY_NAME"
+set_config RUNBOOKS_INDEX_NAME "$RUNBOOKS_INDEX_NAME"
+set_config TICKETS_INDEX_NAME "$TICKETS_INDEX_NAME"
 
 # Determine location
 if [[ -z "$AZURE_LOC" ]]; then
@@ -537,8 +619,9 @@ info "Location: $AZURE_LOC"
 
 # Force Fabric GQL backend
 GRAPH_BACKEND=fabric-gql
+set_config AZURE_LOCATION "$AZURE_LOC"
+set_config GRAPH_BACKEND "$GRAPH_BACKEND"
 ok "Location: $AZURE_LOC"
-ok "Config will be regenerated from Azure state (no stale values)"
 
 # ── Step 2b: Generate static topology JSON ──────────────────────────
 # Builds topology.json from CSVs + graph_schema.yaml so the frontend
@@ -570,28 +653,8 @@ fi
 if $SKIP_INFRA; then
   step "Step 3: Infrastructure provisioning (SKIPPED)"
   info "Using existing Azure resources."
-
-  if $SKIP_APP; then
-    info "App container deploy also skipped (--skip-app)."
-  else
-    # Still deploy the app container (rebuild + push image)
-    info "Deploying app container..."
-
-    # Ensure uv.lock files exist for Docker builds (--frozen requires them)
-    for svc_dir in api graph-query-api; do
-      if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
-        info "Generating missing uv.lock for $svc_dir..."
-        (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
-        ok "$svc_dir/uv.lock created"
-      fi
-    done
-
-    if ! azd deploy app --no-prompt; then
-      fail "azd deploy app failed."
-      exit 1
-    fi
-    ok "App container deployed!"
-  fi
+  # App deploy is deferred to AFTER Step 3b discovery (see below)
+  # so that azure_config.env has all discovered values baked in.
 else
   step "Step 3: Deploying Azure infrastructure (azd up)"
 
@@ -695,79 +758,37 @@ else
   ok "All critical config values already present"
 fi
 
-# Write the fully resolved azure_config.env
-info "Writing azure_config.env..."
-cat > "$CONFIG_FILE" <<CONFIGEOF
-# ============================================================================
-# Autonomous Network NOC Demo — Configuration (Fabric GQL Flow)
-# ============================================================================
-# Generated by deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)
-# GRAPH_BACKEND=fabric-gql — graph queries use GQL via Microsoft Fabric
-# ============================================================================
-
-# --- Scenario ---
-DEFAULT_SCENARIO=${DEFAULT_SCENARIO:-telecom-playground}
-
-# --- Core Azure settings (AUTO: from deployment/discovery) ---
-AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
-AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-}
-AZURE_LOCATION=${AZURE_LOC}
-
-# --- AI Foundry (AUTO: from deployment/discovery) ---
-AI_FOUNDRY_NAME=${AI_FOUNDRY_NAME:-}
-AI_FOUNDRY_ENDPOINT=${AI_FOUNDRY_ENDPOINT:-}
-AI_FOUNDRY_PROJECT_NAME=${AI_FOUNDRY_PROJECT_NAME:-}
-PROJECT_ENDPOINT=${PROJECT_ENDPOINT:-}
-
-# --- Model deployments (USER) ---
-MODEL_DEPLOYMENT_NAME=${MODEL_DEPLOYMENT_NAME:-gpt-4.1}
-EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
-EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-1536}
-GPT_CAPACITY_1K_TPM=${GPT_CAPACITY_1K_TPM:-300}
-
-# --- Azure AI Search (AUTO: from deployment/discovery) ---
-AI_SEARCH_NAME=${AI_SEARCH_NAME:-}
-RUNBOOKS_INDEX_NAME=${RUNBOOKS_INDEX_NAME:-runbooks-index}
-TICKETS_INDEX_NAME=${TICKETS_INDEX_NAME:-tickets-index}
-
-# --- Azure Storage (AUTO: from deployment/discovery) ---
-STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-}
-
-# --- App / CORS (USER) ---
-CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173}
-
-# --- Graph Backend ---
-GRAPH_BACKEND=${GRAPH_BACKEND:-fabric-gql}
-
-# --- Topology Source (static = pre-built JSON, live = query graph) ---
-TOPOLOGY_SOURCE=static
-
-# --- Unified app (AUTO: from deployment/discovery) ---
-APP_URI=${APP_URI:-}
-APP_PRINCIPAL_ID=${APP_PRINCIPAL_ID:-}
-GRAPH_QUERY_API_URI=${GRAPH_QUERY_API_URI:-}
-
-# --- Cosmos DB NoSQL / Interactions (AUTO: from deployment/discovery) ---
-COSMOS_NOSQL_ENDPOINT=${COSMOS_NOSQL_ENDPOINT:-}
-
-# --- Fabric Admin & Capacity (USER/AUTO) ---
-AZURE_FABRIC_ADMIN=${AZURE_FABRIC_ADMIN:-}
-FABRIC_CAPACITY_SKU=${FABRIC_CAPACITY_SKU:-F8}
-
-# --- Fabric Resources ---
-# Graph Model ID, Eventhouse Query URI, and KQL DB name are
-# discovered at runtime by graph-query-api/fabric_discovery.py.
-FABRIC_CAPACITY_ID=${FABRIC_CAPACITY_ID:-}
-FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
-FABRIC_LAKEHOUSE_ID=${FABRIC_LAKEHOUSE_ID:-}
-FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
-FABRIC_KQL_DB_ID=${FABRIC_KQL_DB_ID:-}
-FABRIC_KQL_DB_NAME=${FABRIC_KQL_DB_NAME:-}
-EVENTHOUSE_QUERY_URI=${EVENTHOUSE_QUERY_URI:-}
-CONFIGEOF
-
-ok "azure_config.env written"
+# Config is already populated by set_config calls throughout the script.
+# Source it to make all values available as shell vars.
 set -a; source "$CONFIG_FILE"; set +a
+ok "azure_config.env is up to date"
+
+# ── Step 3c: Deploy app container (if --skip-infra but not --skip-app) ──
+# This MUST happen AFTER discovery so azure_config.env has all values.
+# The Dockerfile COPYs azure_config.env into the image.
+
+if $SKIP_INFRA && ! $SKIP_APP; then
+  if $PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS; then
+    info "Deferring app deployment until after provisioning steps (Step 6c)..."
+  else
+    step "Step 3c: Deploying app container (post-discovery)"
+
+    # Ensure uv.lock files exist for Docker builds (--frozen requires them)
+    for svc_dir in api graph-query-api; do
+      if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
+        info "Generating missing uv.lock for $svc_dir..."
+        (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
+        ok "$svc_dir/uv.lock created"
+      fi
+    done
+
+    if ! azd deploy app --no-prompt; then
+      fail "azd deploy app failed."
+      exit 1
+    fi
+    ok "App container deployed!"
+  fi
+fi
 
 # Final verification — warn but don't exit (user may be doing partial re-deploy)
 MISSING_VARS=()
@@ -933,6 +954,59 @@ if $SYNC_NEEDED; then
   fi
 else
   ok "azd env already in sync with azure_config.env"
+fi
+
+# ── Step 6c: Re-deploy app with finalized config ────────────────────
+# After provisioning steps (Steps 4-6) and azd env sync (Step 6b),
+# azure_config.env has NEW values (Fabric IDs, search index info, etc.)
+# that weren't in the Docker image baked during the initial azd up or
+# the premature Step 3c deploy.
+#
+# The Dockerfile COPYs azure_config.env into the image. Both API services
+# read /app/azure_config.env via python-dotenv at startup. Without this
+# re-deploy, the container runs with stale baked config.
+#
+# CRITICAL: graph-query-api uses load_dotenv(override=True), meaning the
+# baked file VALUES OVERRIDE Container App env vars (set by Bicep). If the
+# baked file has empty FABRIC_WORKSPACE_ID while Bicep has the correct one,
+# the empty value wins → 502 on Fabric queries.
+
+NEEDS_FINAL_DEPLOY=false
+if ! $SKIP_APP; then
+  if $SKIP_INFRA && ($PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS); then
+    # --skip-infra path:  Step 3c was deferred, need first deploy now
+    NEEDS_FINAL_DEPLOY=true
+  elif ! $SKIP_INFRA && ($PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS); then
+    # Normal path:  azd up already deployed, but provisioning changed config
+    NEEDS_FINAL_DEPLOY=true
+  fi
+fi
+
+if $NEEDS_FINAL_DEPLOY; then
+  step "Step 6c: Re-deploying app with finalized config"
+  info "Provisioning steps modified azure_config.env — rebuilding container image..."
+
+  # Ensure uv.lock files exist for Docker builds (--frozen requires them)
+  for svc_dir in api graph-query-api; do
+    if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
+      info "Generating missing uv.lock for $svc_dir..."
+      (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
+      ok "$svc_dir/uv.lock created"
+    fi
+  done
+
+  if azd deploy app --no-prompt; then
+    ok "App re-deployed with finalized config (Fabric IDs, search indexes, etc.)"
+  else
+    warn "azd deploy app failed — container may have stale config"
+    warn "Run 'azd deploy app' manually after fixing any issues"
+  fi
+else
+  if $PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS; then
+    : # SKIP_APP=true, user chose to skip deploy
+  else
+    ok "No provisioning steps ran — app image already up to date"
+  fi
 fi
 
 # ── Step 7: Verify unified app health ───────────────────────────────

@@ -61,12 +61,37 @@ for container in runbooks tickets; do
 done
 
 # --------------------------------------------------------------------------
-# 2. Populate azure_config.env for downstream scripts
+# 2. Populate azure_config.env with deployment outputs
 # --------------------------------------------------------------------------
 echo ""
-echo "Populating azure_config.env..."
+echo "Populating azure_config.env with deployment outputs..."
 
 CONFIG_FILE="$PROJECT_ROOT/azure_config.env"
+
+# set_config: update a key in azure_config.env (created from template by deploy.sh)
+set_config() {
+  local key="$1" val="$2"
+  # Use SOH (\x01) as sed delimiter to avoid conflicts with URLs/paths
+  local d=$'\x01'
+  if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    sed -i "s${d}^${key}=.*${d}${key}=${val}${d}" "$CONFIG_FILE"
+  else
+    echo "${key}=${val}" >> "$CONFIG_FILE"
+  fi
+}
+
+# The config file should already exist (deploy.sh copies from template).
+# If somehow it doesn't, create from template.
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  TEMPLATE="$PROJECT_ROOT/azure_config.env.template"
+  if [[ -f "$TEMPLATE" ]]; then
+    cp "$TEMPLATE" "$CONFIG_FILE"
+    echo "  ⚠ azure_config.env was missing — recreated from template"
+  else
+    echo "  ✗ Neither azure_config.env nor template found — cannot proceed"
+    exit 1
+  fi
+fi
 
 # Get subscription ID
 SUB_ID=$(az account show --query id -o tsv)
@@ -78,93 +103,39 @@ AZD_APP_URI="${APP_URI:-}"
 AZD_APP_PRINCIPAL_ID="${APP_PRINCIPAL_ID:-}"
 AZD_COSMOS_NOSQL_ENDPOINT="${COSMOS_NOSQL_ENDPOINT:-}"
 
-# Preserve user-set values from existing azure_config.env (if present)
-if [ -f "$CONFIG_FILE" ]; then
-  set -a
-  source "$CONFIG_FILE"
-  set +a
-fi
+# Source existing config to pick up user-set values
+set -a; source "$CONFIG_FILE"; set +a
 
-# User-configurable values — preserved from existing file, or defaults
-MODEL_DEPLOY="${MODEL_DEPLOYMENT_NAME:-gpt-4.1}"
-EMBED_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
-EMBED_DIMS="${EMBEDDING_DIMENSIONS:-1536}"
-PREV_CORS="${CORS_ORIGINS:-http://localhost:5173}"
-PREV_GPT_CAPACITY="${GPT_CAPACITY_1K_TPM:-10}"
-PREV_GRAPH_BACKEND="${GRAPH_BACKEND:-fabric-gql}"
-PREV_FABRIC_ADMIN="${AZURE_FABRIC_ADMIN:-}"
-PREV_FABRIC_SKU="${FABRIC_CAPACITY_SKU:-}"
+# Write deployment outputs into the config file
+set_config AZURE_SUBSCRIPTION_ID "$SUB_ID"
+set_config AZURE_RESOURCE_GROUP "$RG"
+[[ -n "${AZURE_LOCATION:-}" ]] && set_config AZURE_LOCATION "$AZURE_LOCATION"
 
-cat > "$CONFIG_FILE" <<EOF
-# ============================================================================
-# Autonomous Network NOC Demo — Configuration
-# ============================================================================
-# This is the SINGLE source of truth for all project configuration.
-# Edit values here, then run 'azd up' — preprovision.sh syncs them to Bicep.
-# Auto-populated fields are updated by postprovision.sh after each deployment.
-# Last updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-# ============================================================================
+# AI Foundry
+[[ -n "${AZURE_AI_FOUNDRY_NAME:-}" ]]        && set_config AI_FOUNDRY_NAME "$AZURE_AI_FOUNDRY_NAME"
+[[ -n "${AZURE_AI_FOUNDRY_ENDPOINT:-}" ]]    && set_config AI_FOUNDRY_ENDPOINT "$AZURE_AI_FOUNDRY_ENDPOINT"
+[[ -n "${AZURE_AI_FOUNDRY_PROJECT_NAME:-}" ]] && set_config AI_FOUNDRY_PROJECT_NAME "$AZURE_AI_FOUNDRY_PROJECT_NAME"
+[[ -n "${AZURE_AI_PROJECT_ENDPOINT:-}" ]]    && set_config PROJECT_ENDPOINT "$AZURE_AI_PROJECT_ENDPOINT"
 
-# --- Scenario ---
-DEFAULT_SCENARIO=${DEFAULT_SCENARIO:-telecom-playground}
+# AI Search
+[[ -n "${AZURE_SEARCH_NAME:-}" ]] && set_config AI_SEARCH_NAME "$AZURE_SEARCH_NAME"
 
-# --- Core Azure settings (AUTO: from deployment) ---
-AZURE_SUBSCRIPTION_ID=$SUB_ID
-AZURE_RESOURCE_GROUP=$RG
-AZURE_LOCATION=${AZURE_LOCATION:-eastus2}
+# Storage
+set_config STORAGE_ACCOUNT_NAME "$STORAGE_ACCOUNT"
 
-# --- AI Foundry (AUTO: from deployment) ---
-AI_FOUNDRY_NAME=${AZURE_AI_FOUNDRY_NAME:-}
-AI_FOUNDRY_ENDPOINT=${AZURE_AI_FOUNDRY_ENDPOINT:-}
-AI_FOUNDRY_PROJECT_NAME=${AZURE_AI_FOUNDRY_PROJECT_NAME:-}
-PROJECT_ENDPOINT=${AZURE_AI_PROJECT_ENDPOINT:-}
+# App / Container App
+APP_URI_VAL="${AZD_APP_URI:-${APP_URI:-}}"
+[[ -n "$APP_URI_VAL" ]] && set_config APP_URI "$APP_URI_VAL"
+PRINCIPAL_VAL="${AZD_APP_PRINCIPAL_ID:-${APP_PRINCIPAL_ID:-}}"
+[[ -n "$PRINCIPAL_VAL" ]] && set_config APP_PRINCIPAL_ID "$PRINCIPAL_VAL"
+GQ_VAL="${AZD_GRAPH_QUERY_API_URI:-${APP_URI_VAL:-}}"
+[[ -n "$GQ_VAL" ]] && set_config GRAPH_QUERY_API_URI "$GQ_VAL"
 
-# --- Model deployments (USER: must match infra/modules/ai-foundry.bicep) ---
-MODEL_DEPLOYMENT_NAME=$MODEL_DEPLOY
-EMBEDDING_MODEL=$EMBED_MODEL
-EMBEDDING_DIMENSIONS=$EMBED_DIMS
+# Cosmos DB
+COSMOS_VAL="${AZD_COSMOS_NOSQL_ENDPOINT:-${COSMOS_NOSQL_ENDPOINT:-}}"
+[[ -n "$COSMOS_VAL" ]] && set_config COSMOS_NOSQL_ENDPOINT "$COSMOS_VAL"
 
-# --- Azure AI Search (AUTO: name from deployment) ---
-AI_SEARCH_NAME=${AZURE_SEARCH_NAME:-}
-RUNBOOKS_INDEX_NAME=${RUNBOOKS_INDEX_NAME:-runbooks-index}
-TICKETS_INDEX_NAME=${TICKETS_INDEX_NAME:-tickets-index}
-
-# --- Azure Storage (AUTO: name from deployment) ---
-STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT
-
-# --- Deployment settings (USER: edit before 'azd up') ---
-GPT_CAPACITY_1K_TPM=${PREV_GPT_CAPACITY}
-
-# --- App / CORS (USER: change for production deployment) ---
-CORS_ORIGINS=${PREV_CORS}
-
-# --- Graph Backend ---
-# Controls which graph database backend is used by graph-query-api
-# Options: "fabric-gql" (GQL via Microsoft Fabric), "mock" (static responses)
-GRAPH_BACKEND=${PREV_GRAPH_BACKEND}
-
-# --- Unified app (AUTO: from deployment) ---
-APP_URI=${AZD_APP_URI:-${APP_URI:-}}
-APP_PRINCIPAL_ID=${AZD_APP_PRINCIPAL_ID:-${APP_PRINCIPAL_ID:-}}
-# GRAPH_QUERY_API_URI points to the same unified container
-GRAPH_QUERY_API_URI=${AZD_GRAPH_QUERY_API_URI:-${APP_URI:-}}
-
-# --- Cosmos DB NoSQL / Interactions (AUTO: from deployment) ---
-COSMOS_NOSQL_ENDPOINT=${AZD_COSMOS_NOSQL_ENDPOINT:-${COSMOS_NOSQL_ENDPOINT:-}}
-
-# --- Fabric Admin & Capacity (USER/AUTO: admin auto-detected, SKU user-configurable) ---
-AZURE_FABRIC_ADMIN=${PREV_FABRIC_ADMIN}
-FABRIC_CAPACITY_SKU=${PREV_FABRIC_SKU:-F8}
-
-# --- Fabric Resources ---
-# Graph Model ID, Eventhouse Query URI, and KQL DB name are
-# discovered at runtime by graph-query-api/fabric_discovery.py.
-FABRIC_CAPACITY_ID=${FABRIC_CAPACITY_ID:-}
-FABRIC_WORKSPACE_ID=${FABRIC_WORKSPACE_ID:-}
-FABRIC_EVENTHOUSE_ID=${FABRIC_EVENTHOUSE_ID:-}
-EOF
-
-echo "  \u2713 azure_config.env written"
+echo "  ✓ azure_config.env updated with deployment outputs"
 
 # --------------------------------------------------------------------------
 # 3. Resolve Fabric capacity GUID (if Bicep provisioned a capacity)
@@ -180,9 +151,7 @@ if [[ -n "$FAB_CAP_NAME" ]]; then
     -o tsv 2>/dev/null || true)
 
   if [[ -n "$CAP_GUID" && "$CAP_GUID" != "None" ]]; then
-    sed -i "s|^FABRIC_CAPACITY_ID=.*|FABRIC_CAPACITY_ID=$CAP_GUID|" "$CONFIG_FILE"
-    # Add if not present
-    grep -q "^FABRIC_CAPACITY_ID=" "$CONFIG_FILE" || echo "FABRIC_CAPACITY_ID=$CAP_GUID" >> "$CONFIG_FILE"
+    set_config FABRIC_CAPACITY_ID "$CAP_GUID"
     echo "  ✓ FABRIC_CAPACITY_ID=$CAP_GUID"
   else
     echo "  ⚠ Could not resolve Fabric capacity GUID — set FABRIC_CAPACITY_ID manually in azure_config.env"

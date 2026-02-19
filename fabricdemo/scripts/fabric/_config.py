@@ -34,15 +34,25 @@ FABRIC_SCOPE: str = os.getenv(
 )
 
 # ---------------------------------------------------------------------------
-# Common resource names (read from env with sensible defaults)
+# Common resource names (must be set in azure_config.env — no defaults)
 # ---------------------------------------------------------------------------
+
+def _require_env(name: str) -> str:
+    """Return env var value or raise with a clear message."""
+    val = os.getenv(name)
+    if not val:
+        raise EnvironmentError(
+            f"{name} is not set. Set it in azure_config.env before running."
+        )
+    return val
+
 WORKSPACE_ID: str = os.getenv("FABRIC_WORKSPACE_ID", "")
-WORKSPACE_NAME: str = os.getenv("FABRIC_WORKSPACE_NAME", "telco-autonomous-network")
+WORKSPACE_NAME: str = _require_env("FABRIC_WORKSPACE_NAME")
 CAPACITY_ID: str = os.getenv("FABRIC_CAPACITY_ID", "")
-LAKEHOUSE_NAME: str = os.getenv("FABRIC_LAKEHOUSE_NAME", "NetworkTopologyLH")
-EVENTHOUSE_NAME: str = os.getenv("FABRIC_EVENTHOUSE_NAME", "NetworkTelemetryEH")
+LAKEHOUSE_NAME: str = _require_env("FABRIC_LAKEHOUSE_NAME")
+EVENTHOUSE_NAME: str = _require_env("FABRIC_EVENTHOUSE_NAME")
 KQL_DB_NAME: str = os.getenv("FABRIC_KQL_DB_NAME", "")
-ONTOLOGY_NAME: str = os.getenv("FABRIC_ONTOLOGY_NAME", "NetworkTopologyOntology")
+ONTOLOGY_NAME: str = _require_env("FABRIC_ONTOLOGY_NAME")
 
 
 # ---------------------------------------------------------------------------
