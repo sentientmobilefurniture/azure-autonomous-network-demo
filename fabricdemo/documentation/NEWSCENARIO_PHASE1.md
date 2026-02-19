@@ -373,7 +373,7 @@ The `telco-noc` scenario is the simpler version. Apply the same changes:
 | **MODIFY** | `data/scenarios/telecom-playground/data/entities/DimAggSwitch.csv` | Add Latitude,Longitude columns |
 | **MODIFY** | `data/scenarios/telecom-playground/data/entities/DimAmplifierSite.csv` | Add Latitude,Longitude columns |
 | **MODIFY** | `data/scenarios/telecom-playground/graph_schema.yaml` | Add Sensor + DutyRoster vertices, monitors edges, Lat/Long properties |
-| **MODIFY** | `data/scenarios/telecom-playground/scenario.yaml` | Add SensorReadings container, duty_roster data source, graph_styles, telemetry_baselines |
+| **MODIFY** | `data/scenarios/telecom-playground/scenario.yaml` | Add SensorReadings container, graph_styles, telemetry_baselines |
 | **MODIFY** | `data/scenarios/telecom-playground/data/prompts/graph_explorer/core_schema.md` | Document Sensor and DutyRoster entities |
 
 ---
@@ -381,7 +381,7 @@ The `telco-noc` scenario is the simpler version. Apply the same changes:
 ## 9. Validation Checklist
 
 - [ ] `DimSensor.csv` parses correctly with `provision_cosmos.py` / graph ingest
-- [ ] `DimDutyRoster.csv` loads into Cosmos DB container
+- [ ] `DimDutyRoster.csv` loads into graph via Lakehouse pipeline (graph_schema.yaml vertex)
 - [ ] `SensorReadings.csv` ingests into Fabric Eventhouse / Cosmos DB
 - [ ] Lat/Long columns on `DimCoreRouter`, `DimAggSwitch`, `DimAmplifierSite` don't break existing graph queries
 - [ ] `graph_schema.yaml` validates — `generate_topology_json.py` succeeds
