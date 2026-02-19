@@ -1,5 +1,7 @@
 # AI Incident Investigator — Autonomous Network NOC
 
+### Wear and tear alert scenario!
+
 An AI-powered incident investigation platform that diagnoses operational issues
 using multi-agent orchestration on Azure. Five specialist agents collaborate to
 perform root-cause analysis, assess blast radius, retrieve operating procedures,
