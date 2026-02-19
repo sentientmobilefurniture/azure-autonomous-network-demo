@@ -15,7 +15,7 @@
 #   chmod +x deploy.sh && ./deploy.sh
 #
 # Options:
-#   --skip-infra         Skip azd up (reuse existing Azure resources)
+#   --skip-infra         Skip infrastructure provisioning (reuse existing Azure resources)
 #   --skip-app           Skip app container deploy (use with --skip-infra)
 #   --skip-local         Skip starting local API + frontend
 #   --provision-fabric   Run Fabric provisioning (lakehouse, eventhouse, ontology)
@@ -656,7 +656,7 @@ if $SKIP_INFRA; then
   # App deploy is deferred to AFTER Step 3b discovery (see below)
   # so that azure_config.env has all discovered values baked in.
 else
-  step "Step 3: Deploying Azure infrastructure (azd up)"
+  step "Step 3: Provisioning Azure infrastructure"
 
   info "This will provision:"
   echo "   • Resource Group"
@@ -665,7 +665,7 @@ else
   echo "   • Storage Account"
   echo "   • Cosmos DB NoSQL (interactions store)"
   echo "   • Container Apps Environment (ACR + Log Analytics)"
-  echo "   • Unified Container App (nginx + API + graph-query-api)"
+  echo "   • Container App resource (placeholder image — app deployed later)"
   echo ""
 
   if ! $AUTO_YES; then
@@ -698,21 +698,17 @@ else
     ok "Using DEV_IP_ADDRESS=$DEV_IP_ADDRESS for Cosmos DB firewall"
   fi
 
-  # Ensure uv.lock files exist for Docker builds (--frozen requires them)
-  for svc_dir in api graph-query-api; do
-    if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
-      info "Generating missing uv.lock for $svc_dir..."
-      (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
-      ok "$svc_dir/uv.lock created"
-    fi
-  done
-
-  info "Running azd up (this may take 10-15 minutes)..."
+  info "Running azd provision (this may take 10-15 minutes)..."
   echo ""
 
-  # azd up runs: preprovision → Bicep → deploy unified app → postprovision
-  if ! azd up; then
-    fail "azd up failed. Check the output above for errors."
+  # azd provision lifecycle:
+  #   1. preprovision hook  (syncs azure_config.env → azd env, resolves AZURE_PRINCIPAL_ID)
+  #   2. Bicep deployment   (creates RG, AI Foundry, Search, Storage, Cosmos, Container App)
+  #      Container App is created with a placeholder image — real app deployed in Step 7.
+  #      APP_PRINCIPAL_ID is available immediately (system-assigned managed identity).
+  #   3. postprovision hook (uploads blobs, populates azure_config.env with Bicep outputs)
+  if ! azd provision; then
+    fail "azd provision failed. Check the output above for errors."
     fail "Common issues:"
     echo "   • Quota exceeded — try a different location"
     echo "   • Soft-deleted resources — run: azd down --purge, then retry"
@@ -720,7 +716,7 @@ else
     exit 1
   fi
 
-  ok "Infrastructure deployed!"
+  ok "Infrastructure provisioned!"
 
   # Reload config (postprovision.sh should have populated it)
   if [[ -f "$CONFIG_FILE" ]]; then
@@ -762,33 +758,6 @@ fi
 # Source it to make all values available as shell vars.
 set -a; source "$CONFIG_FILE"; set +a
 ok "azure_config.env is up to date"
-
-# ── Step 3c: Deploy app container (if --skip-infra but not --skip-app) ──
-# This MUST happen AFTER discovery so azure_config.env has all values.
-# The Dockerfile COPYs azure_config.env into the image.
-
-if $SKIP_INFRA && ! $SKIP_APP; then
-  if $PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS; then
-    info "Deferring app deployment until after provisioning steps (Step 6c)..."
-  else
-    step "Step 3c: Deploying app container (post-discovery)"
-
-    # Ensure uv.lock files exist for Docker builds (--frozen requires them)
-    for svc_dir in api graph-query-api; do
-      if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
-        info "Generating missing uv.lock for $svc_dir..."
-        (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
-        ok "$svc_dir/uv.lock created"
-      fi
-    done
-
-    if ! azd deploy app --no-prompt; then
-      fail "azd deploy app failed."
-      exit 1
-    fi
-    ok "App container deployed!"
-  fi
-fi
 
 # Final verification — warn but don't exit (user may be doing partial re-deploy)
 MISSING_VARS=()
@@ -836,7 +805,7 @@ if $PROVISION_FABRIC; then
 
   if [[ -z "$CA_PRINCIPAL" ]]; then
     warn "APP_PRINCIPAL_ID not set — skipping Fabric RBAC."
-    info "Run 'azd up' first to provision the Container App."
+    info "Run 'azd provision' first to create the Container App."
   else
     info "Granting Container App ($CA_PRINCIPAL) Contributor access to Fabric workspace..."
     FABRIC_TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv 2>/dev/null || true)
@@ -875,11 +844,6 @@ if $PROVISION_FABRIC; then
   (source "$CONFIG_FILE" && uv run python scripts/fabric/populate_fabric_config.py) || warn "Config re-population failed"
   set -a; source "$CONFIG_FILE"; set +a
 
-  # NOTE: Graph Model ID, Eventhouse Query URI, and KQL DB name are
-  # discovered at runtime by graph-query-api/fabric_discovery.py.
-  # However, FABRIC_WORKSPACE_ID MUST be synced to the Container App
-  # (see Step 6b) — discovery needs it as the bootstrap value.
-
   ok "Fabric provisioning complete"
 else
   step "Step 4: Fabric Provisioning (SKIPPED — use --provision-fabric)"
@@ -910,81 +874,40 @@ else
   step "Step 6: Agent Provisioning (SKIPPED — use --provision-agents)"
 fi
 
-# ── Step 6b: Sync azure_config.env → azd env → Container App ────────
-# After Fabric provisioning (Step 4) populates azure_config.env with
-# discovered IDs (workspace, eventhouse, graph model, etc.), those values
-# must be pushed into azd env so that `azd provision` can inject them
-# into the Container App's environment variables via Bicep.
-#
-# Without this step, the Container App keeps stale values from the
-# initial `azd up` run when Fabric resources didn't exist yet.
-
-step "Step 6b: Syncing azure_config.env → Container App env vars"
-
-# Reload the latest azure_config.env (may have been updated by Step 4)
-if [[ -f "$CONFIG_FILE" ]]; then
-  set -a; source "$CONFIG_FILE"; set +a
-fi
-
-# List of vars that azure_config.env may update after initial azd up.
-# These MUST be pushed into azd env so Bicep can inject them into the
-# Container App.  Add new vars here as needed.
-SYNC_VARS=(
-  FABRIC_WORKSPACE_ID
-)
-
-SYNC_NEEDED=false
-for var in "${SYNC_VARS[@]}"; do
-  LOCAL_VAL="${!var:-}"
-  AZD_VAL=$(azd env get-values 2>/dev/null | grep "^${var}=" | cut -d'"' -f2 || true)
-  if [[ -n "$LOCAL_VAL" && "$LOCAL_VAL" != "$AZD_VAL" ]]; then
-    info "  Syncing $var → azd env  ($AZD_VAL → $LOCAL_VAL)"
-    azd env set "$var" "$LOCAL_VAL"
-    SYNC_NEEDED=true
-  fi
-done
-
-if $SYNC_NEEDED; then
-  info "Env vars changed — running azd provision to update Container App..."
-  if azd provision --no-prompt; then
-    ok "Container App env vars updated"
-  else
-    warn "azd provision failed — Container App may have stale env vars"
-    warn "You can manually fix with: azd env set FABRIC_WORKSPACE_ID <correct-id> && azd provision --no-prompt"
-  fi
-else
-  ok "azd env already in sync with azure_config.env"
-fi
-
-# ── Step 6c: Re-deploy app with finalized config ────────────────────
-# After provisioning steps (Steps 4-6) and azd env sync (Step 6b),
-# azure_config.env has NEW values (Fabric IDs, search index info, etc.)
-# that weren't in the Docker image baked during the initial azd up or
-# the premature Step 3c deploy.
+# ── Step 7: Deploy app container ────────────────────────────────────
+# Deploy happens ONCE at the end, after all provisioning steps have
+# populated azure_config.env with final values (Fabric IDs, search
+# indexes, agent config, etc.).
 #
 # The Dockerfile COPYs azure_config.env into the image. Both API services
-# read /app/azure_config.env via python-dotenv at startup. Without this
-# re-deploy, the container runs with stale baked config.
+# read /app/azure_config.env via python-dotenv at startup. By deploying
+# last, the baked file always matches reality — no stale values.
 #
-# CRITICAL: graph-query-api uses load_dotenv(override=True), meaning the
-# baked file VALUES OVERRIDE Container App env vars (set by Bicep). If the
-# baked file has empty FABRIC_WORKSPACE_ID while Bicep has the correct one,
-# the empty value wins → 502 on Fabric queries.
+# The Container App resource already exists from Step 3 (Bicep creates it
+# with a placeholder image), so APP_PRINCIPAL_ID was available for
+# Fabric RBAC in Step 4b without needing an earlier deploy.
 
-NEEDS_FINAL_DEPLOY=false
 if ! $SKIP_APP; then
-  if $SKIP_INFRA && ($PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS); then
-    # --skip-infra path:  Step 3c was deferred, need first deploy now
-    NEEDS_FINAL_DEPLOY=true
-  elif ! $SKIP_INFRA && ($PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS); then
-    # Normal path:  azd up already deployed, but provisioning changed config
-    NEEDS_FINAL_DEPLOY=true
-  fi
-fi
+  step "Step 7: Deploying app container"
 
-if $NEEDS_FINAL_DEPLOY; then
-  step "Step 6c: Re-deploying app with finalized config"
-  info "Provisioning steps modified azure_config.env — rebuilding container image..."
+  # Sync any vars that provisioning steps may have updated into azd env
+  # so Bicep-injected Container App env vars are also current.
+  if [[ -f "$CONFIG_FILE" ]]; then
+    set -a; source "$CONFIG_FILE"; set +a
+  fi
+
+  SYNC_VARS=(
+    FABRIC_WORKSPACE_ID
+  )
+
+  for var in "${SYNC_VARS[@]}"; do
+    LOCAL_VAL="${!var:-}"
+    AZD_VAL=$(azd env get-values 2>/dev/null | grep "^${var}=" | cut -d'"' -f2 || true)
+    if [[ -n "$LOCAL_VAL" && "$LOCAL_VAL" != "$AZD_VAL" ]]; then
+      info "  Syncing $var → azd env"
+      azd env set "$var" "$LOCAL_VAL"
+    fi
+  done
 
   # Ensure uv.lock files exist for Docker builds (--frozen requires them)
   for svc_dir in api graph-query-api; do
@@ -995,23 +918,21 @@ if $NEEDS_FINAL_DEPLOY; then
     fi
   done
 
+  info "Building and deploying app container..."
   if azd deploy app --no-prompt; then
-    ok "App re-deployed with finalized config (Fabric IDs, search indexes, etc.)"
+    ok "App deployed with finalized config"
   else
-    warn "azd deploy app failed — container may have stale config"
+    fail "azd deploy app failed."
     warn "Run 'azd deploy app' manually after fixing any issues"
   fi
 else
-  if $PROVISION_FABRIC || $PROVISION_DATA || $PROVISION_AGENTS; then
-    : # SKIP_APP=true, user chose to skip deploy
-  else
-    ok "No provisioning steps ran — app image already up to date"
-  fi
+  step "Step 7: App Deployment (SKIPPED — --skip-app)"
+  warn "Container App is running with placeholder image. Run 'azd deploy app' to deploy."
 fi
 
-# ── Step 7: Verify unified app health ───────────────────────────────
+# ── Step 8: Verify unified app health ───────────────────────────────
 
-step "Step 7: Verifying unified app deployment"
+step "Step 8: Verifying unified app deployment"
 
 GQ_URI="${APP_URI:-}"
 if [[ -z "$GQ_URI" ]]; then
@@ -1046,10 +967,10 @@ else
   warn "Continuing anyway — agent provisioning may fail if the API is down."
 fi
 
-# ── Step 8: Start local services (optional — all services deployed to Azure) ──
+# ── Step 9: Start local services (optional — all services deployed to Azure) ──
 
 if $SKIP_LOCAL; then
-  step "Step 8: Local services (SKIPPED)"
+  step "Step 9: Local services (SKIPPED)"
   echo ""
   ok "Deployment complete! All services are running in Azure."
   echo ""
@@ -1067,7 +988,7 @@ if $SKIP_LOCAL; then
   echo ""
   echo "   Open http://localhost:5173"
 else
-  step "Step 8: Starting local API + Frontend"
+  step "Step 9: Starting local API + Frontend"
 
   # Kill any existing processes on our ports
   lsof -ti:8000,8100,5173 2>/dev/null | xargs -r kill -9 2>/dev/null || true

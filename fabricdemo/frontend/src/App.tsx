@@ -8,6 +8,7 @@ import { MetricsBar } from './components/MetricsBar';
 import { InvestigationPanel } from './components/InvestigationPanel';
 import { DiagnosisPanel } from './components/DiagnosisPanel';
 import { InteractionSidebar } from './components/InteractionSidebar';
+import { Toast } from './components/Toast';
 import { useInvestigation } from './hooks/useInvestigation';
 import { useInteractions } from './hooks/useInteractions';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
@@ -32,7 +33,10 @@ export default function App() {
     runStarted,
     runMeta,
     submitAlert,
+    cancelInvestigation,
   } = useInvestigation();
+
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const { interactions, loading: interactionsLoading, fetchInteractions,
     saveInteraction, deleteInteraction } = useInteractions();
@@ -79,6 +83,8 @@ export default function App() {
         steps: savedSteps,
         diagnosis: finalMessage,
         run_meta: savedRunMeta,
+      }).then(() => {
+        setToastMessage('Investigation saved ✓');
       });
     }
     prevRunningRef.current = running;
@@ -170,6 +176,7 @@ export default function App() {
                               alert={alert}
                               onAlertChange={setAlert}
                               onSubmit={submitAlert}
+                              onCancel={cancelInvestigation}
                               steps={displaySteps}
                               thinking={thinking}
                               errorMessage={errorMessage}
@@ -228,6 +235,11 @@ export default function App() {
           <TerminalPanel />
         </Panel>
       </PanelGroup>
+
+      {/* Toast notification */}
+      {toastMessage && (
+        <Toast message={toastMessage} onDismiss={() => setToastMessage(null)} />
+      )}
     </motion.div>
   );
 }

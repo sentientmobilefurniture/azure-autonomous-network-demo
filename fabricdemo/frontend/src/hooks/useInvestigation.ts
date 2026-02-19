@@ -129,6 +129,10 @@ export function useInvestigation() {
     setRunMeta(null);
   }, []);
 
+  const cancelInvestigation = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
   return {
     alert,
     setAlert,
@@ -141,5 +145,6 @@ export function useInvestigation() {
     runMeta,
     submitAlert,
     resetInvestigation,
+    cancelInvestigation,
   };
 }

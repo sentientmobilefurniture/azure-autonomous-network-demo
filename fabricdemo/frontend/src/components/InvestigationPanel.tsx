@@ -9,6 +9,7 @@ interface InvestigationPanelProps {
   alert: string;
   onAlertChange: (value: string) => void;
   onSubmit: () => void;
+  onCancel?: () => void;
   steps: StepEvent[];
   thinking: ThinkingState | null;
   errorMessage: string;
@@ -21,6 +22,7 @@ export function InvestigationPanel({
   alert,
   onAlertChange,
   onSubmit,
+  onCancel,
   steps,
   thinking,
   errorMessage,
@@ -37,6 +39,7 @@ export function InvestigationPanel({
         alert={alert}
         onAlertChange={onAlertChange}
         onSubmit={onSubmit}
+        onCancel={onCancel}
         running={running}
         exampleQuestions={exampleQuestions}
       />

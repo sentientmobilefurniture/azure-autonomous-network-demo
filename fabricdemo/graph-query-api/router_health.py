@@ -23,6 +23,13 @@ logger = logging.getLogger("graph-query-api.health")
 
 router = APIRouter(prefix="/query")
 
+
+@router.get("/health")
+async def query_health():
+    """Simple liveness probe for the graph-query-api behind /query/ nginx prefix."""
+    return {"status": "ok", "service": "graph-query-api"}
+
+
 # AI Search env vars
 AI_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT", "")
 AI_SEARCH_KEY = os.getenv("AZURE_SEARCH_KEY", "")
@@ -155,5 +162,6 @@ async def rediscover_fabric():
         "kql_db_name": cfg.kql_db_name or None,
         "fabric_ready": is_fabric_ready(),
         "kql_ready": is_kql_ready(),
+        "workspace_items": cfg.workspace_items or [],
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }

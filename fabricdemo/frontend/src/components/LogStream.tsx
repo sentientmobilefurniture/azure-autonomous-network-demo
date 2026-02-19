@@ -32,6 +32,13 @@ export function LogStream({ url = '/api/logs', title = 'Logs' }: LogStreamProps)
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [minLevel, setMinLevel] = useState<string>('DEBUG');
+
+  const LEVEL_ORDER: Record<string, number> = {
+    DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3, CRITICAL: 4,
+  };
+
+  const filteredLines = lines.filter(l => (LEVEL_ORDER[l.level] ?? 0) >= (LEVEL_ORDER[minLevel] ?? 0));
 
   // Auto-scroll when new lines arrive
   useEffect(() => {
@@ -103,17 +110,42 @@ export function LogStream({ url = '/api/logs', title = 'Logs' }: LogStreamProps)
             title={connected ? 'Connected' : 'Disconnected'}
           />
         </div>
-        {!autoScroll && (
-          <button
-            onClick={() => {
-              setAutoScroll(true);
-              bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }}
-            className="text-[10px] text-brand hover:text-brand/80 font-mono"
+        <div className="flex items-center gap-2">
+          {/* Level filter */}
+          <select
+            value={minLevel}
+            onChange={(e) => setMinLevel(e.target.value)}
+            className="text-[10px] bg-neutral-bg3 border border-border rounded px-1 py-0.5
+                       text-text-secondary focus:outline-none cursor-pointer"
+            title="Minimum log level"
           >
-            ▼ scroll to bottom
+            <option value="DEBUG">DEBUG+</option>
+            <option value="INFO">INFO+</option>
+            <option value="WARNING">WARN+</option>
+            <option value="ERROR">ERROR+</option>
+          </select>
+
+          {/* Clear button */}
+          <button
+            onClick={() => setLines([])}
+            className="text-[10px] text-text-muted hover:text-text-primary transition-colors"
+            title="Clear log output"
+          >
+            🗑
           </button>
-        )}
+
+          {!autoScroll && (
+            <button
+              onClick={() => {
+                setAutoScroll(true);
+                bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="text-[10px] text-brand hover:text-brand/80 font-mono"
+            >
+              ▼ bottom
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Log body */}
@@ -125,7 +157,7 @@ export function LogStream({ url = '/api/logs', title = 'Logs' }: LogStreamProps)
         {lines.length === 0 && (
           <span className="text-text-tertiary italic">Waiting for log output...</span>
         )}
-        {lines.map((line) => (
+        {filteredLines.map((line) => (
           <div key={line.id} className="whitespace-pre-wrap break-all">
             <span className="text-text-tertiary">{line.ts}</span>{' '}
             <span className={LEVEL_COLORS[line.level] ?? 'text-text-secondary'}>

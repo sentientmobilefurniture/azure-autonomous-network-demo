@@ -65,6 +65,7 @@ class FabricConfig:
     eventhouse_query_uri: str = ""
     kql_db_name: str = ""
     source: str = "unknown"  # "env-vars", "discovery", or "partial"
+    workspace_items: list[dict] | None = None  # raw items from Fabric API
 
 
 _cached_config: FabricConfig | None = None
@@ -137,6 +138,12 @@ def _discover_fabric_config(workspace_id: str) -> FabricConfig:
         return FabricConfig(workspace_id=workspace_id, source="discovery-failed")
 
     config = FabricConfig(workspace_id=workspace_id, source="discovery")
+
+    # Store raw workspace items for the API to surface
+    config.workspace_items = [
+        {"id": i.get("id", ""), "type": i.get("type", ""), "displayName": i.get("displayName", "")}
+        for i in items
+    ]
 
     # --- Find Graph Model ---
     graph_models = [i for i in items if i.get("type") == "GraphModel"]

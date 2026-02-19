@@ -1,10 +1,37 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import type { StepEvent } from '../types';
 
-export function StepCard({ step }: { step: StepEvent }) {
-  const [expanded, setExpanded] = useState(false);
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // fallback
+    }
+  }, [text]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="opacity-0 group-hover/section:opacity-100 text-[10px] text-text-muted
+                 hover:text-text-primary transition-all px-1 py-0.5 rounded hover:bg-neutral-bg4"
+      title="Copy to clipboard"
+    >
+      {copied ? '✓' : '📋'}
+    </button>
+  );
+}
+
+export function StepCard({ step, forceExpanded }: { step: StepEvent; forceExpanded?: boolean }) {
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = forceExpanded ?? localExpanded;
 
   return (
     <motion.div
@@ -14,7 +41,7 @@ export function StepCard({ step }: { step: StepEvent }) {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
-      onClick={() => setExpanded((v) => !v)}
+      onClick={() => setLocalExpanded((v) => !v)}
     >
       {/* Header row */}
       <div className="flex items-center justify-between">
@@ -58,20 +85,26 @@ export function StepCard({ step }: { step: StepEvent }) {
             className="overflow-hidden"
           >
             {step.query && (
-              <div className="mt-2">
-                <span className="text-[10px] font-medium text-text-muted uppercase">
-                  ▾ Query
-                </span>
+              <div className="mt-2 group/section">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-medium text-text-muted uppercase">
+                    ▾ Query
+                  </span>
+                  <CopyButton text={step.query} />
+                </div>
                 <div className="text-xs bg-neutral-bg3 rounded p-2 mt-1 text-text-secondary whitespace-pre-wrap break-words">
                   {step.query}
                 </div>
               </div>
             )}
             {step.response && (
-              <div className="mt-2">
-                <span className="text-[10px] font-medium text-text-muted uppercase">
-                  ▾ Response
-                </span>
+              <div className="mt-2 group/section">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-medium text-text-muted uppercase">
+                    ▾ Response
+                  </span>
+                  <CopyButton text={step.response} />
+                </div>
                 <div className="text-xs prose prose-sm max-w-none mt-1 bg-neutral-bg3 rounded p-2">
                   <ReactMarkdown>{step.response}</ReactMarkdown>
                 </div>

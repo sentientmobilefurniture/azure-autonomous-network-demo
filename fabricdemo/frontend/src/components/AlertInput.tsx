@@ -7,17 +7,25 @@ interface AlertInputProps {
   alert: string;
   onAlertChange: (value: string) => void;
   onSubmit: () => void;
+  onCancel?: () => void;
   running: boolean;
   exampleQuestions?: string[];
 }
 
-export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQuestions }: AlertInputProps) {
+export function AlertInput({ alert, onAlertChange, onSubmit, onCancel, running, exampleQuestions }: AlertInputProps) {
   const [examplesOpen, setExamplesOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(dropdownRef, () => setExamplesOpen(false), examplesOpen);
 
   const hasExamples = exampleQuestions && exampleQuestions.length > 0;
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !running && alert.trim()) {
+      e.preventDefault();
+      onSubmit();
+    }
+  };
 
   return (
     <div className="glass-card p-4 mb-4">
@@ -29,7 +37,8 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
         rows={2}
         value={alert}
         onChange={(e) => onAlertChange(e.target.value)}
-        placeholder="Paste a NOC alert..."
+        onKeyDown={handleKeyDown}
+        placeholder="Paste a NOC alert… (Ctrl+Enter to submit)"
       />
 
       <div className="mt-3 flex gap-2">
@@ -95,6 +104,19 @@ export function AlertInput({ alert, onAlertChange, onSubmit, running, exampleQue
         >
           {running ? 'Investigating...' : 'Investigate'}
         </motion.button>
+
+        {/* Stop button — visible only while running */}
+        {running && onCancel && (
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 17 }}
+            className="px-4 py-2.5 text-sm font-medium rounded-lg bg-status-error hover:bg-red-600 text-white transition-colors"
+            onClick={onCancel}
+          >
+            ■ Stop
+          </motion.button>
+        )}
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Interaction } from '../types';
 import { formatTimeAgo } from '../utils/formatTime';
 
@@ -14,6 +15,19 @@ interface InteractionCardProps {
 
 function InteractionCard({ interaction, onClick, onDelete, isActive }: InteractionCardProps) {
   const timeAgo = formatTimeAgo(interaction.created_at);
+  const [confirming, setConfirming] = useState(false);
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirming) {
+      onDelete();
+      setConfirming(false);
+    } else {
+      setConfirming(true);
+      // Auto-revert after 3 seconds
+      setTimeout(() => setConfirming(false), 3000);
+    }
+  };
 
   return (
     <div
@@ -28,12 +42,15 @@ function InteractionCard({ interaction, onClick, onDelete, isActive }: Interacti
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px] text-text-muted">{timeAgo}</span>
         <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-status-error
-                     transition-opacity text-xs p-0.5"
-          title="Delete"
+          onClick={handleDeleteClick}
+          className={`text-xs p-0.5 transition-all ${
+            confirming
+              ? 'opacity-100 text-status-error font-medium'
+              : 'opacity-0 group-hover:opacity-100 text-text-muted hover:text-status-error'
+          }`}
+          title={confirming ? 'Click again to confirm' : 'Delete'}
         >
-          ✕
+          {confirming ? 'Delete?' : '✕'}
         </button>
       </div>
 
@@ -77,6 +94,15 @@ export function InteractionSidebar({
   interactions, loading, onSelect, onDelete,
   activeInteractionId, collapsed, onToggleCollapse,
 }: InteractionSidebarProps) {
+  const [filter, setFilter] = useState('');
+
+  const filtered = filter.trim()
+    ? interactions.filter(i =>
+        i.query.toLowerCase().includes(filter.toLowerCase()) ||
+        (i.diagnosis && i.diagnosis.toLowerCase().includes(filter.toLowerCase()))
+      )
+    : interactions;
+
   return (
     <div className="h-full border-l border-border bg-neutral-bg2 flex flex-col">
       {/* Header with collapse toggle */}
@@ -94,6 +120,20 @@ export function InteractionSidebar({
           {collapsed ? '◀' : '▶'}
         </button>
       </div>
+
+      {/* Search filter */}
+      {!collapsed && (
+        <div className="px-2 pt-2 shrink-0">
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Search history…"
+            className="w-full text-[11px] px-2 py-1 rounded border border-border bg-neutral-bg3
+                       text-text-secondary placeholder-text-muted focus:outline-none focus:border-brand/40"
+          />
+        </div>
+      )}
 
       {/* Interaction list */}
       {!collapsed && (
@@ -119,8 +159,15 @@ export function InteractionSidebar({
             </div>
           )}
 
+          {/* No results for filter */}
+          {!loading && interactions.length > 0 && filtered.length === 0 && (
+            <div className="text-center py-4">
+              <p className="text-xs text-text-muted">No matches for "{filter}"</p>
+            </div>
+          )}
+
           {/* Interaction cards */}
-          {interactions.map(interaction => (
+          {filtered.map(interaction => (
             <InteractionCard
               key={interaction.id}
               interaction={interaction}

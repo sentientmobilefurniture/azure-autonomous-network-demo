@@ -73,8 +73,11 @@ set_config() {
   local key="$1" val="$2"
   # Use SOH (\x01) as sed delimiter to avoid conflicts with URLs/paths
   local d=$'\x01'
+  # Escape sed special chars in the replacement value (& = matched text, \ = escape)
+  local escaped_val="${val//\\/\\\\}"
+  escaped_val="${escaped_val//&/\\&}"
   if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
-    sed -i "s${d}^${key}=.*${d}${key}=${val}${d}" "$CONFIG_FILE"
+    sed -i "s${d}^${key}=.*${d}${key}=${escaped_val}${d}" "$CONFIG_FILE"
   else
     echo "${key}=${val}" >> "$CONFIG_FILE"
   fi

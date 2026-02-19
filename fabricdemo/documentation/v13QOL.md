@@ -2,10 +2,12 @@
 
 ## Overview
 
-Streamline the header area by replacing the agent bar and services popover with
-richer health-check buttons that show full details on hover. Add quick-launch
-buttons for the Azure AI Foundry and Fabric portals. Add a delete confirmation
-dialog for saved interactions.
+Streamline the header area by consolidating the agent bar, health-check bar,
+and services popover into a single **Services Panel** — a hierarchical tree
+of every discoverable resource, with per-item health checks and Rediscover
+buttons for Fabric and Foundry Agents. Add quick-launch buttons for the
+Azure AI Foundry and Fabric portals. Add a delete confirmation dialog for
+saved interactions. The header shrinks from 3 rows to 1.
 
 ---
 
@@ -58,204 +60,380 @@ with Cancel / Delete buttons.
 
 ---
 
-## 3. Richer Health Button Tooltips
+## 3. Services Panel (Replaces Health Bar, Agent Bar, and Services Popover)
 
-### Current problem — tooltips are invisible (CSS overflow clip)
+### Concept
 
-The `HealthButtonBar` container has `overflow-x-auto` on a fixed-height
-(`h-8` / 32px) wrapper. The tooltip `<div>` is positioned
-`absolute left-0 top-full` — meaning it renders *below* the button, outside
-the 32px-tall container. CSS spec: when either overflow axis is `auto`,
-`scroll`, or `hidden`, the other axis is implicitly treated as `auto` too.
-So `overflow-x-auto` forces `overflow-y: auto`, and the tooltip is clipped.
+Replace the `HealthButtonBar` (row of 4 health-check buttons), the `AgentBar`
+(row of agent pills), and the `ServiceHealthPopover` with a single, prominent
+**Services** button in the header. Clicking it opens a panel/popover showing a
+**hierarchical tree** of every discoverable resource. Each leaf node is
+individually clickable to trigger a health check, with a status indicator
+(🟢 green = ok, 🔴 red = fail, 🟠 orange + timer = checking).
 
-**Fix:** Remove `overflow-x-auto` from the `HealthButtonBar` wrapper (there
-are only 4-5 buttons, horizontal overflow is unlikely). If horizontal
-scroll is needed in the future, render tooltips via a React portal to
-`document.body` instead.
+### Tree structure
 
-### What we want (once visible)
-After a health check completes, hovering the button should show:
-- The **static description** (what it does)
-- A **divider**
-- The **last result details** — the same data that's already fetched
-
-Examples:
-
-**Fabric Sources tooltip after check:**
 ```
-Ping each Fabric data source and report reachability.
-────────────────────────────
-Last check:
-  ● Graph (GQL)     — reachable
-  ● Telemetry (KQL) — reachable
-  ✗ AI Search: runbooks-index — unreachable
-```
+Services                                          [▶ Check All]  [✕]
+─────────────────────────────────────────────────────────────────
+▼ Fabric                                       [🔄 Rediscover]  🟢
+    ● Graph (GQL)        — noc-ontology (graph_model_id)   🟢
+    ● Eventhouse (KQL)   — noc-eventhouse (kql_db_name)    🟠 3s
+    ○ Lakehouse          — NetworkTopologyLH               ─
+    ○ Ontology           — noc-ontology                    ─
 
-**Services tooltip after check (renamed from "Agent Health" — see §6):**
-```
-Check backend service connectivity.
-────────────────────────────
-Last check:
-  ● AI Foundry       — connected (aif-22eeqli26cwru)
-  ● AI Search        — connected (srch-22eeqli26cwru)
-  ● Cosmos DB        — connected
-  ● Graph Query API  — connected (Fabric GQL)
-```
+▼ Foundry Agents                                [🔄 Rediscover]  🟢
+    ● Orchestrator                                          🟢
+        ↳ delegates to: GraphExplorerAgent, …
+    ● GraphExplorerAgent                                    🟢
+        ↳ tools: OpenAPI (graph-query-api)
+    ● HistoricalTicketAgent                                 🟢
+        ↳ tools: AI Search (tickets-index)
+    ● RunbookKBAgent                                        🟢
+        ↳ tools: AI Search (runbooks-index)
+    ● TelemetryAgent                                        🟢
+        ↳ tools: OpenAPI (graph-query-api)
 
-**Agent Discovery tooltip after check:**
-```
-Re-query AI Foundry for provisioned agents.
-────────────────────────────
-Last check: 5 agents found
-  ● Orchestrator          — provisioned
-  ● GraphExplorerAgent    — provisioned
-  ● HistoricalTicketAgent — provisioned
-  ● RunbookKBAgent        — provisioned
-  ● TelemetryAgent        — provisioned
+▼ Foundry Models                                               🟢
+    ● gpt-4.1            — LLM deployment                  🟢
+    ● text-embedding-3-small — embedding deployment         🟢
+
+▼ Search Indexes                                               🔴
+    ● runbooks-index     — 42 docs                          🟢
+    ● tickets-index      — 150 docs                         🔴
+
+▼ Cosmos DB                                                    🟢
+    ● interactions       — NoSQL database                   🟢
+
+  ● Graph Query API      — graph-query-api:8100             🟢
+  ● Main API             — api:8000                         🟢
 ```
 
-### Implementation
-Store the full API response in the `HealthButton` component state (already
-partially done — `detail` state exists). **The `detail` state is currently
-typed as `string`.** It must be changed to `unknown` (or a per-button
-response type) so the tooltip renderer can access structured fields
-(e.g. `data.services`, `data.agents`). A `detailSummary: string` can be
-kept alongside for the inline badge text. Expand the tooltip rendering to
-format the response object into a multi-line detail view.
+**Key UI elements:**
 
-### Backend changes needed
-The existing endpoints already return structured data. We may want to enrich:
+- **🔄 Rediscover** buttons appear on **Fabric** and **Foundry Agents**
+  category headers only — these are the two resource groups that require
+  active discovery (Fabric workspace items via REST API; Foundry agents
+  via AI Foundry). Other groups (Models, Search, Cosmos, APIs) don't
+  have a discovery step — they're known from config and only need a
+  health probe.
+- **●** (filled dot) = item is **probeable** — clicking it triggers an
+  individual health check.
+- **○** (hollow dot / dash) = item is **display-only** — its status is
+  derived from the 🔄 Rediscover response. No individual probe exists.
+  Clicking it re-runs the parent Rediscover. See "Display-only items"
+  below.
+- Each **category header** (▼ Fabric, etc.) shows an aggregate dot
+  reflecting worst-child status.
 
-- `GET /api/services/health` — currently only checks env var presence (reports
-  `"configured"` not `"connected"`). Should actually **probe** each service
-  with a lightweight call (e.g. list-models for AI Foundry, list-indexes for
-  AI Search, database ping for Cosmos, `/health` for Graph Query API).
+#### Display-only items (Lakehouse, Ontology)
 
-> **Note:** The existing `agent-health` button already calls
-> `/api/services/health`. In §6 below we **rename** this button to
-> "Services" rather than adding a duplicate. The tooltip enrichment
-> described here applies to that renamed button.
+The Fabric tree shows **Lakehouse** and **Ontology** as display-only rows
+(○ instead of ●) because:
+
+1. **No individual health endpoint exists.** The Fabric REST API can list
+   workspace items (confirming they exist), but there's no lightweight
+   ping for a Lakehouse or Ontology/GraphModel — you can only confirm
+   presence.
+2. **The current `rediscover` endpoint doesn't return them.** The
+   `FabricConfig` dataclass only has `graph_model_id`,
+   `eventhouse_query_uri`, and `kql_db_name`. It doesn't track
+   `lakehouse_id` or `ontology_id`.
+3. **But the underlying `_list_workspace_items()` DOES see them.** The
+   Fabric API returns all workspace items including type `"Lakehouse"`
+   and `"GraphModel"`.
+
+**Backend change needed:** Enrich the `POST /query/health/rediscover`
+response to include **all discovered workspace items** (not just the ones
+`FabricConfig` tracks). Add a `workspace_items` array:
+
+```json
+{
+  "ok": true,
+  "graph_model_id": "...",
+  "eventhouse_query_uri": "...",
+  "kql_db_name": "...",
+  "fabric_ready": true,
+  "kql_ready": true,
+  "workspace_items": [
+    { "id": "abc-123", "type": "Lakehouse",   "displayName": "NetworkTopologyLH" },
+    { "id": "def-456", "type": "GraphModel",  "displayName": "noc-ontology" },
+    { "id": "ghi-789", "type": "Eventhouse",  "displayName": "noc-eventhouse" },
+    { "id": "jkl-012", "type": "KQLDatabase", "displayName": "noc-kqldb" }
+  ]
+}
+```
+
+This is a small change: `_discover_fabric_config()` already calls
+`_list_workspace_items()` — just pass the raw item list through to the
+endpoint response.
+
+The frontend uses `workspace_items` to populate the Fabric tree. Items
+matching `graph_model_id` or `kql_db_name` are shown as probeable (●);
+other items (Lakehouse, etc.) are shown as display-only (○) — their
+status is "present" (🟢) if they appear in the list, or absent if not.
+Clicking a display-only item re-runs 🔄 Rediscover for the whole
+Fabric group.
+
+### Behaviour
+
+**Two distinct operations:** The panel supports both **discovery** (finding
+what resources exist) and **health checking** (probing whether they're
+accessible). These are different:
+
+| | Discovery | Health check |
+|---|---|---|
+| **Purpose** | Populate the tree — what items exist? | Probe an item — is it reachable? |
+| **When** | On first open; on 🔄 Rediscover click | On Check All; on individual item click |
+| **Side effect** | Invalidates backend caches, re-queries Fabric/Foundry APIs | None (read-only probes) |
+| **Applies to** | Fabric, Foundry Agents (have 🔄 buttons) | All items |
+
+#### Flow on first open
+
+1. **Discovery pass** — fire in parallel:
+   - `POST /query/health/rediscover` → returns `FabricConfig` fields +
+     `workspace_items[]` (enriched — see "Display-only items" above)
+   - `POST /api/agents/rediscover` → returns agent list from AI Foundry
+   - `GET /api/services/models` → returns model deployments
+   - `GET /api/services/health` → returns Cosmos/Search/Foundry connectivity
+2. **Populate tree** — items appear with their names and details. All
+   dots start as grey (idle) or green/red based on the discovery response
+   (the rediscover endpoints already probe items, so their results count
+   as the initial health state).
+3. **Check All** (auto or manual) — runs health probes for items that
+   didn't get checked during discovery (Models, Search Indexes at
+   individual level, Cosmos, APIs).
+
+#### 🔄 Rediscover buttons
+
+- **Fabric 🔄**: Calls `POST /query/health/rediscover`. Invalidates the
+  Fabric discovery cache and re-queries the Fabric REST API for workspace
+  items. The tree's Fabric children are rebuilt from the response. Use
+  after:
+  - Resuming a paused Fabric capacity
+  - Provisioning new Fabric resources
+  - Changing `FABRIC_WORKSPACE_ID` via env config
+
+- **Foundry Agents 🔄**: Calls `POST /api/agents/rediscover`. Invalidates
+  the agent cache and re-queries AI Foundry for provisioned agents. The
+  tree's Foundry Agents children are rebuilt from the response. Use after:
+  - Running the agent provisioner script
+  - Deploying/deleting agents in AI Foundry
+  - Changing `PROJECT_ENDPOINT` via env config
+
+Both buttons show 🟠 with a timer while running. The response both
+populates the tree (discovery) and sets initial health status (the
+endpoints probe the resources they discover).
+
+#### Check All
+
+Runs every health check in parallel with a small stagger. Each item's
+dot transitions to 🟠 (with elapsed counter) then 🟢 or 🔴. Does **not**
+run discovery — uses the already-populated tree.
+
+#### Click any item
+
+Runs that single item's health check. The parent group's dot reflects
+the worst child status (any red → parent red, any orange → parent
+orange, all green → parent green).
+
+**Exception:** Display-only items (○ Lakehouse, ○ Ontology) don't have
+an individual health probe. Clicking them re-runs 🔄 Rediscover for the
+parent Fabric group.
+
+#### Auto-refresh on mount (optional, §4i)
+
+Same auto-run logic can trigger the full discovery + Check All on first
+open.
+
+#### Close
+
+Click ✕ or click outside the panel. State is preserved — reopening
+shows cached results (no re-discovery until user clicks 🔄).
+
+### Data sources per tree node
+
+| Tree node | Discovery (populates tree) | Health check (probes item) | Has 🔄? |
+|-----------|---------------------------|---------------------------|---------|
+| **Fabric** (group header) | `POST /query/health/rediscover` — returns `FabricConfig` fields + `workspace_items[]` (new) | Aggregate of children | **Yes** |
+| **Fabric → Graph (GQL)** | `workspace_items` where `type === 'GraphModel'` + `graph_model_id` | `GET /query/health/sources` → `sources[graph].ok` (actually pings the GQL backend) | — |
+| **Fabric → Eventhouse (KQL)** | `workspace_items` where `type === 'KQLDatabase'` + `kql_db_name` | `GET /query/health/sources` → `sources[telemetry].ok` (actually pings KQL) | — |
+| **Fabric → Lakehouse** | `workspace_items` where `type === 'Lakehouse'` | **Display-only** — shows 🟢 if item exists in workspace, ─ if absent. No individual probe. | — |
+| **Fabric → Ontology** | `workspace_items` where `type === 'GraphModel'` (same as Graph) | **Display-only** — shows 🟢 if `graph_model_id` resolved, ─ if not. No individual probe. | — |
+| **Foundry Agents** (group header) | `POST /api/agents/rediscover` — returns agent list from AI Foundry | Aggregate of children | **Yes** |
+| **Foundry Agents → each** | Derived from rediscover response | `agent.status === 'provisioned'` | — |
+| **Agent sub-items** (tools, delegates) | Derived from agent response | Display-only (no separate check) | — |
+| **Foundry Models → each** | `GET /api/services/models` *(new)* | Model accessible, capacity > 0 | No |
+| **Search Indexes → each** | `GET /query/health/sources` | `sources[search_indexes.*].ok` | No |
+| **Cosmos DB → interactions** | `GET /api/services/health` | Cosmos ping result | No |
+| **Graph Query API** | `GET /query/health` *(new — see §3a below)* | `status === 'ok'` | No |
+| **Main API** | `GET /health` | `status === 'ok'` | No |
+
+**Note:** The 🔄 Rediscover endpoints (`POST /query/health/rediscover` and
+`POST /api/agents/rediscover`) both **discover + probe** in one call. Their
+response is used to both populate the tree children and set the initial
+health status. Subsequent individual item clicks do read-only health
+probes without re-discovery.
+
+### New backend endpoint: `GET /api/services/models`
+
+List deployed model names from AI Foundry. Returns:
+
+```json
+{
+  "models": [
+    { "name": "gpt-4.1", "type": "llm", "status": "ready" },
+    { "name": "text-embedding-3-small", "type": "embedding", "status": "ready" }
+  ]
+}
+```
+
+Implementation: uses the Azure AI Foundry client to call `list_deployments()`
+(or equivalent). Falls back to env vars `MODEL_DEPLOYMENT_NAME` and
+`EMBEDDING_MODEL` if the API call fails.
+
+### Upgrading `GET /api/services/health`
+
+The existing endpoint only checks env var presence (`"configured"`). Upgrade
+it to do **real connectivity probes**:
+
+- **AI Foundry:** call list-models or get-project
+- **AI Search:** HEAD request to the search endpoint
+- **Cosmos DB:** database-level ping (list databases or read metadata)
+- **Graph Query API:** `GET /query/health`
+
+Return a richer response:
+
+```json
+{
+  "services": [
+    { "name": "AI Foundry", "status": "connected", "details": "aif-22eeqli26cwru", "latency_ms": 120 },
+    { "name": "AI Search",  "status": "connected", "details": "srch-22eeqli26cwru", "latency_ms": 85 },
+    { "name": "Cosmos DB",  "status": "connected", "details": "NoSQL interactions store", "latency_ms": 40 },
+    { "name": "Graph Query API", "status": "connected", "details": "Fabric GQL", "latency_ms": 15 }
+  ],
+  "summary": { "total": 4, "connected": 4, "error": 0 }
+}
+```
+
+#### How `services/health` relates to other tree categories
+
+The Services Panel tree has overlapping concerns with `services/health`.
+To be explicit about what each endpoint provides and what part of the tree
+uses it:
+
+| `services/health` service | Tree category that uses it | What the tree also checks separately |
+|---------------------------|---------------------------|--------------------------------------|
+| AI Foundry → "connected" | Not a separate tree node — implicit in whether `services/models` and `agents/rediscover` succeed | **Foundry Models** use `GET /api/services/models` (lists *deployments*); **Foundry Agents** use `POST /api/agents/rediscover` |
+| AI Search → "connected" | Not a separate tree node — implicit in whether `query/health/sources` succeeds | **Search Indexes** use `GET /query/health/sources` (probes each *index* individually with doc counts) |
+| Cosmos DB → "connected" | **Cosmos DB → interactions** | — |
+| Graph Query API → "connected" | **Graph Query API** top-level node | — |
+
+In short:
+- `services/health` answers **"can we reach this service at all?"** —
+  infrastructure-level connectivity probes.
+- The tree's dedicated endpoints answer **"what specific resources exist
+  and are they individually healthy?"** — resource-level probes.
+- The tree nodes for **Cosmos DB** and **Graph Query API** map 1:1 to
+  `services/health` results (no separate resource-level detail needed).
+- **Foundry** connectivity (`services/health → AI Foundry`) is consumed
+  internally but not shown as a separate tree node — it's implicit in
+  whether `services/models` and `agents/rediscover` succeed.
+- **AI Search** connectivity (`services/health → AI Search`) is similarly
+  implicit — `query/health/sources` probes individual indexes which
+  reveals connectivity issues anyway.
+
+### UI: Services button placement
+
+The **⚙ Services** button stays in its current position in the header
+(right-aligned, between toggles and theme). Restyle it to be more prominent:
+
+- Slightly larger than other header buttons
+- Shows a small aggregate dot (🟢/🟠/🔴) reflecting overall status
+  (worst-of-all-children)
+- Label: **"⚙ Services"**
+- On click: toggles the panel open/closed
+
+```
+… Open Foundry  Open Fabric  ⚙ Services ●  👁 Tabs  ☀ Light
+```
+
+### UI: Panel component — `ServicesPanel.tsx`
+
+- **Anchored** to the Services button (absolute positioned below it,
+  right-aligned so it doesn't overflow the viewport)
+- Fixed width ~400px, max-height 80vh, scrollable body
+- Dark overlay behind (click-outside to close)
+- Tree is rendered using nested `<div>` with indentation — no external
+  tree library needed
+- Each row: `[status dot] [name] [— detail text] [click to check]`
+  - ● (filled) for probeable items; ○ (hollow) for display-only items
+- Category headers are collapsible (▼/▶)
+- **"Check All"** button at the top-right of the panel header
+- **✕** close button at the top-right corner
+
+### What gets removed
+
+| Component | Reason |
+|-----------|--------|
+| `HealthButtonBar.tsx` | Replaced by Services Panel — all 4 buttons' functionality is now tree nodes |
+| `HealthButton` (internal) | Same |
+| `AgentBar.tsx` | Agent info now in "Foundry Agents" tree section |
+| `AgentCard.tsx` | Agent details now inline in tree |
+| `HealthDot.tsx` | Only imported by AgentBar |
+| `ServiceHealthPopover.tsx` | Replaced by the new ServicesPanel |
+
+The `Header.tsx` toggles for "Agents" and "Health" are both removed (no
+more separate rows to toggle). The "⚙ Services" button stays but now opens
+`ServicesPanel` instead of `ServiceHealthPopover`.
 
 ### Files to change
 
 | File | Change |
 |------|--------|
-| `frontend/src/components/HealthButtonBar.tsx` | Change `detail` state from `string` to `unknown`; add `detailSummary` string for badge; store full response; render structured tooltip |
-| `api/app/main.py` | Upgrade `services_health` to do real connectivity probes |
+| **New:** `frontend/src/components/ServicesPanel.tsx` | Full tree-based services panel with per-item health checks |
+| `frontend/src/components/Header.tsx` | Remove AgentBar render + toggle; remove HealthButtonBar render + toggle; restyle ⚙ Services button; open `ServicesPanel` instead of `ServiceHealthPopover` |
+| `frontend/src/components/HealthButtonBar.tsx` | **Delete file** |
+| `frontend/src/components/AgentBar.tsx` | **Delete file** |
+| `frontend/src/components/AgentCard.tsx` | **Delete file** |
+| `frontend/src/components/HealthDot.tsx` | **Delete file** |
+| `frontend/src/components/ServiceHealthPopover.tsx` | **Delete file** |
+| `frontend/src/config/tooltips.ts` | Remove `HEALTH_BUTTON_TOOLTIPS`, remove `agents-show`/`agents-hide`/`health-show`/`health-hide`/`services`; add tooltip for the new Services button |
+| `api/app/main.py` | Upgrade `services_health` to do real probes; add `GET /api/services/models` endpoint |
+| **New:** `api/app/routers/models.py` | (Optional — could live in `main.py` instead) List deployed models from AI Foundry |
+| `graph-query-api/router_health.py` | **Add `GET /query/health` liveness endpoint** (see §3a below); **enrich `POST /query/health/rediscover`** to include `workspace_items[]` array (see "Display-only items" above) |
+| `graph-query-api/fabric_discovery.py` | Return raw `workspace_items` list from `_discover_fabric_config()` so the endpoint can include it |
 
 ---
 
-## 4. Remove Services Button & Popover
+### 3a. New endpoint: `GET /query/health`
 
-### What
-The **⚙ Services** button in the header opens a `ServiceHealthPopover` that
-shows the same information the **Services** health button now shows (the
-`agent-health` button renamed to `services` per §6). Since we're making
-the health button tooltips show full details, the popover is redundant.
+The Services Panel's "Graph Query API" tree node needs to health-check the
+graph-query-api service. **This route does not exist.** The graph-query-api
+currently has:
 
-### Plan
-1. Remove the `⚙ Services` button from `Header.tsx`
-2. Delete `ServiceHealthPopover.tsx` (no longer imported anywhere)
-3. Remove the `'services'` entry from `HEADER_TOOLTIPS` in `tooltips.ts`
-   (not to be confused with the new `'services'` entry in
-   `HEALTH_BUTTON_TOOLTIPS`, which stays)
+- `GET /health` at root (unreachable through nginx — nginx maps `/health`
+  to port 8000, the main API)
+- `GET /query/health/sources` (requires a `scenario` query param — too
+  heavy for a simple liveness check)
+- `POST /query/health/rediscover` (wrong method, has side effects)
 
-### Files to change
+**Fix — add a lightweight `GET /query/health` to `router_health.py`:**
 
-| File | Change |
-|------|--------|
-| `frontend/src/components/Header.tsx` | Remove Services button, remove `ServiceHealthPopover` import |
-| `frontend/src/components/ServiceHealthPopover.tsx` | Delete file |
-| `frontend/src/config/tooltips.ts` | Remove `services` tooltip |
-
----
-
-## 5. Remove Agent Bar (Replaced by Agent Discovery Health Button)
-
-### What
-The `AgentBar` (row of agent pills below the header) duplicates information
-that the **Agent Discovery** health button now provides via its tooltip.
-Remove it to reclaim vertical space.
-
-### What moves where
-- Agent names + statuses → shown in the **Agent Discovery** tooltip after a
-  check
-- API health dot → moves into the health button bar as a new dedicated button
-  (see §6)
-- Agent detail tooltips (role, model, tools, delegates-to) → shown in the
-  Agent Discovery tooltip per-agent
-
-### Plan
-1. Remove `{showAgents && <AgentBar />}` from `Header.tsx`
-2. Remove the Agents toggle button from the header
-3. `AgentBar.tsx` and `AgentCard.tsx` become unused — delete or keep for
-   reference (recommend delete)
-4. Remove `'agents-show'` / `'agents-hide'` tooltips
-
-### Files to change
-
-| File | Change |
-|------|--------|
-| `frontend/src/components/Header.tsx` | Remove AgentBar render + toggle; remove `import { AgentBar }` |
-| `frontend/src/components/AgentBar.tsx` | Delete file |
-| `frontend/src/components/AgentCard.tsx` | Delete file |
-| `frontend/src/components/HealthDot.tsx` | Delete file — only imported by `AgentBar.tsx`; becomes orphaned |
-| `frontend/src/config/tooltips.ts` | Remove agent toggle tooltips |
-
----
-
-## 6. Rename "Agent Health" → "Services" (Not a New Button)
-
-### Problem with the original plan
-
-The existing `BUTTONS[]` array already has an `agent-health` entry that
-calls `GET /api/services/health`. Adding a **new** `services` entry
-pointing to the same endpoint would create two buttons doing the same
-thing, and §3's tooltip enrichment would overlap with the new button.
-
-### Fix: rename, don't duplicate
-
-**Rename** the existing `agent-health` button to `services` in the
-`BUTTONS[]` array. No new button needed. The enriched tooltip (from §3)
-covers everything the proposed "Services" button would show.
-
-```ts
-// Before
-{ key: 'agent-health', label: 'Agent Health', method: 'GET', url: '/api/services/health' }
-
-// After
-{ key: 'services', label: 'Services', method: 'GET', url: '/api/services/health' }
+```python
+@router.get("/health")
+async def query_health():
+    """Simple liveness probe for the graph-query-api behind /query/ nginx prefix."""
+    return {"status": "ok", "service": "graph-query-api"}
 ```
 
-The tooltip (powered by §3's enrichment) shows:
-```
-Check connectivity to all backend services.
-────────────────────────────
-Last check:
-  ● AI Foundry       — connected (aif-22eeqli26cwru)
-  ● AI Search        — connected (srch-22eeqli26cwru)
-  ● Cosmos DB        — connected
-  ● Graph Query API  — connected
-```
+Since `router_health.py` already has `prefix="/query"`, this creates
+`GET /query/health` which nginx routes to port 8100 via the existing
+`location /query/` block. No nginx changes needed.
 
-This replaces both the Services popover **and** the API `HealthDot`
-that was in the Agent bar. The health button bar now has **4 buttons**:
-
-| # | Button | Endpoint |
-|---|--------|----------|
-| 1 | Services | `GET /api/services/health` |
-| 2 | Fabric Sources | `GET /query/health/sources` |
-| 3 | Fabric Discovery | `POST /query/health/rediscover` |
-| 4 | Agent Discovery | `POST /api/agents/rediscover` |
-
-### Files to change
-
-| File | Change |
-|------|--------|
-| `frontend/src/components/HealthButtonBar.tsx` | Rename `agent-health` → `services` in `BUTTONS[]`; update any `key === 'agent-health'` conditionals in tooltip rendering |
-| `frontend/src/config/tooltips.ts` | Rename `HEALTH_BUTTON_TOOLTIPS['agent-health']` → `'services'`; update description text |
-| `api/app/main.py` | Upgrade `/api/services/health` to probe services (already covered by §3) |
+> **Also used by v14:** The Admin Panel (v14admin.md) restart overlay
+> polls this same endpoint to detect when the graph-query-api is back
+> online after an env var change.
 
 ---
 
@@ -277,18 +455,14 @@ that was in the Agent bar. The health button bar now has **4 buttons**:
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ ◆ 3IQ Demo — Fabric Graphs + Foundry Agents  [scenario]        │
-│            Open Foundry  Open Fabric  👁 Health  👁 Tabs  ☀ Light │
-├──────────────────────────────────────────────────────────────────┤
-│ HEALTH  ● Services  ● Fabric Sources  ● Fabric Discovery       │
-│         ● Agent Discovery                                               │
+│      Open Foundry  Open Fabric  ⚙ Services ●  👁 Tabs  ☀ Light │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-- **2 rows** instead of 3 (agent bar removed)
-- **4 health buttons** (not 5 — "Agent Health" was renamed to "Services", not duplicated)
+- **1 row** instead of 3 (agent bar + health bar both removed)
+- All status info accessible via the Services panel popover
+- Services button shows aggregate health dot
 - Portal quick-launch buttons in header
-- All status info accessible via health button tooltips
-- Services popover eliminated (redundant)
 
 ---
 
@@ -297,21 +471,21 @@ that was in the Agent bar. The health button bar now has **4 buttons**:
 | Step | Task | Complexity |
 |------|------|------------|
 | 1 | Add "Open Foundry" / "Open Fabric" buttons to `Header.tsx` | Low |
-| 2 | Fix `overflow-x-auto` clipping on `HealthButtonBar` | Low |
-| 3 | Upgrade `GET /api/services/health` to do real probes | Medium |
-| 4 | Change `detail` state from `string` to structured type; store full response; render rich tooltips | Medium |
-| 5 | Rename `agent-health` → `services` in `BUTTONS[]` and `tooltips.ts` (NOT a new button — see §6) | Low |
-| 6 | Remove `⚙ Services` button + `ServiceHealthPopover` | Low |
-| 7 | Remove `AgentBar` + Agents toggle from header | Low |
-| 8 | Delete unused components (`AgentBar`, `AgentCard`, `HealthDot`, `ServiceHealthPopover`) | Low |
+| 2 | Add `GET /query/health` liveness endpoint to `graph-query-api/router_health.py` (§3a) | Low |
+| 3 | Enrich `POST /query/health/rediscover` to include `workspace_items[]` array; update `fabric_discovery.py` to surface raw items | Low |
+| 4 | Upgrade `GET /api/services/health` to do real connectivity probes | Medium |
+| 5 | Add `GET /api/services/models` endpoint | Medium |
+| 6 | Implement `ServicesPanel.tsx` (tree, per-item checks, 🔄 Rediscover, Check All, display-only items) | High |
+| 7 | Restyle ⚙ Services button; wire it to `ServicesPanel` instead of `ServiceHealthPopover` | Low |
+| 8 | Remove `AgentBar`, `AgentCard`, `HealthDot`, `HealthButtonBar`, `ServiceHealthPopover`; remove Agents + Health toggles from `Header.tsx` | Low |
 | 9 | Delete confirmation on interaction cards | Low |
 | 10 | Update `tooltips.ts` (add new, remove stale) | Low |
 
 ---
 
-## 7. Additional UX Improvements
+## 4. Additional UX Improvements
 
-### 7a. Cancel / Stop Investigation Button
+### 4a. Cancel / Stop Investigation Button
 
 **Problem:** Once an investigation starts, the user must wait up to 5 minutes
 (the auto-abort timeout) with no way to cancel. The "Investigate" button just
@@ -341,7 +515,7 @@ const cancelInvestigation = useCallback(() => {
 
 ---
 
-### 7b. Keyboard Shortcut: Enter to Submit
+### 4b. Keyboard Shortcut: Enter to Submit
 
 **Problem:** Users must click the Investigate button — there's no keyboard
 shortcut. For a demo, pressing Enter (or Cmd/Ctrl+Enter) to submit is natural.
@@ -355,7 +529,7 @@ submits the alert.
 
 ---
 
-### 7c. Copy Button on Individual Step Cards
+### 4c. Copy Button on Individual Step Cards
 
 **Problem:** Users can copy the final diagnosis but not individual agent step
 responses. During demos, people often want to copy a specific GQL query or
@@ -370,7 +544,7 @@ agent response.
 
 ---
 
-### 7d. Toast / Notification for Auto-Saved Interactions
+### 4d. Toast / Notification for Auto-Saved Interactions
 
 **Problem:** Interactions are auto-saved silently when an investigation
 completes. There's no feedback — the user doesn't know it was saved unless
@@ -387,7 +561,7 @@ a simple animated `<div>` at the bottom of the screen.
 
 ---
 
-### 7e. Expand/Collapse All Steps
+### 4e. Expand/Collapse All Steps
 
 **Problem:** When reviewing a long investigation (5-9 steps), users must
 click each `StepCard` individually to expand it. No way to see all details
@@ -402,7 +576,7 @@ at once.
 
 ---
 
-### 7f. Search / Filter History
+### 4f. Search / Filter History
 
 **Problem:** As saved interactions accumulate, there's no way to search or
 filter them. The sidebar just shows a chronological list.
@@ -416,7 +590,7 @@ filters by query text. Client-side only — no backend changes.
 
 ---
 
-### 7g. Log Stream: Clear button + Log level filter
+### 4g. Log Stream: Clear button + Log level filter
 
 **Problem:** The terminal log streams accumulate indefinitely (capped at 200
 lines). No way to clear, and verbose DEBUG logs clutter the view.
@@ -432,7 +606,7 @@ lines). No way to clear, and verbose DEBUG logs clutter the view.
 
 ---
 
-### 7h. Responsive Error Messages with Suggestions
+### 4h. Responsive Error Messages with Suggestions
 
 **Problem:** `ErrorBanner` provides canned explanations for 404/429/400 but
 generic text for everything else. Users don't know what to do next.
@@ -461,39 +635,35 @@ Recommend option 1 for now, option 2 as a follow-up.
 
 ---
 
-### 7i. Auto-Run Health Checks on Page Load
+### 4i. Auto-Run Discovery + Health Checks on Panel Open
 
-**Problem:** All health buttons start as grey/idle. Users must manually click
-each one to see the current status. For a demo, you want green dots on load.
+**Problem:** When the Services Panel opens, the tree is empty and all items
+start as grey/idle. The user must click 🔄 Rediscover on each category
+and then "Check All" manually. For a demo, you want the tree populated
+with green dots immediately.
 
-**Fix:** Auto-trigger all health checks once on mount (with a small stagger
-to avoid request storms). Only on first load — subsequent checks remain
-manual.
-
-**Mechanism:** Each `HealthButton`'s `run()` is internal to the component;
-the parent `HealthButtonBar` can't call it. Two clean approaches:
-
-1. **`autoRun` prop (recommended):** Add an `autoRun?: boolean` prop to
-   `HealthButton`. When truthy, the component calls `run()` in a
-   `useEffect` on mount (with a stagger delay based on its index).
-   `HealthButtonBar` passes `autoRun={true}` to each button.
-2. **Imperative handle:** Use `useImperativeHandle` + `forwardRef` to
-   expose `run()`, then call refs from the parent. More complex than
-   needed.
+**Fix:** Auto-trigger the full discovery pass + "Check All" on first open
+of the Services Panel. Only on first open — subsequent opens show cached
+results and require manual re-check or 🔄.
 
 ```tsx
-// In HealthButton:
+// In ServicesPanel:
+const hasAutoRun = useRef(false);
 useEffect(() => {
-  if (autoRun) {
-    const id = setTimeout(run, index * 300); // stagger by 300ms
-    return () => clearTimeout(id);
+  if (open && !hasAutoRun.current) {
+    hasAutoRun.current = true;
+    runDiscoveryAndCheckAll();  // discovery first, then health checks
   }
-}, []); // eslint-disable-line react-hooks/exhaustive-deps
+}, [open]);
 ```
+
+`runDiscoveryAndCheckAll()` fires the two 🔄 endpoints in parallel
+(Fabric + Agents), populates the tree from responses, then runs
+Check All for the remaining items (Models, Search, Cosmos, APIs).
 
 | File | Change |
 |------|--------|
-| `frontend/src/components/HealthButtonBar.tsx` | Add `useEffect` auto-run on mount |
+| `frontend/src/components/ServicesPanel.tsx` | Auto-trigger discovery + Check All on first open |
 
 ---
 
@@ -503,440 +673,15 @@ useEffect(() => {
 |------|------|------------|
 | 11 | Cancel/stop investigation button | Low |
 | 12 | Ctrl+Enter to submit | Low |
-| 13 | Expand/collapse all steps (do before step 14 — both touch `StepCard.tsx`; this one changes prop interface) | Low |
+| 13 | Expand/collapse all steps (do before step 14 — both touch `StepCard.tsx`; this changes prop interface) | Low |
 | 14 | Copy buttons on step cards | Low |
 | 15 | Auto-save toast notification | Low |
 | 16 | Search/filter interaction history | Low |
 | 17 | Log stream clear + level filter | Medium |
 | 18 | Better error messages with suggestions | Low |
-| 19 | Auto-run health checks on page load | Low |
-| 20 | Admin Panel — env var editor + service restart | Medium |
+| 19 | Auto-run discovery + Check All on first Services Panel open | Low |
 
 ---
 
-## 8. Admin Control Panel (Environment Variable Editor)
-
-### What
-
-A **⚙ Admin Panel** button at the **extreme top-right** of the header (after
-the theme toggle — rightmost element). Clicking it opens a full-screen modal
-that lets the operator view and edit every environment variable from
-`azure_config.env`. On save, the container's running environment is updated
-and both backend services (main API on `:8000`, Graph Query API on `:8100`)
-are restarted so all values — including module-level frozen constants — take
-effect.
-
-### Why this is non-trivial
-
-Both Python services load env vars via `load_dotenv()` at startup. Some vars
-are captured into **module-level constants** at import time (frozen):
-
-| Service | Frozen vars (examples) |
-|---------|------------------------|
-| Main API (`api/`) | `SCENARIO_NAME`, `CORS_ORIGINS`, `SCENARIO_CONFIG`, agent YAML manifest |
-| Graph Query API (`graph-query-api/`) | `GRAPH_BACKEND`, `TOPOLOGY_SOURCE`, `SCENARIO_NAME`, `DEFAULT_GRAPH`, `DATA_SOURCES` |
-
-Other vars are read dynamically via `os.getenv()` per-request (e.g.,
-`PROJECT_ENDPOINT`, `AI_SEARCH_NAME`, `FABRIC_WORKSPACE_ID`). Simply
-mutating `os.environ` at runtime would update the dynamic reads but **not**
-the frozen constants. Therefore a full process restart via supervisord is
-required after writing changes to disk.
-
-### Prerequisites (must be done first)
-
-#### 1. Enable `supervisorctl` (socket + RPC config)
-
-The current `supervisord.conf` has **no `[unix_http_server]` or
-`[rpcinterface:supervisor]` section**. Without these, supervisord does not
-create a control socket and `supervisorctl` exits with a connection error.
-The Dockerfile runs our custom conf exclusively
-(`supervisord -c /etc/supervisor/conf.d/supervisord.conf`), so the OS
-defaults are not loaded.
-
-**Add to `supervisord.conf`:**
-
-```ini
-[unix_http_server]
-file=/var/run/supervisor.sock
-
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
-
-[supervisorctl]
-serverurl=unix:///var/run/supervisor.sock
-```
-
-#### 2. Fix `load_dotenv` override in main API
-
-After supervisord restarts both services, the new processes inherit
-**supervisord's environment**, which includes container-platform env vars
-injected by Azure Container Apps (via Bicep `env:` blocks).
-
-Graph Query API already uses `load_dotenv(_config, override=True)` — file
-values win over inherited env vars. But the main API uses the default
-`override=False` in both `paths.py` and `main.py`, meaning **inherited env
-vars (even empty ones) silently take precedence** over the admin panel's
-new file values.
-
-**Fix — change both calls to `override=True`:**
-
-```python
-# api/app/paths.py
-load_dotenv(CONFIG_FILE, override=True)
-
-# api/app/main.py
-load_dotenv(..., override=True)
-```
-
-This makes the env file the single source of truth for both services.
-
-#### 3. Add `GET /query/health` endpoint to graph-query-api
-
-The restart overlay polls `GET /query/health` to detect when the graph
-query API is back online. **This route does not exist.** The graph-query-api
-has:
-
-- `GET /health` at root (unreachable through nginx — nginx maps `/health`
-  to port 8000, the main API)
-- `GET /query/health/sources` (requires a `scenario` query param — too
-  heavy for a simple liveness check)
-- `POST /query/health/rediscover` (wrong method, has side effects)
-
-**Fix — add a lightweight `GET /query/health` to `router_health.py`:**
-
-```python
-@router.get("/health")
-async def query_health():
-    """Simple liveness probe for the graph-query-api behind /query/ nginx prefix."""
-    return {"status": "ok", "service": "graph-query-api"}
-```
-
-Since `router_health.py` already has `prefix="/query"`, this creates
-`GET /query/health` which nginx routes to port 8100 via the existing
-`location /query/` block. No nginx changes needed.
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Frontend (Admin Panel modal)                               │
-│                                                             │
-│  1. GET /api/admin/env           → populate form            │
-│  2. POST /api/admin/env {vars}   → save + restart           │
-│  3. Poll GET /health & /query/health until both return 200  │
-│     (treat 502 / network errors as "still restarting")      │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│  Main API  (POST /api/admin/env handler)                    │
-│                                                             │
-│  1. Validate payload (all values must be strings)           │
-│  2. Write key="value" pairs to /app/azure_config.env        │
-│     (double-quote all values to handle =, #, spaces)        │
-│  3. Return 200  { status: "saved", message: "Restarting…" } │
-│  4. Background task — fire-and-forget detached restart:     │
-│     subprocess.Popen(                                       │
-│       ["sh", "-c",                                          │
-│        "sleep 1 && supervisorctl restart                     │
-│         graph-query-api api"],                               │
-│       start_new_session=True)                                │
-│     → detached shell survives the API's own death            │
-│     → restarts graph-query-api first, then api               │
-│     → new processes call load_dotenv(override=True)          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Why `POST` not `PUT`:** The main API's CORS middleware only allows
-`["GET", "POST", "OPTIONS"]`. A `PUT` request would be blocked by the
-browser's CORS preflight. Using `POST` avoids touching CORS config.
-
-**Why `Popen` with `start_new_session=True`:**
-`supervisorctl restart api graph-query-api` sends two sequential XML-RPC
-calls. The first (`restart api`) kills the very process that spawned the
-command. The child `supervisorctl` process dies too, and the second restart
-request for `graph-query-api` is **never sent**. By using a detached shell
-process (`start_new_session=True`), the shell outlives the API process.
-Restarting `graph-query-api` first (while the API is still alive) ensures
-both commands are delivered. The `sleep 1` is inside the shell, so the
-Python handler returns instantly and the HTTP response flushes normally.
-
-### Backend: new endpoints
-
-#### `GET /api/admin/env`
-
-Reads `/app/azure_config.env` **from disk** (not `os.environ`) and returns
-the full list of variables with their comment-section groupings preserved.
-
-**Response shape:**
-
-```json
-{
-  "variables": [
-    { "key": "DEFAULT_SCENARIO",        "value": "telecom-playground",  "group": "Scenario" },
-    { "key": "AZURE_SUBSCRIPTION_ID",   "value": "67255afe-…",         "group": "Core Azure" },
-    { "key": "AI_FOUNDRY_NAME",         "value": "aif-22eeqli26cwru",  "group": "AI Foundry" },
-    ...
-  ]
-}
-```
-
-Grouping is derived from the `# --- Group Name ---` comment lines already
-present in the env file. **Note:** actual headers include parenthetical
-details, e.g. `# --- Core Azure settings (AUTO: populated by postprovision) ---`.
-The parser regex should capture only the group name portion and strip the
-parenthetical, or include it — either is fine for display. A regex like
-`r'^# --- (.+?) ---'` will work for both forms.
-
-The parser should:
-
-1. Read the file line by line
-2. Track the current group from `# --- … ---` headers
-3. Skip pure-comment lines and blank lines (a line starting with `#` is
-   always a comment — never parse `# GRAPH_BACKEND=fabric-gql` as a var)
-4. For each `KEY=VALUE` line, split on the **first** `=` only
-5. Strip surrounding quotes (`"` / `'`) from the value
-6. Emit `{ key, value, group }` for each parsed line
-
-#### `POST /api/admin/env`
-
-**Request body:**
-
-```json
-{
-  "variables": [
-    { "key": "DEFAULT_SCENARIO",      "value": "telecom-playground" },
-    { "key": "AZURE_SUBSCRIPTION_ID", "value": "67255afe-…" },
-    ...
-  ]
-}
-```
-
-**Behaviour:**
-
-1. Validate: every entry must have a non-empty `key` (string) and a `value`
-   (string, may be empty).
-2. Re-read the existing env file to preserve comment structure and group
-   headers. For each `KEY=VALUE` line, replace the value if the key appears
-   in the payload; leave comment lines and group headers intact. Append any
-   new keys (not already in the file) at the end.
-3. **Double-quote all values** in the written file to handle `=`, `#`,
-   spaces, and other special characters safely:
-   ```python
-   line = f'{key}="{value}"'
-   ```
-   `load_dotenv` parses double-quoted values correctly (strips quotes,
-   respects `#` inside quotes).
-4. Write the updated file atomically (write to a temp file in the same
-   directory, then `os.rename()`).
-5. Return `200 { "status": "saved", "message": "Services restarting…" }`.
-6. Schedule a **fire-and-forget** background task:
-
-```python
-import subprocess
-
-def _schedule_restart():
-    """Spawn a detached process that outlives the API."""
-    subprocess.Popen(
-        ["sh", "-c",
-         "sleep 1 && supervisorctl restart graph-query-api api"],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-```
-
-The restart order is `graph-query-api` then `api` — this ensures both
-restart commands are sent before the API process is killed.
-
-**Error handling:**
-
-- `400` if payload is malformed
-- `500` if file write fails (roll back to previous file)
-
-#### Router file
-
-Create `api/app/routers/admin.py` with both endpoints, mounted at prefix
-`/api/admin` in `main.py`.
-
-### Frontend: Admin Panel modal
-
-#### Button placement
-
-Add a **⚙ Admin Panel** button as the **last** (rightmost) element in the
-header controls row — after the theme toggle:
-
-```
-… 👁 Health  👁 Tabs  ☀ Light  ⚙ Admin Panel
-```
-
-Use a cog icon (Heroicons `Cog6ToothIcon` or similar). Label text:
-"Admin Panel". Style: subtle/outline, matching existing header buttons.
-
-#### Modal component: `AdminPanel.tsx`
-
-**Layout:**
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│  ⚙ Admin Panel — Environment Variables              [ ✕ ]     │
-├────────────────────────────────────────────────────────────────┤
-│                                                                │
-│  ┌─ Scenario ──────────────────────────────────────────────┐   │
-│  │ DEFAULT_SCENARIO        [ telecom-playground         ]  │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                │
-│  ┌─ Core Azure ────────────────────────────────────────────┐   │
-│  │ AZURE_SUBSCRIPTION_ID   [ 67255afe-8670-…            ]  │   │
-│  │ AZURE_RESOURCE_GROUP    [ rg-fabricgraph              ]  │   │
-│  │ AZURE_LOCATION          [ swedencentral               ]  │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                │
-│  ┌─ AI Foundry ────────────────────────────────────────────┐   │
-│  │ AI_FOUNDRY_NAME         [ aif-22eeqli26cwru           ]  │   │
-│  │ AI_FOUNDRY_ENDPOINT     [ https://aif-22eeq…          ]  │   │
-│  │ …                                                       │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                │
-│  … (scrollable — all groups from azure_config.env) …           │
-│                                                                │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              [ Cancel ]    [ 💾 Save Changes ]          │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────┘
-```
-
-- Full-screen modal with dark overlay, scrollable body
-- Variables grouped by their `group` field (collapsible sections)
-- Each variable: label (key name, monospace) + text input (value)
-- Keys are **read-only** (cannot rename env vars from the UI)
-- Values are editable
-- Highlight changed values (yellow/amber border on modified fields)
-- Cancel dismisses without saving
-- Save triggers the confirmation flow
-
-#### Confirmation dialog
-
-When the user clicks **Save Changes**, show a centered confirmation modal
-**on top of** the admin panel:
-
-```
-┌────────────────────────────────────────────────────┐
-│  ⚠  Confirm Environment Change                    │
-│                                                    │
-│  You are about to update X environment variables.  │
-│                                                    │
-│  Warning: Changing these values will restart both  │
-│  the main API and Graph Query API. Services will   │
-│  be temporarily unavailable (~5–10 seconds).       │
-│  Incorrect values may cause services to fail.      │
-│                                                    │
-│  Changed variables:                                │
-│    • AI_FOUNDRY_NAME: aif-old… → aif-new…          │
-│    • DEFAULT_SCENARIO: telecom… → energy…           │
-│                                                    │
-│         [ Cancel ]       [ ⚠ Save & Restart ]      │
-└────────────────────────────────────────────────────┘
-```
-
-- Lists only the **changed** variables (diff)
-- Red/warning-coloured "Save & Restart" button
-- Cancel returns to the editor
-
-#### Post-save: restart overlay
-
-After POST returns 200, show a non-dismissible overlay:
-
-```
-┌────────────────────────────────────────┐
-│                                        │
-│     ⟳  Restarting services…            │
-│                                        │
-│     Waiting for API and Graph Query    │
-│     API to come back online.           │
-│                                        │
-│     ● Main API        … waiting       │
-│     ● Graph Query API … waiting       │
-│                                        │
-└────────────────────────────────────────┘
-```
-
-- Poll `GET /health` (main API) and `GET /query/health` (Graph Query API)
-  every 2 seconds
-- **`GET /query/health` must be created first** (see prerequisite §8.3
-  above) — without it this poll returns 404 even when the service is up.
-- **Treat any non-2xx response (including 502 Bad Gateway from nginx) and
-  network/fetch errors as "still restarting"** — not as a fatal error.
-  During the restart window nginx is up but the backends are down, so
-  nginx returns 502 for proxied routes.
-  ```typescript
-  const isUp = async (url: string) => {
-    try {
-      const r = await fetch(url);
-      return r.ok;   // true only for 2xx
-    } catch {
-      return false;  // network error, CORS error, etc.
-    }
-  };
-  ```
-- Update each line to "✓ online" when the respective endpoint returns 200
-- When **both** are online, auto-dismiss the overlay and close the admin
-  panel
-- After 30 seconds with no response, show a warning: "Services are taking
-  longer than expected. Check the container logs."
-- Health button bar should also reflect the new status (auto-refresh)
-
-### Files to change
-
-| File | Change |
-|------|--------|
-| **`supervisord.conf`** | **Add `[unix_http_server]`, `[rpcinterface:supervisor]`, `[supervisorctl]` sections** — prerequisite, without this `supervisorctl` cannot communicate with supervisord |
-| `api/app/paths.py` | Change `load_dotenv(CONFIG_FILE)` → `load_dotenv(CONFIG_FILE, override=True)` — ensures file values win over inherited container env vars |
-| `api/app/main.py` | Change `load_dotenv(...)` → `load_dotenv(..., override=True)`; import and mount `admin` router |
-| `graph-query-api/router_health.py` | **Add `GET /query/health` liveness endpoint** — prerequisite; without it the restart overlay polls a non-existent route and always sees 404 |
-| **New:** `api/app/routers/admin.py` | `GET /api/admin/env`, `POST /api/admin/env` endpoints; `Popen(start_new_session=True)` for restart; double-quote all values in file writer; split on first `=` and strip quotes in reader |
-| **New:** `frontend/src/components/AdminPanel.tsx` | Admin panel modal + confirmation + restart overlay; handle 502 / network errors in health polling |
-| `frontend/src/components/Header.tsx` | Add ⚙ Admin Panel button (rightmost) |
-| `frontend/src/config/tooltips.ts` | Add `'admin-panel'` tooltip |
-| `nginx.conf` | No change needed — existing `/query/` location block already covers `/query/health`, and `/api/` covers `/api/admin/*` |
-
-### Security note
-
-This endpoint has **no authentication** — it trusts the caller. This is
-acceptable for a demo/internal tool running in a private container. For
-production, add Bearer-token auth or Azure AD validation middleware.
-
-### Edge cases
-
-| Scenario | Handling |
-|----------|----------|
-| User clears a required value (e.g., `PROJECT_ENDPOINT=""`) | Allow it — the health checks will surface the problem |
-| User adds a new variable not in the original file | Append at end of file under a `# --- Custom ---` group |
-| File write fails (disk full, permissions) | Return 500, do not restart services |
-| Supervisord restart fails | Background task logs the error; frontend timeout triggers warning |
-| User opens admin panel during an active investigation | Show a warning banner at the top of the modal: "An investigation is in progress. Restarting services will abort it." |
-| Concurrent admin panel usage | Last-write-wins (no locking needed for a demo) |
-
-### Updated header layout (final)
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ ◆ 3IQ Demo — Fabric Graphs + Foundry Agents  [scenario]                │
-│      Open Foundry  Open Fabric  👁 Health  👁 Tabs  ☀ Light  ⚙ Admin Panel │
-├──────────────────────────────────────────────────────────────────────────┤
-│ HEALTH  ● Services  ● Fabric Sources  ● Fabric Discovery               │
-│         ● Agent Discovery                                               │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-### Implementation steps
-
-| # | Task | Notes |
-|---|------|-------|
-| 20a | Add `[unix_http_server]` + RPC sections to `supervisord.conf` | **Must be done first** — blocks everything else |
-| 20b | Change `load_dotenv` to `override=True` in `api/app/paths.py` and `api/app/main.py` | Prerequisite for consistent env var behavior |
-| 20c | Add `GET /query/health` liveness endpoint to `graph-query-api/router_health.py` | **Must be done before 20e** — restart overlay polls this route |
-| 20d | Implement `api/app/routers/admin.py` with GET + POST endpoints | Use `Popen(start_new_session=True)`, double-quote values, parse `# ---` groups, split on first `=`, strip quotes |
-| 20e | Mount admin router in `api/app/main.py` | No CORS change needed (POST is already allowed) |
-| 20f | Implement `AdminPanel.tsx` (modal + confirmation + restart overlay) | Handle 502 / network errors in health polling; poll `GET /query/health` (not `/health` which is the main API) |
-| 20g | Add Admin Panel button to `Header.tsx` | Rightmost position |
-| 20h | End-to-end test in running container | Verify: file written, both services restart, new values visible in GET |
+> **Admin Panel** (env var editor + service restart) has been moved to
+> **[v14admin.md](v14admin.md)** — it requires auth and hardening work first.

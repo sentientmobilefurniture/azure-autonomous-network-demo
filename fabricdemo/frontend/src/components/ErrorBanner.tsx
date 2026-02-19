@@ -7,13 +7,39 @@ interface ErrorBannerProps {
 }
 
 export function ErrorBanner({ message, stepCount, onRetry }: ErrorBannerProps) {
-  const detail = message.includes('404')
-    ? 'A backend data source returned 404 — the graph database may be temporarily unavailable.'
-    : message.includes('429')
-      ? 'Rate-limited by Azure AI. Wait a moment and retry.'
-      : message.includes('400')
-        ? 'A backend query returned an error. The graph schema or data may not match the query.'
-        : `The orchestrator encountered an error: ${message.slice(0, 200)}`;
+  const lm = message.toLowerCase();
+  let detail: string;
+  let suggestion = '';
+
+  if (message.includes('404')) {
+    detail = 'A backend data source returned 404 — the graph database may be temporarily unavailable.';
+    suggestion = 'Check that Fabric capacity is resumed and run Fabric Discovery from the Services panel.';
+  } else if (message.includes('429')) {
+    detail = 'Rate-limited by Azure AI. Wait a moment and retry.';
+    suggestion = 'Consider reducing concurrent requests or upgrading model capacity.';
+  } else if (message.includes('400')) {
+    detail = 'A backend query returned an error. The graph schema or data may not match the query.';
+  } else if (message.includes('503') || message.includes('502')) {
+    detail = 'A backend service is temporarily unavailable (HTTP 502/503).';
+    suggestion = 'Check that Fabric capacity is resumed, then run the Services health check.';
+  } else if (message.includes('500')) {
+    detail = 'Internal server error — the backend encountered an unexpected failure.';
+    suggestion = 'Check the terminal logs for stack traces.';
+  } else if (lm.includes('timeout') || lm.includes('timed out')) {
+    detail = 'The investigation timed out — the backend took too long to respond.';
+    suggestion = 'The query may be too complex or the backend is under heavy load. Try a simpler alert or retry.';
+  } else if (lm.includes('econnrefused') || lm.includes('connection refused')) {
+    detail = 'Connection refused — the backend service is not running.';
+    suggestion = 'Ensure all services are started (api, graph-query-api). Check the terminal panel.';
+  } else if (lm.includes('connection') && lm.includes('lost')) {
+    detail = 'Connection to the server was lost — the investigation may still be running.';
+    suggestion = 'Check the terminal logs and try again.';
+  } else if (lm.includes('agent') && (lm.includes('not found') || lm.includes('missing'))) {
+    detail = 'An agent was not found — it may not be provisioned.';
+    suggestion = 'Run Agent Discovery from the Services panel to refresh the agent list.';
+  } else {
+    detail = `The orchestrator encountered an error: ${message.slice(0, 200)}`;
+  }
 
   return (
     <motion.div
@@ -30,6 +56,9 @@ export function ErrorBanner({ message, stepCount, onRetry }: ErrorBannerProps) {
             Agent run interrupted
           </p>
           <p className="text-xs text-text-muted">{detail}</p>
+          {suggestion && (
+            <p className="text-xs text-brand/80 mt-1">💡 {suggestion}</p>
+          )}
           {stepCount > 0 && (
             <p className="text-xs text-text-muted mt-1">
               {stepCount} step{stepCount > 1 ? 's' : ''} completed before the

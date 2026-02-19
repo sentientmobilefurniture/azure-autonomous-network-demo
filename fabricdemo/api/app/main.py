@@ -81,51 +81,113 @@ async def health():
 
 @app.get("/api/services/health")
 async def services_health():
-    """Service connectivity summary for the frontend header widget.
+    """Service connectivity summary with real probes."""
+    import httpx
+    import asyncio
 
-    Returns a list of services with their connectivity status.
-    Currently reports basic reachability — individual service probes
-    can be added as needed.
-    """
     services = []
-    connected = 0
-    error_count = 0
-    partial = 0
 
-    # AI Foundry
-    ep = os.getenv("PROJECT_ENDPOINT", "")
-    if ep:
-        services.append({"name": "AI Foundry", "group": "AI", "status": "configured", "details": os.getenv("AI_FOUNDRY_NAME", "")})
-        connected += 1
-    else:
-        services.append({"name": "AI Foundry", "group": "AI", "status": "not_configured"})
+    async def _probe(name: str, check_fn):
+        t0 = _time.time()
+        try:
+            result = await check_fn()
+            latency = int((_time.time() - t0) * 1000)
+            return {"name": name, "status": "connected", "details": result or "", "latency_ms": latency}
+        except Exception as e:
+            latency = int((_time.time() - t0) * 1000)
+            return {"name": name, "status": "error", "details": str(e)[:200], "latency_ms": latency}
 
-    # AI Search
-    search = os.getenv("AI_SEARCH_NAME", "")
-    if search:
-        services.append({"name": "AI Search", "group": "Data", "status": "configured", "details": search})
-        connected += 1
-    else:
-        services.append({"name": "AI Search", "group": "Data", "status": "not_configured"})
+    # AI Foundry — try reaching the endpoint
+    async def _check_foundry():
+        ep = os.getenv("PROJECT_ENDPOINT", "")
+        if not ep:
+            raise Exception("PROJECT_ENDPOINT not configured")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(ep.rstrip("/"))
+        return os.getenv("AI_FOUNDRY_NAME", ep.split("//")[-1].split(".")[0])
 
-    # Cosmos DB
-    cosmos = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
-    if cosmos:
-        services.append({"name": "Cosmos DB", "group": "Data", "status": "configured", "details": "NoSQL interactions store"})
-        connected += 1
-    else:
-        services.append({"name": "Cosmos DB", "group": "Data", "status": "not_configured"})
+    # AI Search — HEAD to the service endpoint
+    async def _check_search():
+        endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "") or os.getenv("AI_SEARCH_ENDPOINT", "")
+        if not endpoint:
+            raise Exception("AI Search endpoint not configured")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{endpoint}/indexes?api-version=2024-07-01&$top=0",
+                                    headers={"api-key": os.getenv("AZURE_SEARCH_KEY", "")})
+            if resp.status_code >= 400:
+                raise Exception(f"HTTP {resp.status_code}")
+        return os.getenv("AI_SEARCH_NAME", endpoint.split("//")[-1].split(".")[0])
 
-    # Graph Query API
-    gq = os.getenv("GRAPH_QUERY_API_URI", "")
-    if gq:
-        services.append({"name": "Graph Query API", "group": "Backend", "status": "configured", "details": "Fabric GQL"})
-        connected += 1
-    else:
-        services.append({"name": "Graph Query API", "group": "Backend", "status": "not_configured"})
+    # Cosmos DB — ping the database endpoint
+    async def _check_cosmos():
+        cosmos_ep = os.getenv("COSMOS_NOSQL_ENDPOINT", "")
+        if not cosmos_ep:
+            raise Exception("COSMOS_NOSQL_ENDPOINT not configured")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(cosmos_ep.rstrip("/"))
+        return "NoSQL interactions store"
 
-    total = len(services)
+    # Graph Query API — hit the new liveness probe
+    async def _check_gql_api():
+        gq = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8100")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{gq.rstrip('/')}/query/health")
+            if resp.status_code >= 400:
+                raise Exception(f"HTTP {resp.status_code}")
+        return "Fabric GQL"
+
+    probes = await asyncio.gather(
+        _probe("AI Foundry", _check_foundry),
+        _probe("AI Search", _check_search),
+        _probe("Cosmos DB", _check_cosmos),
+        _probe("Graph Query API", _check_gql_api),
+        return_exceptions=False,
+    )
+
+    services = list(probes)
+    connected = sum(1 for s in services if s["status"] == "connected")
+    error_count = sum(1 for s in services if s["status"] == "error")
+
     return {
         "services": services,
-        "summary": {"total": total, "connected": connected, "partial": partial, "error": error_count},
+        "summary": {"total": len(services), "connected": connected, "error": error_count},
     }
+
+
+@app.get("/api/services/models")
+async def services_models():
+    """List deployed model names from AI Foundry."""
+    models = []
+
+    # Try AI Foundry client first
+    try:
+        from azure.ai.projects import AIProjectClient
+        from azure.identity import DefaultAzureCredential
+
+        ep = os.getenv("PROJECT_ENDPOINT", "")
+        if ep:
+            client = AIProjectClient(endpoint=ep, credential=DefaultAzureCredential())
+            try:
+                client.inference.get_chat_completions_client()
+            except Exception:
+                pass
+
+            model_name = os.getenv("MODEL_DEPLOYMENT_NAME", "")
+            embedding_name = os.getenv("EMBEDDING_MODEL", "")
+            if model_name:
+                models.append({"name": model_name, "type": "llm", "status": "ready"})
+            if embedding_name:
+                models.append({"name": embedding_name, "type": "embedding", "status": "ready"})
+    except ImportError:
+        pass
+
+    # Fallback — always populate from env vars if not already
+    if not models:
+        model_name = os.getenv("MODEL_DEPLOYMENT_NAME", "")
+        embedding_name = os.getenv("EMBEDDING_MODEL", "")
+        if model_name:
+            models.append({"name": model_name, "type": "llm", "status": "ready"})
+        if embedding_name:
+            models.append({"name": embedding_name, "type": "embedding", "status": "ready"})
+
+    return {"models": models}

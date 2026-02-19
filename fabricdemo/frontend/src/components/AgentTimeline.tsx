@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import type { StepEvent, ThinkingState, RunMeta } from '../types';
 import { StepCard } from './StepCard';
@@ -18,14 +19,26 @@ export function AgentTimeline({
   runStarted,
   runMeta,
 }: AgentTimelineProps) {
+  const [allExpanded, setAllExpanded] = useState(false);
+
   // Nothing to show yet
   if (!runStarted && steps.length === 0) return null;
 
   return (
     <div>
-      <span className="text-[10px] uppercase tracking-wider font-medium text-text-muted block mb-3">
-        Investigation
-      </span>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[10px] uppercase tracking-wider font-medium text-text-muted">
+          Investigation
+        </span>
+        {steps.length > 1 && (
+          <button
+            onClick={() => setAllExpanded(v => !v)}
+            className="text-[10px] text-text-muted hover:text-text-primary transition-colors"
+          >
+            {allExpanded ? '▾ Collapse all' : '▸ Expand all'}
+          </button>
+        )}
+      </div>
 
       {/* Orchestrator starting indicator */}
       {running && runStarted && steps.length === 0 && !thinking && (
@@ -39,7 +52,7 @@ export function AgentTimeline({
 
       {/* Step cards */}
       {steps.map((s) => (
-        <StepCard key={s.step} step={s} />
+        <StepCard key={s.step} step={s} forceExpanded={allExpanded} />
       ))}
 
       {/* Thinking dots */}

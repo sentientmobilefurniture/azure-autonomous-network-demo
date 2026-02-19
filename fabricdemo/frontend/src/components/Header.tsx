@@ -1,7 +1,5 @@
 import { useState } from 'react';
-import { AgentBar } from './AgentBar';
-import { HealthButtonBar } from './HealthButtonBar';
-import { ServiceHealthPopover } from './ServiceHealthPopover';
+import { ServicesPanel } from './ServicesPanel';
 import { useScenario } from '../ScenarioContext';
 import { useTheme } from '../ThemeContext';
 import { HEADER_TOOLTIPS } from '../config/tooltips';
@@ -63,8 +61,6 @@ export function Header({ showTabs, onToggleTabs }: HeaderProps) {
   const SCENARIO = useScenario();
   const { theme, toggleTheme } = useTheme();
   const [healthOpen, setHealthOpen] = useState(false);
-  const [showAgents, setShowAgents] = useState(true);
-  const [showHealth, setShowHealth] = useState(true);
 
   return (
     <>
@@ -79,20 +75,41 @@ export function Header({ showTabs, onToggleTabs }: HeaderProps) {
           </span>
         </div>
         <div className="flex items-center gap-1.5 relative">
-          <ToggleBtn
-            label="Agents"
-            active={showAgents}
-            onClick={() => setShowAgents((v) => !v)}
-            icon={showAgents ? '👁' : '👁‍🗨'}
-            tooltip={showAgents ? HEADER_TOOLTIPS['agents-hide'] : HEADER_TOOLTIPS['agents-show']}
-          />
-          <ToggleBtn
-            label="Health"
-            active={showHealth}
-            onClick={() => setShowHealth((v) => !v)}
-            icon={showHealth ? '👁' : '👁‍🗨'}
-            tooltip={showHealth ? HEADER_TOOLTIPS['health-hide'] : HEADER_TOOLTIPS['health-show']}
-          />
+          {/* Portal quick-launch buttons */}
+          <a
+            href="https://ai.azure.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] px-2 py-0.5 rounded border border-purple-800/30
+                       bg-purple-800/10 text-purple-300 hover:bg-purple-800/20
+                       transition-colors select-none inline-flex items-center gap-1"
+            title={HEADER_TOOLTIPS['open-foundry']}
+          >
+            Open Foundry
+          </a>
+          <a
+            href="https://app.fabric.microsoft.com/home?experience=fabric-developer"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] px-2 py-0.5 rounded border border-emerald-800/30
+                       bg-emerald-800/10 text-emerald-300 hover:bg-emerald-800/20
+                       transition-colors select-none inline-flex items-center gap-1"
+            title={HEADER_TOOLTIPS['open-fabric']}
+          >
+            Open Fabric
+          </a>
+
+          {/* Services button — prominent with aggregate status */}
+          <button
+            onClick={() => setHealthOpen(!healthOpen)}
+            className="text-[10px] px-2.5 py-0.5 rounded border border-border
+                       hover:bg-neutral-bg3 transition-colors text-text-secondary
+                       font-medium inline-flex items-center gap-1.5"
+            title={HEADER_TOOLTIPS['services']}
+          >
+            ⚙ Services
+          </button>
+
           <ToggleBtn
             label="Tabs"
             active={showTabs}
@@ -101,27 +118,18 @@ export function Header({ showTabs, onToggleTabs }: HeaderProps) {
             tooltip={showTabs ? HEADER_TOOLTIPS['tabs-hide'] : HEADER_TOOLTIPS['tabs-show']}
           />
           <button
-            onClick={() => setHealthOpen(!healthOpen)}
-            className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-neutral-bg3 transition-colors text-text-muted"
-            title={HEADER_TOOLTIPS['services']}
-          >
-            ⚙ Services
-          </button>
-          <button
             onClick={toggleTheme}
             className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-neutral-bg3 transition-colors text-text-muted"
             title={theme === 'light' ? HEADER_TOOLTIPS['dark-mode'] : HEADER_TOOLTIPS['light-mode']}
           >
             {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
           </button>
-          <ServiceHealthPopover
+          <ServicesPanel
             open={healthOpen}
             onClose={() => setHealthOpen(false)}
           />
         </div>
       </header>
-      {showAgents && <AgentBar />}
-      {showHealth && <HealthButtonBar />}
     </>
   );
 }
