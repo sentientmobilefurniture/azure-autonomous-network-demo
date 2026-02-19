@@ -170,33 +170,58 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 return "AzureAISearch"
             return tc_type
 
-        def _extract_arguments(self, tc) -> str:
+        _THINKING_RE = re.compile(
+            r'\[ORCHESTRATOR_THINKING\](.*?)\[/ORCHESTRATOR_THINKING\]',
+            flags=re.DOTALL,
+        )
+
+        def _extract_arguments(self, tc) -> tuple[str, str]:
             """Parse and extract arguments from a tool call.
+
+            Returns (query, reasoning) tuple.
 
             BUG 1 fix: if parsed JSON is a dict with a single 'query' or
             'input' key, unwrap it to return just the value string.
+            Story 2: extracts [ORCHESTRATOR_THINKING] blocks as reasoning.
             """
             tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
             tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
             if tc_type != "connected_agent":
-                return ""
+                return "", ""
             ca = tc.connected_agent if hasattr(tc, "connected_agent") else tc.get("connected_agent", {})
             args_raw = getattr(ca, "arguments", None) or ca.get("arguments", None)
             if not args_raw:
-                return ""
+                return "", ""
             try:
                 obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
                 if isinstance(obj, str):
-                    return obj
-                if isinstance(obj, dict):
+                    raw = obj
+                elif isinstance(obj, dict):
                     # Unwrap single-key dicts like {"query": "..."} or {"input": "..."}
+                    raw = None
                     for key in ("query", "input"):
                         if key in obj and len(obj) == 1:
-                            return str(obj[key])
-                    return json.dumps(obj)
-                return json.dumps(obj)
+                            raw = str(obj[key])
+                            break
+                    if raw is None:
+                        raw = json.dumps(obj)
+                else:
+                    raw = json.dumps(obj)
             except Exception:
-                return str(args_raw)
+                raw = str(args_raw)
+
+            # --- Story 2: extract reasoning ---
+            reasoning = ""
+            query = raw
+            match = self._THINKING_RE.search(raw)
+            if match:
+                reasoning = match.group(1).strip()
+                if len(reasoning) > 500:
+                    reasoning = reasoning[:500] + "…"
+                query = raw[:match.start()] + raw[match.end():]
+                query = query.strip()
+
+            return query, reasoning
 
         def _parse_structured_output(self, agent_name: str, raw_output: str) -> tuple:
             """Parse sub-agent output into (summary_text, visualization_payload).
@@ -335,7 +360,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 if hasattr(step, "step_details") and hasattr(step.step_details, "tool_calls"):
                     for tc in step.step_details.tool_calls:
                         failed_agent = self._resolve_agent_name(tc)
-                        failed_query = self._extract_arguments(tc)
+                        failed_query, _ = self._extract_arguments(tc)
 
                 logger.error(
                     "Step FAILED: agent=%s  duration=%s  code=%s  error=%s\n  query=%s",
@@ -363,7 +388,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     self.ui_step += 1
 
                     agent_name = self._resolve_agent_name(tc)
-                    query = self._extract_arguments(tc)
+                    query, reasoning = self._extract_arguments(tc)
                     response = ""
                     visualization = None
 
@@ -405,6 +430,8 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     }
                     if visualization:
                         event_data["visualization"] = visualization
+                    if reasoning:
+                        event_data["reasoning"] = reasoning
 
                     _put("step_start", {"step": self.ui_step, "agent": agent_name})
                     _put("step_complete", event_data)
@@ -508,8 +535,9 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
 
                     # Check if the run succeeded with response text
                     if handler.response_text:
-                        # Success — emit the response and break
-                        _put("message", {"text": handler.response_text})
+                        # Success — strip any [ORCHESTRATOR_THINKING] tags and emit
+                        clean = SSEEventHandler._THINKING_RE.sub('', handler.response_text).strip()
+                        _put("message", {"text": clean})
                         break
                     else:
                         # Try to fetch messages — the run may have completed
@@ -522,7 +550,8 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                                     if hasattr(block, "text"):
                                         text += block.text.value + "\n"
                         if text:
-                            _put("message", {"text": text.strip()})
+                            clean = SSEEventHandler._THINKING_RE.sub('', text).strip()
+                            _put("message", {"text": clean})
                             break
 
                         # No response text AND no error means the run died silently

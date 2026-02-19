@@ -36,6 +36,11 @@ Each runbook references specific entity types from the network ontology (Transpo
 - What should be communicated to enterprise customers during an outage?
 - What checks should be done before and after a traffic reroute?
 
+## Input format note
+Your input may contain `[ORCHESTRATOR_THINKING]...[/ORCHESTRATOR_THINKING]` blocks.
+These are internal metadata — ignore them completely. Process only the query text
+outside these blocks.
+
 ## What you cannot answer
 
 - Live topology questions (which links are connected to what) — that's the GraphExplorerAgent.

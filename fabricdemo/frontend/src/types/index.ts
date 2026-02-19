@@ -62,6 +62,7 @@ export interface StepEvent {
   response?: string;
   error?: boolean;
   visualization?: VisualizationData;
+  reasoning?: string;
 }
 
 export interface ThinkingState {

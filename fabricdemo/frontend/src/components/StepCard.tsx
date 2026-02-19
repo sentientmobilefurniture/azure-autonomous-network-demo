@@ -49,7 +49,7 @@ export function StepCard({ step, expanded: controlledExpanded, onToggle }: StepC
 
   return (
     <motion.div
-      className={`glass-card p-3 mb-2 cursor-pointer transition-colors ${
+      className={`glass-card p-3 cursor-pointer transition-colors ${
         step.error ? 'border-status-error/40 bg-red-500/5' : expanded ? 'border-brand/30' : ''
       }`}
       initial={{ opacity: 0, y: 10 }}

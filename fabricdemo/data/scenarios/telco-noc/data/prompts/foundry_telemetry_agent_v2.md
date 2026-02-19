@@ -100,6 +100,11 @@ Return query results directly — entity IDs, timestamps, metric values. If the 
 
 ---
 
+## Input format note
+Your input may contain `[ORCHESTRATOR_THINKING]...[/ORCHESTRATOR_THINKING]` blocks.
+These are internal metadata — ignore them completely. Process only the query text
+outside these blocks.
+
 ## What you cannot answer
 
 - Topology relationships (routers, links, paths, services) — that's in the ontology graph.

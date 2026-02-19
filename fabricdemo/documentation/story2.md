@@ -1,5 +1,14 @@
 # Story 2 — Orchestrator Reasoning / "Orchestrator Thoughts" Box
 
+> **Audit Status: REVIEWED** — Audited against live codebase on 2026-02-19, post-Story 1 execution.
+> Plan is architecturally sound. Critical corrections applied:
+> 1. **Story 1 state acknowledged** — `orchestrator.py` now has `_parse_structured_output()`, `_extract_arguments()` unwraps single-key dicts, `step_complete` SSE includes `visualization`, `StepEvent` has `visualization?` field, `InteractionStep` already has `reasoning` placeholder
+> 2. **Expand-all/collapse-all EXISTS** — `AgentTimeline` has `expandAll()`/`collapseAll()` using `expandedSteps` dict; `StepCard` uses `expanded`/`onToggle` props (not `forceExpanded`). `OrchestratorThoughts` must follow this same pattern.
+> 3. **AUDIT-2 was wrong** — rewritten. Phase 3A/3B/3C corrected for actual expand/collapse pattern.
+> 4. **Line numbers updated** — `_extract_arguments()` now at L173–199, call sites at L338/L366, message emission at L512/L525 (shifted by Story 1's `_parse_structured_output()` addition at L201–305)
+> 5. **Bug 2 pre-resolved** — `reasoning: str | None = None` already in `InteractionStep` (Story 1 added as forward-compatibility)
+> 6. **telco-noc Story 1 gaps noted** — Story 1 missed applying `## Response Format` to 3 of 4 telco-noc sub-agent prompts; Story 2 guard clauses needed in all files regardless
+
 ## Vision
 
 Before each sub-agent delegation, the orchestrator explains **why** it's calling that agent and what information it hopes to learn. This reasoning is extracted and displayed in a collapsible "Orchestrator Thoughts..." box above each step card in the Investigation timeline.
@@ -48,8 +57,8 @@ Before each sub-agent delegation, the orchestrator explains **why** it's calling
 2. At runtime, only the user's alert text is sent as a thread message.
 3. The orchestrator LLM decides to delegate → produces a `connected_agent` tool call with **arguments** (the query for the sub-agent).
 4. The Azure AI Agents SDK invokes the sub-agent with those arguments **opaquely** — we cannot intercept or modify them in-flight.
-5. `orchestrator.py`'s `_extract_arguments()` reads `tc.connected_agent.arguments` to get the query string.
-6. The query is forwarded as `step.query` in the `step_complete` SSE event.
+5. `orchestrator.py`'s `_extract_arguments()` (L173) reads `tc.connected_agent.arguments` to get the query string. **Post-Story 1:** Now also unwraps single-key dicts (`{"query": "..."}` → bare value).
+6. The query is forwarded as `step.query` in the `step_complete` SSE event. **Post-Story 1:** The event also includes an optional `visualization` field (parsed from sub-agent structured output via `_parse_structured_output()`, L201–305).
 
 ### The problem
 
@@ -172,8 +181,11 @@ Add this to all sub-agent prompts in both scenarios. **Re-provision ALL agents**
 
 #### 2A. Extend `StepEvent` type
 
+> **Post-Story 1:** `StepEvent` already has `visualization?: VisualizationData` (added by Story 1).
+> The only change needed is adding `reasoning`.
+
 ```ts
-// types/index.ts
+// types/index.ts — ADD reasoning field to existing StepEvent
 export interface StepEvent {
     step: number;
     agent: string;
@@ -181,34 +193,19 @@ export interface StepEvent {
     query?: string;
     response?: string;
     error?: boolean;
-    reasoning?: string;  // NEW — orchestrator's thinking before this step
+    visualization?: VisualizationData;  // ← already exists (Story 1)
+    reasoning?: string;                 // ← NEW for Story 2
 }
 ```
 
 #### 2B. Update `useInvestigation` hook
 
-In the `step_complete` SSE handler, parse the `reasoning` field:
-
-```ts
-// hooks/useInvestigation.ts — in the switch case for "step_complete"
-case 'step_complete': {
-    const s: StepEvent = {
-        step: d.step,
-        agent: d.agent,
-        duration: d.duration,
-        query: d.query,
-        response: d.response,
-        error: d.error,
-        reasoning: d.reasoning || '',  // NEW
-    };
-    setSteps(prev => [...prev, s]);
-    break;
-}
+> **No code change needed.** The current hook simply casts: `setSteps((prev) => [...prev, data as StepEvent])` (line 73). Since the backend SSE payload will include `reasoning` once Phase 1B is implemented, the cast picks it up automatically. TypeScript type assertion preserves all properties.
 ```
 
 #### 2C. Update `Interaction` persistence
 
-The `reasoning` field is already part of `StepEvent`, which is stored in `Interaction.steps[]`. No schema change needed — it will be persisted automatically when interactions are saved. Past interactions loaded from the sidebar will show reasoning if it was captured at investigation time.
+> **Pre-resolved by Story 1.** The `reasoning` field is already declared in `InteractionStep` in `graph-query-api/models.py` (line 96: `reasoning: str | None = None  # Story 2 compatibility`). No model change needed — it was added as forward-compatibility during Story 1. When `reasoning` is included in `step_complete` SSE events, it flows through `StepEvent` → `saveInteraction()` → `InteractionStep.model_dump()` → Cosmos DB automatically.
 
 ---
 
@@ -226,12 +223,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 interface Props {
     reasoning: string;
-    forceExpanded?: boolean;
+    expanded?: boolean;    // controlled by AgentTimeline (matches StepCard pattern)
+    onToggle?: () => void; // controlled by AgentTimeline (matches StepCard pattern)
 }
 
-export function OrchestratorThoughts({ reasoning, forceExpanded }: Props) {
+export function OrchestratorThoughts({ reasoning, expanded: controlledExpanded, onToggle }: Props) {
     const [localExpanded, setLocalExpanded] = useState(false);
-    const expanded = forceExpanded ?? localExpanded;
+    const expanded = controlledExpanded ?? localExpanded;
+    const toggleExpanded = onToggle ?? (() => setLocalExpanded((v) => !v));
 
     if (!reasoning) return null;
 
@@ -242,7 +241,7 @@ export function OrchestratorThoughts({ reasoning, forceExpanded }: Props) {
                        hover:border-brand/25 hover:bg-brand/[0.06]
                        focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1
                        transition-all"
-            onClick={() => setLocalExpanded(v => !v)}
+            onClick={() => toggleExpanded()}
             aria-expanded={expanded}
             aria-label="Orchestrator reasoning for this step"
         >
@@ -296,7 +295,7 @@ export function OrchestratorThoughts({ reasoning, forceExpanded }: Props) {
 | **`mb-0`** (no bottom margin) | The connector line between thoughts and step card handles spacing. |
 | **`focus-visible:ring-2 ring-brand`** | Matches the global focus style from `globals.css` |
 | **No CopyButton** | Reasoning is 1-2 sentences of context — too short and too contextual to warrant copying |
-| **`forceExpanded` prop** | Allows "Expand all" in AgentTimeline to control this component |
+| **`expanded`/`onToggle` props** | Matches the exact pattern used by `StepCard` (`expanded?: boolean`, `onToggle?: () => void`). Allows `AgentTimeline` to manage expand/collapse state centrally via `expandedSteps` dict, and makes "Expand All" / "Collapse All" work for both StepCards and OrchestratorThoughts. Falls back to local `useState` when props are not provided. |
 
 **Reduced motion support:**
 ```tsx
@@ -308,26 +307,64 @@ const variants = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 #### 3B. Integrate into `AgentTimeline`
 
-In `AgentTimeline.tsx`, render `<OrchestratorThoughts>` + connector line + `<StepCard>` as a visual group:
+In `AgentTimeline.tsx`, render `<OrchestratorThoughts>` + connector line + `<StepCard>` as a visual group.
+
+> **Post-Story 1:** `AgentTimeline` already has an `expandedSteps` state dict, `expandAll()`, `collapseAll()`, and passes `expanded`/`onToggle` props to `StepCard`. We extend this same pattern to `OrchestratorThoughts` using a parallel `expandedThoughts` dict (keyed by `"t-" + step.step` to avoid collision with step keys).
 
 ```tsx
-// components/AgentTimeline.tsx — in the steps map
+// components/AgentTimeline.tsx — changes needed
 
-{steps.map((step, i) => (
-    <div key={step.step} className="mb-2">
+// 1. Add new state for thought expansion (alongside existing expandedSteps):
+const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
+
+const toggleThought = useCallback((stepNum: number) => {
+    const key = `t-${stepNum}`;
+    setExpandedThoughts((prev) => ({ ...prev, [key]: !prev[key] }));
+}, []);
+
+// 2. Update expandAll/collapseAll to include thoughts:
+const expandAll = useCallback(() => {
+    const allSteps: Record<number, boolean> = {};
+    const allThoughts: Record<string, boolean> = {};
+    for (const s of steps) {
+        allSteps[s.step] = true;
+        if (s.reasoning) allThoughts[`t-${s.step}`] = true;
+    }
+    setExpandedSteps(allSteps);
+    setExpandedThoughts(allThoughts);
+}, [steps]);
+
+const collapseAll = useCallback(() => {
+    setExpandedSteps({});
+    setExpandedThoughts({});
+}, []);
+
+// 3. Update allExpanded check to include thoughts:
+const allExpanded = steps.length > 0
+    && steps.every((s) => expandedSteps[s.step])
+    && steps.filter((s) => s.reasoning).every((s) => expandedThoughts[`t-${s.step}`]);
+
+// 4. Render loop:
+{steps.map((s) => (
+    <div key={s.step} className="mb-2">
         {/* Reasoning box (renders null if no reasoning) */}
-        {step.reasoning && (
+        {s.reasoning && (
             <>
                 <OrchestratorThoughts
-                    reasoning={step.reasoning}
-                    forceExpanded={allExpanded}
+                    reasoning={s.reasoning}
+                    expanded={expandedThoughts[`t-${s.step}`] ?? false}
+                    onToggle={() => toggleThought(s.step)}
                 />
                 {/* Visual connector: thin vertical line linking thought to its step */}
                 <div className="ml-4 h-1.5 border-l-2 border-brand/20" aria-hidden="true" />
             </>
         )}
         {/* Step card */}
-        <StepCard step={step} forceExpanded={allExpanded} />
+        <StepCard
+            step={s}
+            expanded={expandedSteps[s.step] ?? false}
+            onToggle={() => toggleStep(s.step)}
+        />
     </div>
 ))}
 ```
@@ -349,17 +386,18 @@ The connector line (`border-l-2 border-brand/20`, height `6px`, left-aligned at 
 
 #### 3C. Interaction with "Expand all / Collapse all"
 
+> **Post-Story 1:** `AgentTimeline` already has "Expand All" / "Collapse All" using `expandedSteps`. The `expandAll()`/`collapseAll()` callbacks updated in Phase 3B now also control `expandedThoughts`. The `allExpanded` check now includes both step and thought expansion state.
+
 When the user clicks "Expand all":
 - All StepCards expand (existing behavior)
 - All OrchestratorThoughts boxes also expand
-- Pass `forceExpanded` prop (same pattern as StepCard)
-
-This is already built into the component (see `forceExpanded` prop in 3A).
+- Both use the same `expanded`/`onToggle` prop pattern
 
 **Edge case — independent collapse after "Expand all":**
-- After "Expand all", clicking an individual OrchestratorThoughts box should collapse just that one
-- The `forceExpanded ?? localExpanded` pattern handles this: when `forceExpanded` is `true`, it overrides. When the user clicks "Collapse all" (`forceExpanded` becomes `false`), the component falls back to `localExpanded`.
-- Reset `localExpanded` to `false` when `forceExpanded` transitions from `true` to `false` (use `useEffect` to sync).
+- After "Expand all", clicking an individual OrchestratorThoughts box collapses just that one (via `toggleThought()`)
+- The parent controls expansion via `expandedThoughts` dict — no `forceExpanded ?? localExpanded` ambiguity
+- "Collapse All" sets both dicts to `{}`, restoring all to collapsed
+- The `allExpanded` check updates correctly: if any thought is independently collapsed, the toggle shows "▾ Expand All" again
 
 ---
 
@@ -431,16 +469,20 @@ Phase 1A + 1D  →  Re-provision ALL agents  →  Phase 1B  →  Phase 1C     (b
 |------|--------|
 | `data/scenarios/telco-noc/data/prompts/foundry_orchestrator_agent.md` | Add `## Reasoning annotations` section (instruct orchestrator to include `[ORCHESTRATOR_THINKING]` in tool call arguments) |
 | `data/scenarios/telecom-playground/data/prompts/foundry_orchestrator_agent.md` | Same prompt update |
-| `data/scenarios/telco-noc/data/prompts/foundry_graph_explorer_agent.md` | Add "ignore `[ORCHESTRATOR_THINKING]` blocks in input" guard |
-| `data/scenarios/telco-noc/data/prompts/foundry_telemetry_agent.md` | Same guard |
+| `data/scenarios/telco-noc/data/prompts/graph_explorer/core_instructions.md` | Add `[ORCHESTRATOR_THINKING]` guard clause |
+| `data/scenarios/telco-noc/data/prompts/foundry_telemetry_agent_v2.md` | Same guard |
 | `data/scenarios/telco-noc/data/prompts/foundry_runbook_kb_agent.md` | Same guard |
 | `data/scenarios/telco-noc/data/prompts/foundry_historical_ticket_agent.md` | Same guard |
-| `api/app/orchestrator.py` | Change `_extract_arguments()` to return `(query, reasoning)` tuple; parse and strip `[ORCHESTRATOR_THINKING]` blocks; include `reasoning` in `step_complete` SSE; strip from final message before emitting `message` event |
-| `frontend/src/types/index.ts` | Add `reasoning?: string` to `StepEvent` |
-| `frontend/src/hooks/useInvestigation.ts` | Parse `reasoning` from `step_complete` SSE event |
-| `frontend/src/components/AgentTimeline.tsx` | Render `<OrchestratorThoughts>` above each `<StepCard>`; add wrapper div with `mb-2`; remove `mb-2` from StepCard |
+| `data/scenarios/telecom-playground/data/prompts/graph_explorer/core_instructions.md` | Same guard |
+| `data/scenarios/telecom-playground/data/prompts/foundry_telemetry_agent_v2.md` | Same guard |
+| `data/scenarios/telecom-playground/data/prompts/foundry_runbook_kb_agent.md` | Same guard |
+| `data/scenarios/telecom-playground/data/prompts/foundry_historical_ticket_agent.md` | Same guard |
+| `api/app/orchestrator.py` | Change `_extract_arguments()` (L173) to return `(query, reasoning)` tuple; update 2 call sites (L338, L366); include `reasoning` in `step_complete` SSE; strip from both `message` emission paths (L512, L525) |
+| `frontend/src/types/index.ts` | Add `reasoning?: string` to `StepEvent` (alongside existing `visualization?`) |
+| `frontend/src/hooks/useInvestigation.ts` | No change needed (direct `data as StepEvent` cast handles new field) |
+| `frontend/src/components/AgentTimeline.tsx` | Add `expandedThoughts` state + `toggleThought()`; update `expandAll()`/`collapseAll()` to include thoughts; render `<OrchestratorThoughts>` above each `<StepCard>` with wrapper div; move `mb-2` from StepCard to wrapper |
 | `frontend/src/components/StepCard.tsx` | Remove `mb-2` from outer `motion.div` (moved to AgentTimeline wrapper) |
-| `graph-query-api/models.py` | Add `reasoning: str | None = None` to `InteractionStep` |
+| `graph-query-api/models.py` | No change needed — `reasoning: str \| None = None` already present (Story 1 forward-compatibility) |
 
 ---
 
@@ -502,8 +544,11 @@ Despite the earlier analysis saying this wouldn't work, it CAN work with mitigat
 
 ```python
 def _extract_arguments(self, tc) -> tuple[str, str]:
-    """Returns (query, reasoning)."""
-    # --- existing extraction logic ---
+    """Returns (query, reasoning).
+    
+    Post-Story 1: includes BUG 1 fix (single-key dict unwrapping).
+    Story 2 addition: reasoning extraction from [ORCHESTRATOR_THINKING] blocks.
+    """
     tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
     tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
     if tc_type != "connected_agent":
@@ -514,14 +559,25 @@ def _extract_arguments(self, tc) -> tuple[str, str]:
         return "", ""
     try:
         obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-        raw = obj if isinstance(obj, str) else json.dumps(obj)
+        if isinstance(obj, str):
+            raw = obj
+        elif isinstance(obj, dict):
+            # BUG 1 fix: unwrap single-key dicts like {"query": "..."}
+            for key in ("query", "input"):
+                if key in obj and len(obj) == 1:
+                    raw = str(obj[key])
+                    break
+            else:
+                raw = json.dumps(obj)
+        else:
+            raw = json.dumps(obj)
     except Exception:
         raw = str(args_raw)
-    # --- end existing logic ---
+
+    # --- Story 2 addition: extract reasoning ---
     reasoning = ""
     query = raw
     
-    # Extract [ORCHESTRATOR_THINKING] block if present
     import re
     match = re.search(
         r'\[ORCHESTRATOR_THINKING\](.*?)\[/ORCHESTRATOR_THINKING\]',
@@ -558,11 +614,11 @@ The thread will contain ALL assistant messages, including any intermediate text 
 
 **Recommendation:** **Option 2** is the most pragmatic. The sub-agent prompt guard is low-risk (tested in similar multi-agent setups), and it requires no extra API calls. Option 4 is the fallback if Option 2 causes sub-agent confusion.
 
-### BUG 2: `InteractionStep` drops `reasoning` field
+### BUG 2: ~~`InteractionStep` drops `reasoning` field~~ (PRE-RESOLVED)
 
 **Where:** `graph-query-api/models.py` → `InteractionStep`
 
-Same as Story 1 Bug 2. The Pydantic model silently drops unknown fields. Must add `reasoning: str | None = None` to persist reasoning in saved interactions.
+**Pre-resolved by Story 1.** The `reasoning: str | None = None` field was added during Story 1 implementation as forward-compatibility (line 96: `# Story 2 compatibility`). No action needed.
 
 ### BUG 3: No `on_end` callback exists on the handler
 
@@ -597,45 +653,35 @@ Each retry creates a new `SSEEventHandler()` with `ui_step = 0`. If attempt 1 em
 
 ### BUG 5: `_extract_arguments` return type changes (breaking)
 
-**Where:** `orchestrator.py` → `_extract_arguments()`
+**Where:** `orchestrator.py` → `_extract_arguments()` (L173)
 
-If we change `_extract_arguments()` to return `tuple[str, str]` (query, reasoning), every call site breaks. Currently there are 3 call sites:
-1. Line ~174: `failed_query = self._extract_arguments(tc)` (in the failed step handler)
-2. Line ~185: `query = self._extract_arguments(tc)` (in the completed step handler)
+If we change `_extract_arguments()` to return `tuple[str, str]` (query, reasoning), every call site breaks. There are exactly **2 call sites**:
+1. **L338**: `failed_query = self._extract_arguments(tc)` (in the failed `tool_calls` step handler)
+2. **L366**: `query = self._extract_arguments(tc)` (in the completed `tool_calls` step handler)
 
-**Fix:** Either:
-1. Use a different method name: `_extract_arguments_with_reasoning()` that returns a tuple, and keep `_extract_arguments()` unchanged.
-2. Or update all 3 call sites to unpack: `query, reasoning = self._extract_arguments(tc)`.
+**Fix:** Update both call sites to unpack: `query, reasoning = self._extract_arguments(tc)`. For the failed step handler, `reasoning` is discarded (failed steps don't get a reasoning box).
 
-### BUG 6: `forceExpanded ?? localExpanded` doesn't work as expected
+> **Note:** The current `_extract_arguments()` already includes the BUG 1 fix from Story 1 (single-key dict unwrapping). The reasoning extraction must be added on top of this existing logic.
 
-**Where:** `OrchestratorThoughts.tsx`
+### ~~BUG 6: `forceExpanded ?? localExpanded` doesn't work as expected~~ (OBSOLETE)
 
-The plan says `forceExpanded ?? localExpanded` handles "Expand all" → individual collapse. But `??` (nullish coalescing) only falls through on `null` or `undefined`. When `allExpanded` is `false` (Collapse all), `forceExpanded` is `false`, so `false ?? localExpanded` evaluates to `false` — the user can never independently expand an item after Collapse All.
+**Original analysis was based on a `forceExpanded` pattern that does not exist.** Post-Story 1, `StepCard` uses `expanded`/`onToggle` controlled props managed by `AgentTimeline`'s `expandedSteps` dict. The corrected `OrchestratorThoughts` component (Phase 3A) follows this same pattern with `expanded`/`onToggle` props and a parallel `expandedThoughts` dict.
 
-**Fix:** The parent should pass `forceExpanded={allExpanded || undefined}`:
-```tsx
-<OrchestratorThoughts
-    reasoning={step.reasoning}
-    forceExpanded={allExpanded || undefined}
-/>
-```
+The parent (`AgentTimeline`) fully controls expansion state. There is no `forceExpanded ?? localExpanded` ambiguity:
+- `expandAll()` sets all keys to `true` in both `expandedSteps` and `expandedThoughts`
+- `collapseAll()` sets both dicts to `{}`
+- Individual toggle modifies only the clicked item's key
+- `allExpanded` check covers both dicts
 
-When `allExpanded` is `true`, `forceExpanded` is `true` (override). When `allExpanded` is `false`, `forceExpanded` is `undefined` (fall through to `localExpanded`).
-
-**However**, check how the existing `StepCard` handles this — it has the same `forceExpanded` pattern:
-```tsx
-const expanded = forceExpanded ?? localExpanded;
-```
-If StepCard has the same bug, it's existing behavior and may be intentional. Verify before fixing.
+No fix needed — the pattern is correct as designed in Phase 3B.
 
 ### BUG 7: Spacing conflict — `mb-2` on StepCard vs. wrapper
 
 **Where:** `AgentTimeline.tsx` → `StepCard.tsx`
 
-The plan says to move `mb-2` from StepCard to the wrapper `<div>`. But StepCard's `mb-2` is baked into the `motion.div` className. If we add `mb-2` to the wrapper AND forget to remove it from StepCard, we get `mb-4` effective spacing (double margin).
+The plan says to move `mb-2` from StepCard to the wrapper `<div>`. StepCard's `mb-2` is baked into the `motion.div` className at line 55. If we add `mb-2` to the wrapper AND forget to remove it from StepCard, we get `mb-4` effective spacing (double margin).
 
-**Fix:** Explicitly remove `mb-2` from `StepCard.tsx` line 40 when adding the wrapper. Or use `gap-2` on a flex column instead of margins.
+**Fix:** Explicitly remove `mb-2` from `StepCard.tsx` line 55 when adding the wrapper. Or use `gap-2` on a flex column instead of margins.
 
 ### BUG 8: Thread safety is fine — not a real issue
 
@@ -665,7 +711,7 @@ No fix needed.
 
 ## Codebase Audit Addendum
 
-> *Added after auditing the plan against the live codebase at `/home/hanchoong/projects/autonomous-network-demo/fabricdemo/`. Each item is a discrepancy between what the plan assumes and what actually exists, and includes the corrected approach.*
+> *Added after auditing the plan against the live codebase at `/home/hanchoong/backup/azure-autonomous-network-demo/fabricdemo/`. Each item is a discrepancy between what the plan assumes and what actually exists, and includes the corrected approach. Re-audited post-Story 1 execution.*
 
 ### AUDIT-1: Sub-agent prompt file names are wrong
 
@@ -676,6 +722,8 @@ No fix needed.
 **Reality:**
 - `foundry_graph_explorer_agent.md` **does not exist**. The graph explorer prompt is composed from 3 files: `graph_explorer/core_instructions.md`, `graph_explorer/core_schema.md`, `graph_explorer/language_{backend}.md`. The guard clause should go in `graph_explorer/core_instructions.md`.
 - `foundry_telemetry_agent.md` **does not exist**. The actual file is `foundry_telemetry_agent_v2.md`.
+
+> **⚠ telco-noc Story 1 gap:** Story 1 applied `## Response Format` to all 4 telecom-playground sub-agent prompts but only 1 of 4 telco-noc sub-agent prompts (`foundry_telemetry_agent_v2.md`). Missing from telco-noc: `graph_explorer/core_instructions.md`, `foundry_runbook_kb_agent.md`, `foundry_historical_ticket_agent.md`. That's 5 of 8 total sub-agent prompts instrumented. The Story 2 `[ORCHESTRATOR_THINKING]` guard clause must be added to ALL 8 files regardless of this gap.
 
 **Corrected file list for Phase 1D (both scenarios):**
 
@@ -688,92 +736,30 @@ No fix needed.
 
 That's **8 files total** (4 agents × 2 scenarios), not the 4 listed in the plan.
 
-### AUDIT-2: `forceExpanded` / expand-all pattern does NOT exist
+### AUDIT-2: ~~`forceExpanded` / expand-all pattern does NOT exist~~ (CORRECTED — it DOES exist)
 
-**Plan assumes (Phase 3A, 3B, 3C, Bug 6):**
-- `StepCard` accepts a `forceExpanded` prop
-- `AgentTimeline` has an "Expand all / Collapse all" toggle and passes `allExpanded` to children
+**Original AUDIT-2 was wrong.** Post-Story 1, `AgentTimeline` **does** have expand-all/collapse-all functionality.
 
-**Reality:**
-- `StepCard` only accepts `{ step: StepEvent }`. No `forceExpanded` prop. Expansion is purely local `useState`.
-- `AgentTimeline` has no expand-all / collapse-all functionality whatsoever.
-- There is no `allExpanded` state anywhere in the codebase.
+**Actual state:**
+- `AgentTimeline` has `expandedSteps` state dict (line 23), `toggleStep()` (line 25), `expandAll()` (line 29), `collapseAll()` (line 35), and an `allExpanded` computed value (line 38).
+- A toggle button (line 53) switches between "▴ Collapse All" and "▾ Expand All".
+- `StepCard` accepts `expanded?: boolean` and `onToggle?: () => void` props (line 10–13), with fallback to local `useState` (line 17–18).
+- `StepCard` does **NOT** have a `forceExpanded` prop. It uses `controlledExpanded` (named `expanded`) with `?? localExpanded` fallback.
 
 **Impact:**
-- Phase 3A: Remove `forceExpanded` prop from `OrchestratorThoughts`. Use only local `useState` for expand/collapse.
-- Phase 3B: Remove `forceExpanded={allExpanded}` from the template. Just render `<OrchestratorThoughts reasoning={step.reasoning} />`.
-- Phase 3C: **Entire section is invalid** — there's no expand-all feature to integrate with. Drop Phase 3C entirely.
-- Bug 6: **Irrelevant** — no `forceExpanded` to fix.
-- Open Question 1 (expand with parent StepCard): Also irrelevant — StepCard has no `forceExpanded` either.
-
-**If expand-all is desired later**, it should be a separate story that adds the feature to *both* `StepCard` and `OrchestratorThoughts` simultaneously.
-
-**Corrected `OrchestratorThoughts` component:**
-
-```tsx
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-
-interface Props {
-    reasoning: string;
-}
-
-export function OrchestratorThoughts({ reasoning }: Props) {
-    const [expanded, setExpanded] = useState(false);
-
-    if (!reasoning) return null;
-
-    return (
-        <button
-            className="glass-card w-full text-left mb-0 cursor-pointer
-                       border-brand/15 bg-brand/[0.03]
-                       hover:border-brand/25 hover:bg-brand/[0.06]
-                       focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1
-                       transition-all"
-            onClick={() => setExpanded(v => !v)}
-            aria-expanded={expanded}
-            aria-label="Orchestrator reasoning for this step"
-        >
-            <div className="flex items-center justify-between px-3 py-1.5">
-                <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-brand/60">◇</span>
-                    <span className="text-[11px] font-medium text-text-muted">
-                        Orchestrator Thoughts{expanded ? '' : '...'}
-                    </span>
-                </div>
-                <span className="text-[10px] text-text-muted">
-                    {expanded ? '▾' : '▸'}
-                </span>
-            </div>
-            <AnimatePresence>
-                {expanded && (
-                    <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="overflow-hidden"
-                    >
-                        <div className="px-3 pb-2 pt-0.5">
-                            <p className="text-[11px] text-text-secondary leading-relaxed italic">
-                                "{reasoning}"
-                            </p>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </button>
-    );
-}
-```
+- Phase 3A: `OrchestratorThoughts` must use the same `expanded`/`onToggle` prop pattern (corrected in plan above).
+- Phase 3B: `AgentTimeline` needs a parallel `expandedThoughts` dict and `toggleThought()` callback; `expandAll()`/`collapseAll()` updated to include thoughts.
+- Phase 3C: **Valid and necessary** — expand-all must control both StepCards and OrchestratorThoughts.
+- Bug 6: **Obsolete** — the `expanded`/`onToggle` pattern managed by parent state has no `forceExpanded ?? localExpanded` ambiguity.
+- Open Question 1 (expand with parent StepCard): Possible but independent — thoughts and steps have separate expansion state.
 
 ### AUDIT-3: Bug 5 call-site count is wrong
 
 **Plan says:** "3 call sites" for `_extract_arguments()`.
 
 **Reality:** There are exactly **2 call sites**:
-1. **L214** — failed `tool_calls` step: `failed_query = self._extract_arguments(tc)`
-2. **L247** — completed `tool_calls` step: `query = self._extract_arguments(tc)`
+1. **L338** — failed `tool_calls` step: `failed_query = self._extract_arguments(tc)`
+2. **L366** — completed `tool_calls` step: `query = self._extract_arguments(tc)`
 
 **Impact:** Bug 5 fix is still correct — update both call sites to unpack the tuple. Just fewer than expected.
 
@@ -781,10 +767,10 @@ export function OrchestratorThoughts({ reasoning }: Props) {
 
 **Plan Phase 1C** only shows stripping `[ORCHESTRATOR_THINKING]` from `handler.response_text` before emitting `message`.
 
-**Reality:** `_thread_target()` emits the `message` event from **two different code paths**:
+**Reality:** `_thread_target()` (L425) emits the `message` event from **two different code paths**:
 
-1. **L385:** `_put("message", {"text": handler.response_text})` — normal path
-2. **L395:** `_put("message", {"text": text.strip()})` — fallback path that fetches thread messages via `agents_client.messages.list()`
+1. **L512:** `_put("message", {"text": handler.response_text})` — normal path (after `stream.until_done()`)
+2. **L525:** `_put("message", {"text": text.strip()})` — fallback path that fetches thread messages via `agents_client.messages.list()`
 
 Both paths must strip `[ORCHESTRATOR_THINKING]` blocks. The fallback path fetches raw thread messages which may contain reasoning tags (especially if the LLM includes them in intermediate messages).
 
@@ -803,12 +789,12 @@ def _strip_reasoning(text: str) -> str:
 
 Apply `_strip_reasoning()` at both emission points:
 ```python
-# Path 1 (L385):
+# Path 1 (L512):
 if handler.response_text:
     _put("message", {"text": _strip_reasoning(handler.response_text)})
     break
 
-# Path 2 (L395):
+# Path 2 (L525):
 if text:
     _put("message", {"text": _strip_reasoning(text.strip())})
     break
@@ -824,7 +810,7 @@ if text:
 
 ### AUDIT-6: Updated "Files Changed" table
 
-**Corrected list of modified files:**
+**Corrected list of modified files (post-Story 1 re-audit):**
 
 | File | Change |
 |------|--------|
@@ -838,21 +824,23 @@ if text:
 | `data/scenarios/telecom-playground/data/prompts/foundry_telemetry_agent_v2.md` | Same guard |
 | `data/scenarios/telecom-playground/data/prompts/foundry_runbook_kb_agent.md` | Same guard |
 | `data/scenarios/telecom-playground/data/prompts/foundry_historical_ticket_agent.md` | Same guard |
-| `api/app/orchestrator.py` | `_extract_arguments()` → tuple return; extract reasoning; include in `step_complete` SSE; strip from both `message` emission paths |
-| `frontend/src/types/index.ts` | Add `reasoning?: string` to `StepEvent` |
-| `frontend/src/hooks/useInvestigation.ts` | No change needed (direct cast handles new field) |
-| `frontend/src/components/OrchestratorThoughts.tsx` | **New file** — collapsible reasoning box (no `forceExpanded` prop) |
-| `frontend/src/components/AgentTimeline.tsx` | Render `<OrchestratorThoughts>` above each `<StepCard>` |
-| `frontend/src/components/StepCard.tsx` | Remove `mb-2` from outer `motion.div` (moved to AgentTimeline wrapper) |
-| `graph-query-api/models.py` | Add `reasoning: str | None = None` to `InteractionStep` |
+| `api/app/orchestrator.py` | `_extract_arguments()` (L173) → tuple return; update 2 call sites (L338, L366); extract reasoning; include in `step_complete` SSE; strip from both `message` emission paths (L512, L525) |
+| `frontend/src/types/index.ts` | Add `reasoning?: string` to `StepEvent` (alongside existing `visualization?`) |
+| `frontend/src/hooks/useInvestigation.ts` | No change needed (direct `data as StepEvent` cast handles new field) |
+| `frontend/src/components/OrchestratorThoughts.tsx` | **New file** — collapsible reasoning box with `expanded`/`onToggle` props (matching StepCard pattern) |
+| `frontend/src/components/AgentTimeline.tsx` | Add `expandedThoughts` state + `toggleThought()`; update `expandAll()`/`collapseAll()` to include thoughts; render `<OrchestratorThoughts>` above each `<StepCard>` with wrapper div |
+| `frontend/src/components/StepCard.tsx` | Remove `mb-2` from outer `motion.div` (L55) (moved to AgentTimeline wrapper) |
+| `graph-query-api/models.py` | No change needed — `reasoning: str \| None = None` already present (Story 1 added at L96) |
 
 ### AUDIT-7: Revised sprint breakdown
 
 | Sprint | Scope | Effort |
 |--------|-------|--------|
-| **S1** | Prompt update (orchestrator + 8 sub-agent prompt files) + re-provision ALL agents + test reasoning block production | ~1.5 hrs |
-| **S2** | `orchestrator.py` — `_extract_arguments()` tuple return (2 call sites), reasoning extraction, `step_complete` SSE emission, strip from both message paths | ~2 hrs |
-| **S3** | Frontend types + `OrchestratorThoughts` component (no `forceExpanded`) + AgentTimeline integration + StepCard `mb-2` removal | ~1.5 hrs |
-| **S4** | `InteractionStep` model update + edge case testing | ~1 hr |
+| **S1** | Prompt update (2 orchestrator + 8 sub-agent prompt files) + re-provision ALL agents + test reasoning block production | ~1.5 hrs |
+| **S2** | `orchestrator.py` — `_extract_arguments()` tuple return (2 call sites), reasoning extraction, `step_complete` SSE emission, strip from both message paths (L512, L525) | ~2 hrs |
+| **S3** | Frontend types (`reasoning` on `StepEvent`) + `OrchestratorThoughts` component (`expanded`/`onToggle` pattern) + AgentTimeline integration (`expandedThoughts` state, `expandAll`/`collapseAll` update) + StepCard `mb-2` removal | ~1.5 hrs |
+| **S4** | Edge case testing (reasoning extraction, sub-agent guard verification, expand-all integration) | ~1 hr |
 
-**Total estimated effort: ~6 hours** (unchanged, but work redistribution is more accurate)
+**Total estimated effort: ~6 hours**
+
+> **Note:** `InteractionStep` model update (previously S4) is no longer needed — Story 1 already added `reasoning: str | None = None`.
