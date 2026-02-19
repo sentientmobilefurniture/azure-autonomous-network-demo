@@ -58,6 +58,7 @@ export interface StepEvent {
   step: number;
   agent: string;
   duration?: string;
+  timestamp?: string;
   query?: string;
   response?: string;
   error?: boolean;
@@ -173,8 +174,7 @@ export interface ChatMessage {
   text?: string;
 
   // Orchestrator messages
-  steps?: StepEvent[];
-  thinking?: string[];
+  steps?: StepEvent[];           // reasoning lives on each step.reasoning
   diagnosis?: string;
   runMeta?: RunMeta;
   status?: 'thinking' | 'investigating' | 'complete' | 'error';

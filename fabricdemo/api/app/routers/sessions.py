@@ -141,3 +141,29 @@ async def send_follow_up(session_id: str, req: FollowUpRequest):
 
     await session_manager.continue_session(session, req.text)
     return {"status": "processing", "turn": session.turn_count}
+
+
+@router.delete("/{session_id}")
+async def delete_session(session_id: str, scenario: str = Query(default="")):
+    """Delete a session from in-memory cache and Cosmos DB."""
+    session = session_manager.get(session_id)
+    if session:
+        # Cancel if running
+        if session.status == SessionStatus.IN_PROGRESS:
+            session._cancel_event.set()
+        # Remove from in-memory caches
+        session_manager._active.pop(session_id, None)
+        session_manager._recent.pop(session_id, None)
+
+    # Also delete from Cosmos DB
+    try:
+        from stores import get_document_store
+        store = get_document_store(
+            "interactions", "interactions", "/scenario",
+            ensure_created=True,
+        )
+        await store.delete(session_id, partition_key=scenario or None)
+    except Exception:
+        pass  # Best effort — may not exist in Cosmos yet
+
+    return {"deleted": session_id}

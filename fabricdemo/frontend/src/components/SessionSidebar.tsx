@@ -9,6 +9,7 @@ import { formatTimeAgo } from '../utils/formatTime';
 interface SessionCardProps {
   session: SessionSummary;
   onClick: () => void;
+  onDelete: () => void;
   isActive: boolean;
 }
 
@@ -28,8 +29,20 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function SessionCard({ session, onClick, isActive }: SessionCardProps) {
+function SessionCard({ session, onClick, onDelete, isActive }: SessionCardProps) {
   const timeAgo = formatTimeAgo(session.created_at);
+  const [confirming, setConfirming] = useState(false);
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirming) {
+      onDelete();
+      setConfirming(false);
+    } else {
+      setConfirming(true);
+      setTimeout(() => setConfirming(false), 3000);
+    }
+  };
 
   return (
     <div
@@ -40,10 +53,23 @@ function SessionCard({ session, onClick, isActive }: SessionCardProps) {
           : 'border-border-subtle bg-neutral-bg3 hover:border-border-strong hover:bg-neutral-bg4'
       }`}
     >
-      {/* Header: status badge + time */}
+      {/* Header: status badge + time + delete */}
       <div className="flex items-center justify-between mb-1">
         <StatusBadge status={session.status} />
-        <span className="text-[10px] text-text-muted">{timeAgo}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-text-muted">{timeAgo}</span>
+          <button
+            onClick={handleDeleteClick}
+            className={`text-xs p-0.5 transition-all ${
+              confirming
+                ? 'opacity-100 text-status-error font-medium'
+                : 'opacity-0 group-hover:opacity-100 text-text-muted hover:text-status-error'
+            }`}
+            title={confirming ? 'Click again to confirm' : 'Delete session'}
+          >
+            {confirming ? 'Delete?' : '✕'}
+          </button>
+        </div>
       </div>
 
       {/* Alert preview */}
@@ -69,13 +95,15 @@ interface SessionSidebarProps {
   sessions: SessionSummary[];
   loading: boolean;
   onSelect: (sessionId: string) => void;
+  onDelete: (sessionId: string) => void;
+  onNewSession: () => void;
   activeSessionId: string | null;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }
 
 export function SessionSidebar({
-  sessions, loading, onSelect,
+  sessions, loading, onSelect, onDelete, onNewSession,
   activeSessionId, collapsed, onToggleCollapse,
 }: SessionSidebarProps) {
   const [filter, setFilter] = useState('');
@@ -106,7 +134,19 @@ export function SessionSidebar({
 
       {/* Search filter */}
       {!collapsed && (
-        <div className="px-2 pt-2 shrink-0">
+        <div className="px-2 pt-2 space-y-2 shrink-0">
+          {/* New Session button */}
+          <button
+            onClick={onNewSession}
+            className="w-full flex items-center justify-center gap-1.5 py-2 px-3
+                       text-xs font-medium rounded-lg border border-border
+                       bg-neutral-bg3 hover:bg-neutral-bg4 hover:border-brand/30
+                       text-text-secondary hover:text-text-primary
+                       transition-colors"
+          >
+            <span className="text-sm">＋</span>
+            New Session
+          </button>
           <input
             type="text"
             value={filter}
@@ -154,6 +194,7 @@ export function SessionSidebar({
               key={session.id}
               session={session}
               onClick={() => onSelect(session.id)}
+              onDelete={() => onDelete(session.id)}
               isActive={activeSessionId === session.id}
             />
           ))}

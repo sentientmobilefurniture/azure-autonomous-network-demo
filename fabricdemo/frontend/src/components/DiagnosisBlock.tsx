@@ -1,19 +1,20 @@
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 
 interface DiagnosisBlockProps {
   text: string;
-  expanded: boolean;
-  onToggle: () => void;
 }
 
-export function DiagnosisBlock({ text, expanded, onToggle }: DiagnosisBlockProps) {
+export function DiagnosisBlock({ text }: DiagnosisBlockProps) {
+  const [expanded, setExpanded] = useState(true); // auto-expand
+
   return (
-    <div className="mt-3">
+    <div className="glass-card overflow-hidden">
       <button
-        onClick={onToggle}
-        className="flex items-center gap-2 text-xs font-medium text-text-muted
-                   hover:text-text-primary transition-colors mb-1"
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium
+                   text-text-muted hover:text-text-primary transition-colors"
       >
         <span>{expanded ? '▾' : '▸'}</span>
         <span>Diagnosis</span>
@@ -27,7 +28,7 @@ export function DiagnosisBlock({ text, expanded, onToggle }: DiagnosisBlockProps
             exit={{ height: 0, opacity: 0 }}
             className="overflow-hidden"
           >
-            <div className="prose prose-sm max-w-none bg-neutral-bg3 rounded-lg p-3">
+            <div className="prose prose-sm max-w-none px-3 pb-3">
               <ReactMarkdown>{text}</ReactMarkdown>
             </div>
           </motion.div>

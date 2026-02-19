@@ -375,6 +375,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     "query": failed_query[:500] if failed_query else "",
                     "response": f"FAILED: [{err_code}] {err_msg}",
                     "error": True,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
 
             elif status == "completed" and step_type == "tool_calls":
@@ -427,6 +428,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         "duration": duration,
                         "query": query,
                         "response": response,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                     if visualization:
                         event_data["visualization"] = visualization
@@ -876,6 +878,7 @@ async def run_orchestrator_session(
                     "query": failed_query[:500] if failed_query else "",
                     "response": f"FAILED: [{err_code}] {err_msg}",
                     "error": True,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
 
             elif status == "completed" and step_type == "tool_calls":
@@ -926,6 +929,7 @@ async def run_orchestrator_session(
                         "duration": duration,
                         "query": query,
                         "response": response,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                     if visualization:
                         event_data["visualization"] = visualization

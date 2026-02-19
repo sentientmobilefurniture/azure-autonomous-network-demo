@@ -19,10 +19,8 @@ export function useSession() {
       const updated = { ...msg };
       switch (eventType) {
         case 'step_thinking':
-          updated.thinking = [...(updated.thinking ?? []), data.status as string];
-          updated.status = 'thinking';
-          break;
         case 'step_start':
+          // Transient — drives ThinkingDots indicator, not stored on message
           updated.status = 'investigating';
           break;
         case 'step_complete':
@@ -152,6 +150,34 @@ export function useSession() {
     connectToStream(activeSessionId, orchMsgId);
   }, [activeSessionId, connectToStream]);
 
+  // ---- New session (park current, clear UI) ----
+
+  const handleNewSession = useCallback(() => {
+    abortRef.current?.abort();
+    setMessages([]);
+    setActiveSessionId(null);
+    setRunning(false);
+    setThinking(null);
+  }, []);
+
+  // ---- Delete session ----
+
+  const deleteSession = useCallback(async (sessionId: string) => {
+    try {
+      await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      // If we're viewing the deleted session, clear the UI
+      if (sessionId === activeSessionId) {
+        abortRef.current?.abort();
+        setMessages([]);
+        setActiveSessionId(null);
+        setRunning(false);
+        setThinking(null);
+      }
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+    }
+  }, [activeSessionId]);
+
   // ---- Cancel ----
 
   const cancelSession = useCallback(async () => {
@@ -183,11 +209,10 @@ export function useSession() {
         currentOrch = {
           id: crypto.randomUUID(), role: 'orchestrator',
           timestamp: data.timestamp ?? session.created_at,
-          steps: [], thinking: [], status: 'complete',
+          steps: [], status: 'complete',
         };
       } else if (currentOrch) {
         if (evType === 'step_complete') currentOrch.steps = [...(currentOrch.steps ?? []), data];
-        else if (evType === 'step_thinking') currentOrch.thinking = [...(currentOrch.thinking ?? []), data.status];
         else if (evType === 'message') currentOrch.diagnosis = data.text;
         else if (evType === 'run_complete') currentOrch.runMeta = data;
         else if (evType === 'error') { currentOrch.errorMessage = data.message; currentOrch.status = 'error'; }
@@ -234,5 +259,7 @@ export function useSession() {
     sendFollowUp,
     viewSession,
     cancelSession,
+    handleNewSession,
+    deleteSession,
   };
 }

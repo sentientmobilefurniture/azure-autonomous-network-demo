@@ -1,34 +1,34 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ChatMessage, ThinkingState } from '../types';
 
 /**
  * Auto-scroll hook for the chat thread.
  *
- * Uses window-level scroll (not panel scroll). Automatically scrolls to
- * the bottom of the page when new messages arrive, unless the user has
- * scrolled up. Provides a `isNearBottom` flag and `scrollToBottom` function
- * for a "scroll to bottom" FAB.
+ * Targets the chat scroll container (the overflow-y-auto div wrapping ChatPanel).
+ * Returns a ref to attach to that container.
  */
 export function useAutoScroll(messages: ChatMessage[], currentThinking: ThinkingState | null) {
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToBottom = useCallback(() => {
-    window.scrollTo({
-      top: document.documentElement.scrollHeight,
-      behavior: 'smooth',
-    });
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }
   }, []);
 
-  // Track if user is near the bottom
+  // Track if user is near the bottom of the scroll container
   useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
     const handleScroll = () => {
       const threshold = 200;
-      const scrollBottom = window.innerHeight + window.scrollY;
-      const docHeight = document.documentElement.scrollHeight;
-      setIsNearBottom(docHeight - scrollBottom < threshold);
+      const scrollBottom = el.scrollTop + el.clientHeight;
+      setIsNearBottom(el.scrollHeight - scrollBottom < threshold);
     };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
   }, []);
 
   // Auto-scroll when new messages arrive (unless user has scrolled up)
@@ -38,5 +38,5 @@ export function useAutoScroll(messages: ChatMessage[], currentThinking: Thinking
     }
   }, [messages, currentThinking, isNearBottom, scrollToBottom]);
 
-  return { isNearBottom, scrollToBottom };
+  return { isNearBottom, scrollToBottom, scrollRef };
 }

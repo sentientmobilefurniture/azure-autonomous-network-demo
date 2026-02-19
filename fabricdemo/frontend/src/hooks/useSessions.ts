@@ -5,17 +5,15 @@ import type { SessionSummary } from '../types';
  * Hook to fetch and poll the session list from the backend.
  * Replaces the interaction-based sidebar data source.
  */
-export function useSessions(scenario?: string) {
+export function useSessions(_scenario?: string) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchSessions = useCallback(async () => {
     try {
-      const url = scenario
-        ? `/api/sessions?scenario=${encodeURIComponent(scenario)}`
-        : '/api/sessions';
-      const res = await fetch(url);
+      // Fetch all sessions (no scenario filter — show everything in the sidebar)
+      const res = await fetch('/api/sessions');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setSessions(data.sessions ?? []);
@@ -24,7 +22,7 @@ export function useSessions(scenario?: string) {
     } finally {
       setLoading(false);
     }
-  }, [scenario]);
+  }, []);
 
   // Initial fetch
   useEffect(() => {
