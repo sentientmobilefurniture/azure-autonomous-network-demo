@@ -3,9 +3,10 @@
 ### Wear and tear alert scenario!
 
 An AI-powered incident investigation platform that diagnoses operational issues
-using multi-agent orchestration on Azure. Five specialist agents collaborate to
-perform root-cause analysis, assess blast radius, retrieve operating procedures,
-and produce actionable situation reports — without human intervention.
+using a declarative agent on Azure AI Foundry. A single YAML-defined agent with
+multiple typed tools performs root-cause analysis, assesses blast radius, retrieves
+operating procedures, and produces actionable situation reports — without human
+intervention.
 
 The platform is **scenario-agnostic** — new investigation domains are added as
 self-contained data packs under `data/scenarios/`; no code changes required.
@@ -16,45 +17,47 @@ self-contained data packs under `data/scenarios/`; no code changes required.
 
 ```
                          ┌─────────────────────────────────────────────┐
-                         │       Unified Container App (:80)           │
-                         │       supervisord × 3 processes             │
-                         │                                             │
-Browser ──POST /api/──▶  │  nginx :80                                  │
-         ◀──SSE stream── │   ├─ /        → React SPA (static)         │
-                         │   ├─ /api/*   → uvicorn :8000 (API)        │
-                         │   ├─ /health  → uvicorn :8000              │
-                         │   └─ /query/* → uvicorn :8100 (graph-api)  │
-                         └────────────────┬────────────────────────────┘
-                                          │ azure-ai-agents SDK
+                         │      Azure Web App (single process)          │
+                         │      gunicorn + uvicorn (FastAPI)             │
+                         │                                              │
+Browser ──POST /api/──▶  │  FastAPI :8000                                │
+         ◀──SSE stream── │   ├─ /         → React SPA (static)          │
+                         │   ├─ /api/*    → Session + Agent endpoints    │
+                         │   ├─ /query/*  → Topology, Search, Health     │
+                         │   └─ /health   → Health check                │
+                         └─────────────────┬───────────────────────────┘
+                                          │ agent-framework (declarative YAML)
                               ┌───────────┴──────────┐
-                              ▼         ▼            ▼
-                        GraphExplorer  Telemetry  RunbookKB ...
-                              │         │            │
-                              ▼         ▼            ▼
-                     Fabric GQL    Fabric KQL    AI Search
-                    (graph model)  (eventhouse)  (vector indexes)
+                              │  NetworkInvestigator   │
+                              │  (orchestrator.yaml)   │
+                              └──┬───┬───┬───┬───┬──┘
+                                │   │   │   │   │
+                           graph kql search search dispatch
+                                │   │   │   │
+                                ▼   ▼   ▼   ▼
+                         Fabric Fabric AI Search AI Search
+                          GQL    KQL   (runbooks) (tickets)
 ```
 
-### AI Agents
+### Agent Tools
 
-| Agent | Data Source | Tool |
-|-------|-----------|------|
-| **GraphExplorer** | Topology graph (Fabric GQL) | `OpenApiTool` → `/query/graph` |
-| **Telemetry** | Metrics & alerts (Fabric KQL Eventhouse) | `OpenApiTool` → `/query/telemetry` |
-| **RunbookKB** | Operational procedures | `AzureAISearchTool` → runbooks index |
-| **HistoricalTicket** | Past incident records | `AzureAISearchTool` → tickets index |
-| **Orchestrator** | Delegates to above 4 agents | `ConnectedAgentTool` |
+| Tool | Data Source | Function |
+|------|-----------|----------|
+| `graph_topology_query` | Topology graph (Fabric GQL) | Typed async Python function |
+| `telemetry_kql_query` | Metrics & alerts (Fabric KQL) | Typed async Python function |
+| `search_runbooks` | Operational procedures | Typed async Python function |
+| `search_tickets` | Past incident records | Typed async Python function |
+| `dispatch_field_engineer` | Action tool | Typed async Python function |
 
 ### Azure Resources (provisioned by `azd up`)
 
 | Resource | Purpose |
 |----------|---------|
-| AI Foundry (account + project) | Hosts GPT-4.1 deployment + agent definitions |
+| AI Foundry (account + project) | Hosts GPT-4.1 deployment + agent runtime |
 | Azure AI Search | Vector search indexes (runbooks, tickets) |
 | Storage Account | Blob storage for search indexer data source |
 | Cosmos DB NoSQL | Interaction/session store |
-| Container Apps Environment | ACR + Log Analytics + Container App hosting |
-| Unified Container App | nginx + API + graph-query-api (1 CPU, 2Gi, 1–3 replicas) |
+| App Service Plan + Web App | Single-process Python app (gunicorn + FastAPI) |
 | VNet + Private Endpoints | Network isolation for Cosmos DB |
 | Microsoft Fabric Capacity | F8 capacity for graph + telemetry (conditional) |
 | RBAC Role Assignments | Managed identity access across all services |
@@ -100,14 +103,13 @@ azd auth login
 ```bash
 chmod +x deploy.sh
 
-# Full end-to-end: infrastructure + Fabric + data + agents
+# Full end-to-end: infrastructure + Fabric + data
 ./deploy.sh --provision-all --yes
 
 # Or step-by-step with prompts:
 ./deploy.sh                         # Step 1: Infrastructure only
 ./deploy.sh --skip-infra --provision-fabric   # Step 2: Fabric resources
 ./deploy.sh --skip-infra --provision-data     # Step 3: AI Search indexes
-./deploy.sh --skip-infra --provision-agents   # Step 4: AI agents
 ```
 
 ### What happens during `./deploy.sh --provision-all`:
@@ -118,7 +120,7 @@ chmod +x deploy.sh
 | **1** | Select or create azd environment | interactive |
 | **2** | Configure graph backend (Fabric GQL) | ~5s |
 | **2b** | Generate static `topology.json` from scenario CSVs | ~5s |
-| **3** | `azd up` — provision all Azure resources + build/deploy container | **10–15 min** |
+| **3** | `azd up` — provision all Azure resources | **10–15 min** |
 | **3b** | Auto-discover resources, write `azure_config.env` | ~30s |
 | **4a** | Find-or-create Fabric workspace (hard gate — exits on failure) | ~30s |
 | **4b** | Grant Container App managed identity Contributor on workspace | ~5s |
@@ -127,9 +129,9 @@ chmod +x deploy.sh
 | **4e** | Provision IQ Ontology + Graph Model from `graph_schema.yaml` | ~2 min |
 | **4f** | Re-populate `azure_config.env` with discovered Fabric IDs | ~10s |
 | **5** | Create AI Search indexes (runbooks + tickets) from blob storage | ~2 min |
-| **6** | Provision 5 AI Foundry agents | ~1 min |
-| **6b** | Sync `FABRIC_WORKSPACE_ID` → azd env → Container App env vars | ~2 min |
-| **7** | Health check (poll `/health` up to 5× with 15s intervals) | ~15s |
+| **6** | *(Removed — agents load from YAML at startup)* | — |
+| **7** | Build frontend + deploy Web App via `azd deploy api` | ~2 min |
+| **8** | Health check (poll `/health` up to 5× with 15s intervals) | ~15s |
 
 ---
 
@@ -141,8 +143,7 @@ chmod +x deploy.sh
 |------|--------|
 | `--provision-fabric` | Run Fabric provisioning (Steps 4a–4f) |
 | `--provision-data` | Run data provisioning (Step 5 — AI Search indexes) |
-| `--provision-agents` | Run agent provisioning (Step 6) |
-| `--provision-all` | All three above |
+| `--provision-all` | All of the above |
 | `--skip-infra` | Skip `azd up` (reuse existing Azure resources) |
 | `--skip-local` | Skip starting local dev servers |
 | `--env NAME` | Use a specific azd environment name |
@@ -156,23 +157,17 @@ chmod +x deploy.sh
 # First-time full deploy
 ./deploy.sh --provision-all --yes
 
-# Redeploy app container only (after code changes)
-azd deploy app
+# Redeploy app after code changes
+azd deploy api
 
 # Re-provision Fabric resources only
 ./deploy.sh --skip-infra --provision-fabric --yes
-
-# Re-provision agents only
-./deploy.sh --skip-infra --provision-agents --yes
 
 # Re-provision everything except Azure infra
 ./deploy.sh --skip-infra --provision-all --yes
 
 # Deploy to a specific environment and location
 ./deploy.sh --env myenv --location eastus2
-
-# CLI agent provisioning (outside deploy.sh)
-source azure_config.env && uv run python scripts/provision_agents.py --force
 ```
 
 ---
@@ -199,25 +194,22 @@ and graph-query-api load this file at startup via `python-dotenv`.
 | **Fabric Admin** | `AZURE_FABRIC_ADMIN`, `FABRIC_CAPACITY_SKU` | User / preprovision hook |
 | **Fabric Resources** | `FABRIC_WORKSPACE_ID`, `FABRIC_LAKEHOUSE_ID`, `FABRIC_EVENTHOUSE_ID`, `FABRIC_KQL_DB_ID`, `FABRIC_KQL_DB_NAME`, `EVENTHOUSE_QUERY_URI` | Step 4f populate script |
 
-### How config reaches the Container App
+### How config reaches the Web App
 
-`azure_config.env` is **baked into the Docker image** (copied to `/app/azure_config.env`).
-Both Python services load it at startup:
+`azure_config.env` values are injected as **App Settings** via Bicep. The Web App
+reads them as environment variables at startup — no baked config file.
 
-- **API** (`api/app/paths.py`): `load_dotenv(PROJECT_ROOT / "azure_config.env")`
-- **graph-query-api** (`main.py`): `load_dotenv("/app/azure_config.env", override=True)`
+- **API** (`api/app/paths.py`): `load_dotenv(PROJECT_ROOT / "azure_config.env")` for local dev
+- **Web App**: reads env vars directly from App Service configuration
 
-The `override=True` is critical — without it, empty env vars injected by Bicep
-(e.g., `FABRIC_WORKSPACE_ID=""`) would shadow the values in the file.
-
-**To update config in production:** edit `azure_config.env` locally, then run
-`azd deploy app` to rebuild the image with the updated file.
+**To update config in production:** update App Settings in Azure Portal or via
+`az webapp config appsettings set`, or run `azd up` to re-apply from Bicep.
 
 ### Runtime Discovery
 
-The Container App only needs `FABRIC_WORKSPACE_ID` to bootstrap. Everything else
+The Web App only needs `FABRIC_WORKSPACE_ID` to bootstrap. Everything else
 (Graph Model ID, Eventhouse Query URI, KQL DB name) is **discovered at runtime**
-by `graph-query-api/fabric_discovery.py` using the managed identity. This module:
+by `app/fabric_discovery.py` using the managed identity. This module:
 
 - Queries the Fabric REST API for items in the workspace
 - Matches resources by convention name (`NetworkTopologyOntology`, `NetworkTelemetryEH`)
@@ -234,36 +226,45 @@ by `graph-query-api/fabric_discovery.py` using the managed identity. This module
 ├── azure_config.env            # Runtime config (gitignored, auto-generated)
 ├── azure_config.env.template   # Config template (reference)
 ├── deploy.sh                   # End-to-end deployment orchestrator
-├── Dockerfile                  # Unified container: nginx + API + graph-query-api
-├── nginx.conf                  # Reverse proxy config
-├── supervisord.conf            # Process manager (3 services)
 │
-├── api/                        # FastAPI backend (port 8000)
+├── api/                        # Unified FastAPI backend
+│   ├── agents/
+│   │   └── orchestrator.yaml   # Declarative agent definition (YAML)
+│   ├── startup.sh              # gunicorn command for Web App
 │   └── app/
-│       ├── main.py             # App factory, CORS, router mounting
+│       ├── main.py             # App factory, all routes mounted
 │       ├── paths.py            # PROJECT_ROOT, CONFIG_FILE, load_dotenv
-│       ├── orchestrator.py     # Foundry agent bridge (sync SDK → async SSE)
-│       └── routers/
-│           ├── alert.py        # POST /api/alert → SSE investigation stream
-│           ├── agents.py       # GET /api/agents — list provisioned agents
-│           ├── config.py       # POST /api/config/apply → re-provision agents
-│           └── logs.py         # GET /api/logs → SSE log stream
-│
-├── graph-query-api/            # Graph & telemetry queries (port 8100)
-│   ├── main.py                 # App factory, load_dotenv, lifespan
-│   ├── config.py               # ScenarioContext, backend selection
-│   ├── fabric_discovery.py     # Runtime Fabric resource discovery
-│   ├── router_graph.py         # POST /query/graph (GQL dispatch)
-│   ├── router_telemetry.py     # POST /query/telemetry (KQL dispatch)
-│   ├── router_topology.py      # POST /query/topology (graph visualization)
-│   ├── router_interactions.py  # Interaction/session CRUD (Cosmos NoSQL)
-│   ├── router_health.py        # GET /query/health/sources (connectivity check)
-│   ├── search_indexer.py       # AI Search indexer pipeline
-│   ├── adapters/               # Fabric GQL + KQL adapters
-│   ├── backends/               # Backend implementations
-│   │   └── fixtures/           # Static topology.json (pre-built)
-│   ├── services/               # Blob uploader, data helpers
-│   └── stores/                 # Cosmos interaction store
+│       ├── agent_loader.py     # AgentFactory + load_agent() singleton
+│       ├── streaming.py        # agent.run(stream=True) → SSE events
+│       ├── session_manager.py  # Session lifecycle + Cosmos persistence
+│       ├── sessions.py         # Session dataclass
+│       ├── tools/              # Typed async tool functions
+│       │   ├── __init__.py     # TOOL_BINDINGS export
+│       │   ├── graph.py        # graph_topology_query()
+│       │   ├── telemetry.py    # telemetry_kql_query()
+│       │   ├── search.py       # search_runbooks(), search_tickets()
+│       │   └── dispatch.py     # dispatch_field_engineer()
+│       ├── routers/            # REST/SSE endpoints
+│       │   ├── sessions.py     # Session CRUD + SSE streaming
+│       │   ├── config.py       # /api/config/* resource graph
+│       │   ├── logs.py         # /api/logs SSE stream
+│       │   ├── topology.py     # /query/topology (graph visualization)
+│       │   ├── search.py       # /query/search (AI Search direct)
+│       │   ├── health.py       # /query/health (data source probes)
+│       │   ├── data_sessions.py # /query/sessions (Cosmos CRUD)
+│       │   ├── interactions.py # /query/interactions
+│       │   ├── replay.py       # /query/replay
+│       │   ├── graph_backend.py    # /query/graph (GQL dispatch)
+│       │   └── telemetry_backend.py # /query/telemetry (KQL dispatch)
+│       ├── gq_config.py        # Graph-query configuration
+│       ├── cosmos_helpers.py    # Cosmos DB client + container creation
+│       ├── fabric_discovery.py  # Runtime Fabric resource discovery
+│       ├── data_models.py      # Pydantic request/response models
+│       ├── log_broadcaster.py  # SSE log fan-out
+│       ├── adapters/           # Fabric GQL + KQL config
+│       ├── backends/           # Graph backend implementations
+│       │   └── fixtures/       # Static topology.json
+│       └── stores/             # Document store (Cosmos NoSQL)
 │
 ├── frontend/                   # React/Vite dashboard (TypeScript)
 │   └── src/
@@ -272,46 +273,38 @@ by `graph-query-api/fabric_discovery.py` using the managed identity. This module
 │
 ├── data/
 │   └── scenarios/
-│       ├── telecom-playground/ # Extended telco scenario (default)
-│       │   ├── scenario.yaml   # Scenario manifest
-│       │   ├── graph_schema.yaml # Graph entity/edge definitions
-│       │   └── data/           # entities/, telemetry/, knowledge/
-│       └── telco-noc/          # Compact telco scenario
+│       └── telecom-playground/ # Extended telco scenario (default)
+│           ├── scenario.yaml   # Scenario manifest
+│           ├── graph_schema.yaml # Graph entity/edge definitions
+│           └── data/           # entities/, telemetry/, knowledge/
 │
 ├── scripts/
-│   ├── agent_provisioner.py    # AgentProvisioner (importable module)
-│   ├── provision_agents.py     # CLI agent provisioning
 │   ├── provision_search_index.py # AI Search index creation
 │   ├── generate_topology_json.py # Static topology JSON generator
 │   └── fabric/
-│       ├── _config.py          # Shared Fabric config (API URL, workspace name)
-│       ├── provision_workspace.py  # Find-or-create Fabric workspace
-│       ├── provision_lakehouse.py  # Lakehouse + CSV upload + table load
-│       ├── provision_eventhouse.py # Eventhouse + KQL tables + telemetry ingest
-│       ├── provision_ontology.py   # IQ Ontology + Graph Model
-│       └── populate_fabric_config.py # Discover Fabric IDs → azure_config.env
+│       ├── provision_workspace.py
+│       ├── provision_lakehouse.py
+│       ├── provision_eventhouse.py
+│       ├── provision_ontology.py
+│       └── populate_fabric_config.py
 │
 ├── infra/                      # Bicep IaC
 │   ├── main.bicep              # Subscription-scoped orchestrator
-│   ├── main.parameters.json    # Parameter file (reads from azd env)
-│   ├── modules/
-│   │   ├── ai-foundry.bicep    # AI Foundry account + project + GPT deployment
-│   │   ├── container-app.bicep # Unified Container App
-│   │   ├── container-apps-environment.bicep # CAE + ACR + Log Analytics
-│   │   ├── cosmos-nosql.bicep  # Cosmos DB NoSQL
-│   │   ├── cosmos-private-endpoints.bicep
-│   │   ├── fabric.bicep        # Fabric capacity (conditional)
-│   │   ├── roles.bicep         # RBAC role assignments
-│   │   ├── search.bicep        # AI Search
-│   │   ├── storage.bicep       # Storage Account
-│   │   └── vnet.bicep          # VNet + subnets
-│   └── nuclear_teardown.sh     # Full teardown + purge
+│   └── modules/
+│       ├── ai-foundry.bicep    # AI Foundry account + project + model
+│       ├── web-app.bicep       # App Service Plan + Web App
+│       ├── cosmos-nosql.bicep  # Cosmos DB NoSQL
+│       ├── search.bicep        # AI Search
+│       ├── storage.bicep       # Storage Account
+│       ├── vnet.bicep          # VNet + subnets
+│       ├── roles.bicep         # RBAC role assignments
+│       └── fabric.bicep        # Fabric capacity (conditional)
 │
 ├── hooks/
-│   ├── preprovision.sh         # Sync config → azd env before Bicep
-│   └── postprovision.sh        # Populate config from Bicep outputs
+│   ├── preprovision.sh     # Sync config → azd env before Bicep
+│   └── postprovision.sh    # Populate config from Bicep outputs
 │
-└── documentation/              # Architecture docs, plans, changelogs
+└── graph-query-api/            # (Legacy — merged into api/app/)
 ```
 
 ---
@@ -348,13 +341,10 @@ No code changes needed.
 ## Running Locally
 
 ```bash
-# Terminal 1 — Backend API
+# Terminal 1 — Backend API (single process — all routes)
 cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Terminal 2 — Graph Query API
-cd graph-query-api && source ../azure_config.env && uv run uvicorn main:app --host 0.0.0.0 --port 8100 --reload
-
-# Terminal 3 — Frontend (HMR enabled)
+# Terminal 2 — Frontend (HMR enabled)
 cd frontend && npm install && npm run dev
 ```
 
@@ -367,28 +357,28 @@ Open http://localhost:5173
 ### Redeploy after code changes
 
 ```bash
-azd deploy app    # Rebuilds the container image remotely and creates a new revision (~2 min)
+azd deploy api    # Builds frontend, deploys Web App (~2 min)
 ```
 
 ### Update config in production
 
 ```bash
-# 1. Edit azure_config.env locally
-# 2. Redeploy to bake updated config into the image
-azd deploy app
+# Update App Settings directly
+az webapp config appsettings set --name <webapp-name> -g <rg> \
+  --settings KEY=value
+
+# Or update via Bicep
+azd up
 ```
 
-### View Container App logs
+### View Web App logs
 
 ```bash
-# Get container app name
-CA_NAME=$(az containerapp list -g rg-<env-name> --query "[0].name" -o tsv)
+# Get webapp name
+WA_NAME=$(az webapp list -g rg-<env-name> --query "[0].name" -o tsv)
 
-# Stream console logs
-az containerapp logs show --name $CA_NAME -g rg-<env-name> --type console --tail 100 --follow
-
-# System logs (container restarts, scaling events)
-az containerapp logs show --name $CA_NAME -g rg-<env-name> --type system --tail 50
+# Stream logs
+az webapp log tail --name $WA_NAME -g rg-<env-name>
 ```
 
 ### Check data source connectivity
@@ -451,22 +441,19 @@ Workspace settings → Remove this workspace.
 
 #### `FABRIC_WORKSPACE_ID not set — cannot discover Fabric resources`
 
-The graph-query-api container doesn't have `FABRIC_WORKSPACE_ID` in its environment.
-
-**Cause:** `azure_config.env` doesn't contain the value, or the container image
-was built before the Fabric provisioning step populated it.
+The Web App doesn't have `FABRIC_WORKSPACE_ID` in its App Settings.
 
 **Fix:**
 ```bash
 # 1. Ensure it's populated locally
 grep FABRIC_WORKSPACE_ID azure_config.env
-# Should show: FABRIC_WORKSPACE_ID=<guid>
 
 # 2. If empty, run the populate script:
 source azure_config.env && uv run python scripts/fabric/populate_fabric_config.py
 
-# 3. Redeploy to bake into the image:
-azd deploy app
+# 3. Set it on the Web App:
+az webapp config appsettings set --name <webapp-name> -g <rg> \
+  --settings FABRIC_WORKSPACE_ID=$(grep FABRIC_WORKSPACE_ID azure_config.env | cut -d= -f2)
 ```
 
 #### Agent provisioning fails with "Project not found"
@@ -486,13 +473,13 @@ curl -s -w "\nHTTP: %{http_code}" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-#### Fabric RBAC — Container App can't access workspace
+#### Fabric RBAC — Web App can't access workspace
 
-The Container App's managed identity needs Contributor access on the Fabric workspace.
+The Web App's managed identity needs Contributor access on the Fabric workspace.
 
 **Check:**
 ```bash
-# Get the Container App's principal ID
+# Get the Web App's principal ID
 source azure_config.env && echo $APP_PRINCIPAL_ID
 ```
 
@@ -527,17 +514,17 @@ azd env new <new-name>
 ./deploy.sh --env <new-name>
 ```
 
-#### Container App not starting / unhealthy
+#### Web App not starting / unhealthy
 
 ```bash
-# Check revision status
-az containerapp revision list -n <ca-name> -g <rg> -o table
+# View logs
+az webapp log tail --name <webapp-name> -g <rg>
 
 # Check provisioning state
-az containerapp show -n <ca-name> -g <rg> --query "properties.provisioningState"
+az webapp show -n <webapp-name> -g <rg> --query "state"
 
-# View startup logs
-az containerapp logs show -n <ca-name> -g <rg> --type console --tail 100
+# Restart
+az webapp restart -n <webapp-name> -g <rg>
 ```
 
 #### Graph queries return empty results
@@ -566,18 +553,18 @@ az containerapp logs show -n <ca-name> -g <rg> --type console --tail 100
 
 ### Environment Variables Not Updating
 
-Remember the config flow:
+Config flow:
 
 ```
-azure_config.env (local file)
-    ↓ azd deploy app
-  COPY into Docker image → /app/azure_config.env
-    ↓ load_dotenv (override=True)
-  Available to graph-query-api + API at runtime
+azure_config.env (local file for development)
+    ↓ azd up / az webapp config appsettings set
+  App Settings on Azure Web App
+    ↓ environment variables
+  Available to FastAPI at runtime
 ```
 
-If you change `azure_config.env`, you **must** run `azd deploy app` to push
-the changes into the container.
+For local dev, `paths.py` loads `azure_config.env` via `python-dotenv`.
+For production, App Settings are injected by Azure.
 
 ### Useful Debug Commands
 
@@ -588,8 +575,8 @@ az resource list -g rg-<env-name> -o table
 # Check azd environment values
 azd env get-values
 
-# Check Container App env vars
-az containerapp show -n <ca-name> -g <rg> --query "properties.template.containers[0].env" -o table
+# Check Web App env vars
+az webapp config appsettings list -n <webapp-name> -g <rg> -o table
 
 # Test Fabric API access with current credentials
 TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)

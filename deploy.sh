@@ -298,20 +298,19 @@ discover_resources_from_rg() {
     [[ -n "$COSMOS_NOSQL_ENDPOINT" ]] && { set_config COSMOS_NOSQL_ENDPOINT "$COSMOS_NOSQL_ENDPOINT"; ok "Cosmos DB:    $cosmos_name"; }
   fi
 
-  # Container App (unified app)
-  local ca_name
-  ca_name=$(az containerapp list -g "$rg" \
+  # Web App (replaces Container App)
+  local wa_name
+  wa_name=$(az webapp list -g "$rg" \
     --query "[0].name" -o tsv 2>/dev/null || true)
-  if [[ -n "$ca_name" ]]; then
-    APP_URI=$(az containerapp show -n "$ca_name" -g "$rg" \
-      --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+  if [[ -n "$wa_name" ]]; then
+    APP_URI=$(az webapp show -n "$wa_name" -g "$rg" \
+      --query "defaultHostName" -o tsv 2>/dev/null || true)
     if [[ -n "$APP_URI" && ! "$APP_URI" =~ ^https:// ]]; then
       APP_URI="https://$APP_URI"
     fi
-    GRAPH_QUERY_API_URI="$APP_URI"
-    APP_PRINCIPAL_ID=$(az containerapp show -n "$ca_name" -g "$rg" \
+    APP_PRINCIPAL_ID=$(az webapp show -n "$wa_name" -g "$rg" \
       --query "identity.principalId" -o tsv 2>/dev/null || true)
-    [[ -n "$APP_URI" ]] && { set_config APP_URI "$APP_URI"; set_config GRAPH_QUERY_API_URI "$GRAPH_QUERY_API_URI"; ok "App URI:      $APP_URI"; }
+    [[ -n "$APP_URI" ]] && { set_config APP_URI "$APP_URI"; ok "App URI:      $APP_URI"; }
     [[ -n "$APP_PRINCIPAL_ID" ]] && set_config APP_PRINCIPAL_ID "$APP_PRINCIPAL_ID"
   fi
 
@@ -874,36 +873,22 @@ else
   step "Step 5: Data Provisioning (SKIPPED — use --provision-data)"
 fi
 
-# ── Step 6: Agent Provisioning (optional) ───────────────────────────
+# ── Step 6: Agent Provisioning (REMOVED) ────────────────────────────
+# Agents are now defined in YAML and loaded by AgentFactory at app startup.
+# No provisioning step needed.
+step "Step 6: Agent Provisioning (NOT NEEDED — agents load from YAML at startup)"
 
-if $PROVISION_AGENTS; then
-  step "Step 6: Provisioning AI Foundry agents"
-
-  (source "$CONFIG_FILE" && uv run python scripts/provision_agents.py) || warn "Agent provisioning failed"
-
-  ok "Agent provisioning complete — container app will discover agents at runtime"
-else
-  step "Step 6: Agent Provisioning (SKIPPED — use --provision-agents)"
-fi
-
-# ── Step 7: Deploy app container ────────────────────────────────────
+# ── Step 7: Deploy Web App ──────────────────────────────────────────
 # Deploy happens ONCE at the end, after all provisioning steps have
-# populated azure_config.env with final values (Fabric IDs, search
-# indexes, agent config, etc.).
+# populated azure_config.env with final values.
 #
-# The Dockerfile COPYs azure_config.env into the image. Both API services
-# read /app/azure_config.env via python-dotenv at startup. By deploying
-# last, the baked file always matches reality — no stale values.
-#
-# The Container App resource already exists from Step 3 (Bicep creates it
-# with a placeholder image), so APP_PRINCIPAL_ID was available for
-# Fabric RBAC in Step 4b without needing an earlier deploy.
+# The azd prepackage hook builds the frontend and copies it to api/static/.
+# Web App uses zip deploy — no container registry needed.
 
 if ! $SKIP_APP; then
-  step "Step 7: Deploying app container"
+  step "Step 7: Deploying Web App"
 
   # Sync any vars that provisioning steps may have updated into azd env
-  # so Bicep-injected Container App env vars are also current.
   if [[ -f "$CONFIG_FILE" ]]; then
     set -a; source "$CONFIG_FILE"; set +a
   fi
@@ -921,30 +906,27 @@ if ! $SKIP_APP; then
     fi
   done
 
-  # Ensure uv.lock files exist for Docker builds (--frozen requires them)
-  for svc_dir in api graph-query-api; do
-    if [[ -f "$PROJECT_ROOT/$svc_dir/pyproject.toml" && ! -f "$PROJECT_ROOT/$svc_dir/uv.lock" ]]; then
-      info "Generating missing uv.lock for $svc_dir..."
-      (cd "$PROJECT_ROOT/$svc_dir" && uv lock)
-      ok "$svc_dir/uv.lock created"
-    fi
-  done
+  # Ensure frontend build for prepackage hook
+  if [[ ! -d "$PROJECT_ROOT/frontend/node_modules" ]]; then
+    info "Installing frontend dependencies..."
+    (cd "$PROJECT_ROOT/frontend" && npm ci --silent 2>&1 | tail -3) || true
+  fi
 
-  info "Building and deploying app container..."
-  if azd deploy app --no-prompt; then
-    ok "App deployed with finalized config"
+  info "Building and deploying Web App..."
+  if azd deploy api --no-prompt; then
+    ok "Web App deployed with finalized config"
   else
-    fail "azd deploy app failed."
-    warn "Run 'azd deploy app' manually after fixing any issues"
+    fail "azd deploy api failed."
+    warn "Run 'azd deploy api' manually after fixing any issues"
   fi
 else
   step "Step 7: App Deployment (SKIPPED — --skip-app)"
-  warn "Container App is running with placeholder image. Run 'azd deploy app' to deploy."
+  warn "Run 'azd deploy api' to deploy."
 fi
 
 # ── Step 8: Verify unified app health ───────────────────────────────
 
-step "Step 8: Verifying unified app deployment"
+step "Step 8: Verifying Web App deployment"
 
 GQ_URI="${APP_URI:-}"
 if [[ -z "$GQ_URI" ]]; then
@@ -962,7 +944,7 @@ for attempt in 1 2 3 4 5; do
     break
   fi
   if (( attempt < 5 )); then
-    warn "Attempt $attempt: HTTP $HTTP_CODE — waiting 15s for container to start..."
+    warn "Attempt $attempt: HTTP $HTTP_CODE — waiting 15s for app to start..."
     sleep 15
   fi
 done
@@ -971,12 +953,11 @@ if $HEALTH_OK; then
   ok "App is healthy"
 else
   fail "App not responding after 5 attempts."
-  fail "The Container App may still be starting or the image build may have failed."
   echo ""
   info "Debug commands:"
-  echo "   az containerapp logs show --name <ca-name> --resource-group ${AZURE_RESOURCE_GROUP:-} --type console --tail 50"
-  echo "   azd deploy app"
-  warn "Continuing anyway — agent provisioning may fail if the API is down."
+  echo "   az webapp log tail --name <webapp-name> --resource-group ${AZURE_RESOURCE_GROUP:-}"
+  echo "   azd deploy api"
+  warn "Continuing anyway."
 fi
 
 # ── Step 9: Start local services (optional — all services deployed to Azure) ──
@@ -989,13 +970,10 @@ if $SKIP_LOCAL; then
   echo "   App URL:   ${APP_URI:-<check azure_config.env>}"
   echo ""
   echo "   To run locally instead:"
-  echo "   # Terminal 1 — API"
+  echo "   # Terminal 1 — API (single process — no separate graph-query-api)"
   echo "   cd api && source ../azure_config.env && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
   echo ""
-  echo "   # Terminal 2 — Graph Query API"
-  echo "   cd graph-query-api && source ../azure_config.env && uv run uvicorn main:app --host 0.0.0.0 --port 8100 --reload"
-  echo ""
-  echo "   # Terminal 3 — Frontend"
+  echo "   # Terminal 2 — Frontend"
   echo "   cd frontend && npm install && npm run dev"
   echo ""
   echo "   Open http://localhost:5173"
@@ -1084,9 +1062,8 @@ echo "    App URL:          ${APP_URI:-<pending>}"
 echo ""
 
 echo -e "  ${BOLD}Agents:${NC}"
-echo "    Agents are discovered from AI Foundry at runtime (no agent_ids.json needed)."
-echo "    Provisioned agents: GraphExplorerAgent, TelemetryAgent, RunbookKBAgent,"
-echo "                        HistoricalTicketAgent, Orchestrator"
+echo "    Agents are defined in YAML and loaded by AgentFactory at app startup."
+echo "    No provisioning step needed — agent is created from agents/orchestrator.yaml."
 echo ""
 
 if ! $SKIP_LOCAL; then
@@ -1107,13 +1084,11 @@ fi
 
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
-echo "    azd deploy app                     # Redeploy unified app after code changes"
-echo "    source azure_config.env && uv run python scripts/provision_agents.py --force  # Re-provision agents"
-echo "    azd down --force --purge           # Tear down all Azure resources"
+echo "    azd deploy api                      # Redeploy Web App after code changes"
+echo "    azd down --force --purge            # Tear down all Azure resources"
 echo ""
 echo -e "  ${BOLD}Provisioning:${NC}"
-echo "    ./deploy.sh --provision-fabric     # Provision Fabric resources"
-echo "    ./deploy.sh --provision-data       # Provision AI Search indexes"
-echo "    ./deploy.sh --provision-agents     # Provision AI agents"
-echo "    ./deploy.sh --provision-all        # Do all of the above"
+echo "    ./deploy.sh --provision-fabric      # Provision Fabric resources"
+echo "    ./deploy.sh --provision-data        # Provision AI Search indexes"
+echo "    ./deploy.sh --provision-all         # Do all of the above"
 echo ""

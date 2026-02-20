@@ -164,56 +164,21 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Container Apps Environment + Unified App
+// Web App (single process — replaces Container App + nginx + supervisord)
 // ---------------------------------------------------------------------------
 
-module containerAppsEnv 'modules/container-apps-environment.bicep' = {
+module app 'modules/web-app.bicep' = {
   scope: rg
   params: {
-    name: 'cae-${resourceToken}'
+    webAppName: 'wa-${resourceToken}'
     location: location
-    tags: tags
-    infrastructureSubnetId: vnet.outputs.containerAppsSubnetId
-  }
-}
-
-// Single unified container: nginx (:80) + API (:8000) + graph-query-api (:8100)
-module app 'modules/container-app.bicep' = {
-  scope: rg
-  params: {
-    name: 'ca-app-${resourceToken}'
-    location: location
-    tags: union(tags, { 'azd-service-name': 'app' })
-    containerAppsEnvironmentId: containerAppsEnv.outputs.id
-    containerRegistryName: containerAppsEnv.outputs.registryName
-    targetPort: 80
-    externalIngress: true
-    minReplicas: 1
-    maxReplicas: 3
-    cpu: '1.0'
-    memory: '2Gi'
-    env: union([
-      { name: 'PROJECT_ENDPOINT', value: aiFoundry.outputs.projectEndpoint }
-      { name: 'AI_FOUNDRY_PROJECT_NAME', value: aiFoundry.outputs.projectName }
-      { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
-      { name: 'CORS_ORIGINS', value: corsOrigins }
-      { name: 'GRAPH_BACKEND', value: graphBackend }
-      { name: 'TOPOLOGY_SOURCE', value: topologySource }
-      { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosNoSql.outputs.cosmosNoSqlEndpoint }
-      { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
-      { name: 'AZURE_RESOURCE_GROUP', value: rg.name }
-      { name: 'AI_SEARCH_NAME', value: search.outputs.name }
-      { name: 'AZURE_SEARCH_ENDPOINT', value: search.outputs.endpoint }
-      { name: 'RUNBOOKS_INDEX_NAME', value: runbooksIndexName }
-      { name: 'TICKETS_INDEX_NAME', value: ticketsIndexName }
-      { name: 'STORAGE_ACCOUNT_NAME', value: storage.outputs.name }
-      { name: 'AI_FOUNDRY_NAME', value: aiFoundry.outputs.foundryName }
-      { name: 'EMBEDDING_MODEL', value: 'text-embedding-3-small' }
-      { name: 'EMBEDDING_DIMENSIONS', value: '1536' }
-      { name: 'FABRIC_WORKSPACE_ID', value: fabricWorkspaceId }
-      { name: 'DEFAULT_SCENARIO', value: defaultScenario }
-    ], [])
-    secrets: []
+    tags: union(tags, { 'azd-service-name': 'api' })
+    projectEndpoint: aiFoundry.outputs.projectEndpoint
+    modelDeploymentName: 'gpt-4.1'
+    cosmosEndpoint: cosmosNoSql.outputs.cosmosNoSqlEndpoint
+    searchEndpoint: search.outputs.endpoint
+    defaultScenario: defaultScenario
+    fabricWorkspaceId: fabricWorkspaceId
   }
 }
 
@@ -227,8 +192,8 @@ module roles 'modules/roles.bicep' = {
     searchPrincipalId: search.outputs.principalId
     foundryPrincipalId: aiFoundry.outputs.foundryPrincipalId
     cosmosNoSqlAccountName: cosmosNoSql.outputs.cosmosAccountName
-    containerAppPrincipalId: app.outputs.principalId
-    apiContainerAppPrincipalId: app.outputs.principalId
+    containerAppPrincipalId: app.outputs.webAppPrincipalId
+    apiContainerAppPrincipalId: app.outputs.webAppPrincipalId
   }
 }
 
@@ -263,10 +228,7 @@ output AZURE_AI_PROJECT_ENDPOINT string = aiFoundry.outputs.projectEndpoint
 output AZURE_SEARCH_NAME string = search.outputs.name
 output AZURE_SEARCH_ENDPOINT string = search.outputs.endpoint
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
-output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerAppsEnv.outputs.registryEndpoint
-output APP_URI string = app.outputs.uri
-output APP_PRINCIPAL_ID string = app.outputs.principalId
-// Foundry agents use GRAPH_QUERY_API_URI — same container, same URL
-output GRAPH_QUERY_API_URI string = app.outputs.uri
+output APP_URI string = app.outputs.webAppUrl
+output APP_PRINCIPAL_ID string = app.outputs.webAppPrincipalId
 output COSMOS_NOSQL_ENDPOINT string = cosmosNoSql.outputs.cosmosNoSqlEndpoint
 output FABRIC_CAPACITY_NAME string = !empty(fabricAdminEmail) ? fabric.outputs.name : ''
