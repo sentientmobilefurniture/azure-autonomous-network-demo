@@ -38,7 +38,10 @@ class CreateSessionRequest(BaseModel):
 @router.post("")
 async def create_session(req: CreateSessionRequest):
     """Create a new investigation session and start the orchestrator."""
-    session = session_manager.create(req.scenario, req.alert_text)
+    try:
+        session = session_manager.create(req.scenario, req.alert_text)
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     await session_manager.start(session)
     return {"session_id": session.id, "status": session.status.value}
 
@@ -106,7 +109,9 @@ async def stream_session(session_id: str, since: int = Query(default=0, ge=0)):
                         if session.status != SessionStatus.IN_PROGRESS:
                             break
                     if session.status != SessionStatus.IN_PROGRESS:
-                        # Drain remaining events
+                        # Allow in-flight call_soon_threadsafe callbacks
+                        # to land before draining the queue.
+                        await asyncio.sleep(0.05)
                         while not live_queue.empty():
                             yield live_queue.get_nowait()
                         break
@@ -132,13 +137,25 @@ async def cancel_session(session_id: str):
     session._cancel_event.set()
     # Push a status event so SSE clients see immediate feedback
     session.push_event({
-        "event": "status_change",
+        "event": "status",
         "data": json.dumps({
             "status": "cancelling",
             "message": "Cancellation requested — waiting for current agent call to finish.",
         }),
     })
     return {"status": "cancelling"}
+
+
+@router.post("/{session_id}/save")
+async def save_session(session_id: str):
+    """Explicitly persist a session to Cosmos DB (user-triggered)."""
+    session = session_manager.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    ok = await session_manager.save_session(session_id)
+    if not ok:
+        raise HTTPException(500, "Save failed")
+    return {"saved": session_id}
 
 
 class FollowUpRequest(BaseModel):

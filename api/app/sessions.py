@@ -68,6 +68,8 @@ class Session:
     # The asyncio event loop — needed for thread-safe queue delivery.
     _loop: Optional[asyncio.AbstractEventLoop] = field(default=None, repr=False)
 
+    MAX_EVENT_LOG_SIZE = 2000  # chunking at persistence layer handles Cosmos limits
+
     def push_event(self, event: dict):
         """Append to log and fan out to all live SSE subscribers.
 
@@ -77,6 +79,11 @@ class Session:
         """
         with self._lock:
             self.event_log.append(event)
+            # Cap event_log to prevent Cosmos 2MB document limit breach.
+            # Oldest events are dropped; the frontend reconstructs from
+            # the tail anyway (follow-up turns use `since` offset).
+            if len(self.event_log) > self.MAX_EVENT_LOG_SIZE:
+                self.event_log = self.event_log[-self.MAX_EVENT_LOG_SIZE:]
             self.updated_at = datetime.now(timezone.utc).isoformat()
             snapshot = list(self._subscribers)
         dead: list[asyncio.Queue] = []
@@ -132,6 +139,7 @@ class Session:
     def to_dict(self) -> dict:
         """Serialise for API response / Cosmos persistence."""
         return {
+            "_docType": "session",
             "id": self.id,
             "scenario": self.scenario,
             "alert_text": self.alert_text,

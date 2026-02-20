@@ -58,10 +58,10 @@ async def list_interactions(
     """
     store = _get_store()
 
-    query = "SELECT * FROM c"
+    query = "SELECT * FROM c WHERE (c._docType = 'interaction' OR NOT IS_DEFINED(c._docType))"
     params: list[dict] = []
     if scenario:
-        query += " WHERE c.scenario = @scenario"
+        query += " AND c.scenario = @scenario"
         params.append({"name": "@scenario", "value": scenario})
     query += " ORDER BY c.created_at DESC OFFSET 0 LIMIT @limit"
     params.append({"name": "@limit", "value": limit})
@@ -79,6 +79,7 @@ async def save_interaction(req: InteractionSaveRequest):
     """Save a completed investigation as an interaction record."""
     store = _get_store()
     doc = {
+        "_docType": "interaction",
         "id": str(uuid.uuid4()),
         "scenario": req.scenario,
         "query": req.query,

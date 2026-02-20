@@ -73,32 +73,6 @@ export interface ActionData {
   email_body: string;
 }
 
-// ---------------------------------------------------------------------------
-// Core event types
-// ---------------------------------------------------------------------------
-
-export interface StepEvent {
-  step: number;
-  agent: string;
-  duration?: string;
-  timestamp?: string;
-  query?: string;
-  response?: string;
-  pending?: boolean;         // true while waiting for sub-agent response
-  error?: boolean;
-  visualization?: VisualizationData;       // legacy (pre-v18 sessions)
-  visualizations?: VisualizationData[];     // v18+: array of viz payloads
-  reasoning?: string;
-  // Action support
-  is_action?: boolean;       // true when this step is a FunctionTool call
-  action?: ActionData;       // parsed output of the function
-}
-
-export interface ThinkingState {
-  agent: string;
-  status: string;
-}
-
 export interface RunMeta {
   steps: number;
   time: string;
@@ -178,26 +152,8 @@ export interface TopologyMeta {
 }
 
 // ---------------------------------------------------------------------------
-// Chat / Session types (persistent async conversations)
+// Session types
 // ---------------------------------------------------------------------------
-
-export type ChatRole = 'user' | 'orchestrator';
-
-export interface ChatMessage {
-  id: string;
-  role: ChatRole;
-  timestamp: string;
-
-  // User messages
-  text?: string;
-
-  // Orchestrator messages
-  steps?: StepEvent[];           // reasoning lives on each step.reasoning
-  diagnosis?: string;
-  runMeta?: RunMeta;
-  status?: 'thinking' | 'investigating' | 'complete' | 'error';
-  errorMessage?: string;
-}
 
 export interface SessionSummary {
   id: string;
@@ -216,8 +172,8 @@ export interface SessionDetail {
   status: string;
   created_at: string;
   updated_at: string;
-  event_log: Array<{ event: string; data: string; turn?: number; timestamp?: string }>;
-  steps: StepEvent[];
+  event_log: Array<{ event: string; data: unknown; turn?: number; timestamp?: string }>;
+  steps: unknown[];
   diagnosis: string;
   run_meta: RunMeta | null;
   error_detail: string;

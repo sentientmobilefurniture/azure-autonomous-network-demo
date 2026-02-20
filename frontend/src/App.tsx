@@ -1,18 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Header } from './components/Header';
 import { TabBar } from './components/TabBar';
 import { MetricsBar } from './components/MetricsBar';
-import { ChatPanel } from './components/ChatPanel';
-import { ChatInput } from './components/ChatInput';
-import { SessionSidebar } from './components/SessionSidebar';
+// GUTTED: ChatPanel, ChatInput — rebuilt in Phase B task 06/07
+// import { ChatInput } from './components/ChatInput';
+// import { SessionSidebar } from './components/SessionSidebar';
 import { ResizableGraph } from './components/ResizableGraph';
-import { ResizableSidebar } from './components/ResizableSidebar';
+// import { ResizableSidebar } from './components/ResizableSidebar';
 import { ResizableTerminal } from './components/ResizableTerminal';
 import { Toast } from './components/Toast';
-import { useSession } from './hooks/useSession';
-import { useSessions } from './hooks/useSessions';
-import { useAutoScroll } from './hooks/useAutoScroll';
+// GUTTED: useSession — rebuilt as useConversation in Phase B task 05
+// import { useSessions } from './hooks/useSessions';
+// import { useAutoScroll } from './hooks/useAutoScroll';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { ScenarioPanel } from './components/ScenarioPanel';
 import { OntologyPanel } from './components/OntologyPanel';
@@ -23,57 +23,22 @@ type AppTab = 'investigate' | 'resources' | 'scenario' | 'ontology';
 
 export default function App() {
   const SCENARIO = useScenario();
-  const {
-    messages,
-    thinking,
-    running,
-    activeSessionId,
-    createSession,
-    sendFollowUp,
-    viewSession,
-    cancelSession,
-    handleNewSession,
-    deleteSession,
-  } = useSession();
 
-  const { sessions, loading: sessionsLoading, refetch: refetchSessions } = useSessions(SCENARIO.name);
-  const { isNearBottom, scrollToBottom, scrollRef } = useAutoScroll(messages, thinking);
+  // GUTTED: useSession() — rebuilt as useConversation() in Phase B
+  // GUTTED: useSessions() — restored in Phase B wiring
+  // GUTTED: useAutoScroll() — restored in Phase B wiring
 
-  // Refetch session list when a run finishes (running transitions true → false)
-  const prevRunning = useRef(running);
-  useEffect(() => {
-    if (prevRunning.current && !running) {
-      refetchSessions();
-    }
-    prevRunning.current = running;
-  }, [running, refetchSessions]);
+  // Placeholder state — these will be restored from useConversation in Phase B
+  // const running = false;
+  // const activeSessionId: string | null = null;
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [_sidebarCollapsed, _setSidebarCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<AppTab>('investigate');
   const [showTabs, setShowTabs] = useState(true);
   const [terminalVisible, setTerminalVisible] = useState(true);
 
-  // Trigger Fabric rediscovery (best-effort, non-blocking)
-  const triggerRediscovery = async () => {
-    try {
-      await fetch('/query/health/rediscover', { method: 'POST' });
-    } catch { /* ignore */ }
-  };
-
-  // Handle submit: create new session or send follow-up
-  const handleSubmit = async (text: string) => {
-    // Trigger Fabric resource rediscovery before each message
-    triggerRediscovery();
-
-    if (activeSessionId && !running) {
-      await sendFollowUp(text);
-    } else if (!running) {
-      await createSession(SCENARIO.name, text);
-    }
-    // Immediately refresh session list so sidebar shows the new/updated session
-    refetchSessions();
-  };
+  // GUTTED: triggerRediscovery, handleSubmit — rebuilt in Phase B wiring
 
   return (
     <motion.div
@@ -100,8 +65,8 @@ export default function App() {
         ) : activeTab === 'ontology' ? (
           <OntologyPanel />
         ) : activeTab === 'scenario' ? (
-          <ScenarioPanel onUsePrompt={(q) => {
-            handleSubmit(q);
+          <ScenarioPanel onUsePrompt={(_q) => {
+            // GUTTED: handleSubmit — rebuilt in Phase B wiring
             setActiveTab('investigate');
           }} />
         ) : (
@@ -114,23 +79,9 @@ export default function App() {
                 <MetricsBar />
               </ResizableGraph>
 
-              {/* Chat section — scroll area + pinned input */}
-              <div className="flex-1 min-h-0 flex flex-col">
-                {/* Scrollable chat thread */}
-                <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-                  <ChatPanel
-                    messages={messages}
-                    currentThinking={thinking}
-                  />
-                </div>
-
-                {/* Chat input — pinned at bottom of chat section */}
-                <ChatInput
-                  onSubmit={handleSubmit}
-                  onCancel={cancelSession}
-                  running={running}
-                  exampleQuestions={SCENARIO.exampleQuestions}
-                />
+              {/* PLACEHOLDER: ConversationPanel + ChatInput — rebuilt in Phase B */}
+              <div className="flex-1 min-h-0 flex items-center justify-center">
+                <span className="text-text-muted text-sm">Conversation system removed — rebuilding</span>
               </div>
 
               {/* Terminal — resizable from top edge, aligned with chat */}
@@ -139,51 +90,12 @@ export default function App() {
               </ResizableTerminal>
             </main>
 
-            {/* Session sidebar — full height, resizable from left edge */}
-            {!sidebarCollapsed ? (
-              <ResizableSidebar>
-                <SessionSidebar
-                  sessions={sessions}
-                  loading={sessionsLoading}
-                  onSelect={(id) => viewSession(id)}
-                  onDelete={(id) => deleteSession(id)}
-                  onNewSession={handleNewSession}
-                  onRefresh={refetchSessions}
-                  activeSessionId={activeSessionId}
-                  collapsed={sidebarCollapsed}
-                  onToggleCollapse={() => setSidebarCollapsed(v => !v)}
-                />
-              </ResizableSidebar>
-            ) : (
-              <aside className="w-8 shrink-0">
-                <SessionSidebar
-                  sessions={sessions}
-                  loading={sessionsLoading}
-                  onSelect={(id) => viewSession(id)}
-                  onDelete={(id) => deleteSession(id)}
-                  onNewSession={handleNewSession}
-                  onRefresh={refetchSessions}
-                  activeSessionId={activeSessionId}
-                  collapsed={sidebarCollapsed}
-                  onToggleCollapse={() => setSidebarCollapsed(v => !v)}
-                />
-              </aside>
-            )}
+            {/* GUTTED: Session sidebar — restored in Phase B wiring */}
           </div>
         )}
       </div>
 
-      {/* Scroll-to-bottom FAB */}
-      {!isNearBottom && running && activeTab === 'investigate' && (
-        <button
-          onClick={scrollToBottom}
-          className="fixed bottom-20 right-80 z-50 px-3 py-2 rounded-full
-                     bg-brand text-white text-xs shadow-lg
-                     hover:bg-brand-hover transition-colors"
-        >
-          ↓ New steps
-        </button>
-      )}
+      {/* GUTTED: Scroll-to-bottom FAB — restored in Phase B */}
 
       {/* Toast notification */}
       {toastMessage && (

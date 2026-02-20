@@ -12,6 +12,7 @@ Run locally:
 import logging
 import os
 import time as _time
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -23,12 +24,23 @@ from fastapi.middleware.cors import CORSMiddleware
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("app").setLevel(logging.DEBUG)
 
-from app.routers import alert, agents, logs, config, sessions  # noqa: E402
+from app.routers import agents, logs, config, sessions  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: recover orphaned sessions
+    from app.session_manager import session_manager
+    await session_manager.recover_from_cosmos()
+    yield
+    # Shutdown: no cleanup needed (sessions persist to Cosmos on finalize)
+
 
 app = FastAPI(
     title="Autonomous Network NOC API",
     version="0.1.0",
     description="Backend API for the Autonomous Network NOC Demo",
+    lifespan=lifespan,
 )
 
 # CORS — configurable via CORS_ORIGINS env var (comma-separated list)
@@ -42,7 +54,6 @@ app.add_middleware(
 )
 
 # Mount REST routers
-app.include_router(alert.router)
 app.include_router(agents.router)
 app.include_router(logs.router)
 app.include_router(config.router)

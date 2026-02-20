@@ -36,7 +36,11 @@ def _parse_data(event: dict) -> dict:
     """Extract the parsed data payload from an SSE event dict."""
     raw = event.get("data", "{}")
     if isinstance(raw, str):
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Malformed JSON in event data: %s", raw[:200])
+            return {}
     return raw
 
 
@@ -46,6 +50,43 @@ class SessionManager:
     def __init__(self):
         self._active: dict[str, Session] = {}
         self._recent: OrderedDict[str, Session] = OrderedDict()
+
+    async def recover_from_cosmos(self):
+        """On startup, mark any in_progress sessions in Cosmos as failed.
+
+        Called once from the FastAPI lifespan hook. Does not re-hydrate
+        sessions into _active (the orchestrator threads are dead).
+        """
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{_GQ_BASE}/query/sessions",
+                    params={"limit": 200},
+                )
+                resp.raise_for_status()
+            sessions = resp.json().get("sessions", [])
+            for s in sessions:
+                if s.get("status") == "in_progress":
+                    s["status"] = "failed"
+                    s["error_detail"] = (
+                        "Session was in progress when the server restarted. "
+                        "The investigation cannot be resumed."
+                    )
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            await client.put(
+                                f"{_GQ_BASE}/query/sessions",
+                                json=s,
+                            )
+                        logger.info(
+                            "Recovered session %s: marked as failed", s["id"]
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to recover session %s", s.get("id")
+                        )
+        except Exception:
+            logger.exception("Startup session recovery failed")
 
     def create(self, scenario: str, alert_text: str) -> Session:
         if len(self._active) >= MAX_ACTIVE_SESSIONS:
@@ -133,16 +174,24 @@ class SessionManager:
         if session._cancel_event.is_set():
             session.status = SessionStatus.CANCELLED
             self._move_to_recent(session)
-        elif session.error_detail and not session.diagnosis:
+        elif session.error_detail:
+            # Error takes precedence — even if a partial diagnosis exists,
+            # the investigation did not complete successfully.
             session.status = SessionStatus.FAILED
             self._move_to_recent(session)
         else:
             session.status = SessionStatus.COMPLETED
-            # Persist immediately so session survives container restarts
-            asyncio.create_task(self._persist_to_cosmos(session))
-            # Start idle timeout — if no follow-up within 10 minutes,
-            # finalize and persist.
+            # Do NOT auto-persist — user must explicitly save.
+            # Keep idle timeout as safety net: persist after 10 min if not saved.
             self._schedule_idle_timeout(session)
+
+    async def save_session(self, session_id: str) -> bool:
+        """Explicitly persist a session to Cosmos DB (user-triggered)."""
+        session = self.get(session_id)
+        if not session:
+            return False
+        await self._persist_to_cosmos(session)
+        return True
 
     def _move_to_recent(self, session: Session):
         """Move session from active to recent cache + persist to Cosmos."""
@@ -169,6 +218,13 @@ class SessionManager:
 
     async def start(self, session: Session):
         """Launch the orchestrator for this session in a background task."""
+        # Push initial user message to event_log so the first turn is
+        # structurally consistent with follow-up turns (H-MODEL-01).
+        session.push_event({
+            "event": "user_message",
+            "turn": 0,
+            "data": json.dumps({"text": session.alert_text}),
+        })
         session.status = SessionStatus.IN_PROGRESS
 
         async def _run():
@@ -180,19 +236,19 @@ class SessionManager:
 
                     # Track structured data as events arrive
                     ev_type = event.get("event")
-                    if ev_type == "step_complete":
+                    if ev_type == "tool_call.complete":
                         data = _parse_data(event)
                         session.steps.append(data)
-                    elif ev_type == "message":
+                    elif ev_type == "message.complete":
                         data = _parse_data(event)
                         session.diagnosis = data.get("text", "")
-                    elif ev_type == "run_complete":
+                    elif ev_type == "run.complete":
                         data = _parse_data(event)
                         session.run_meta = data
                     elif ev_type == "error":
                         data = _parse_data(event)
                         session.error_detail = data.get("message", "")
-                    elif ev_type == "thread_created":
+                    elif ev_type == "session.created":
                         data = _parse_data(event)
                         session.thread_id = data.get("thread_id")
 
@@ -237,18 +293,27 @@ class SessionManager:
                     session.push_event(event)
 
                     ev_type = event.get("event")
-                    if ev_type == "step_complete":
+                    if ev_type == "tool_call.complete":
                         data = _parse_data(event)
                         session.steps.append(data)
-                    elif ev_type == "message":
+                    elif ev_type == "message.complete":
                         data = _parse_data(event)
                         session.diagnosis = data.get("text", "")
-                    elif ev_type == "run_complete":
+                    elif ev_type == "run.complete":
                         data = _parse_data(event)
                         session.run_meta = data
                     elif ev_type == "error":
                         data = _parse_data(event)
                         session.error_detail = data.get("message", "")
+                    elif ev_type == "session.created":
+                        data = _parse_data(event)
+                        new_tid = data.get("thread_id")
+                        if new_tid and new_tid != session.thread_id:
+                            logger.info(
+                                "Session %s thread_id updated: %s → %s",
+                                session.id, session.thread_id, new_tid,
+                            )
+                            session.thread_id = new_tid
 
             except Exception as e:
                 logger.exception("Session %s turn %d failed", session.id, session.turn_count)
@@ -265,16 +330,31 @@ class SessionManager:
 
     async def _persist_to_cosmos(self, session: Session):
         """Persist a finalized session to Cosmos DB via graph-query-api."""
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.put(
-                    f"{_GQ_BASE}/query/sessions",
-                    json=session.to_dict(),
-                )
-                resp.raise_for_status()
-            logger.info("Persisted session %s to Cosmos", session.id)
-        except Exception:
-            logger.exception("Failed to persist session %s", session.id)
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.put(
+                        f"{_GQ_BASE}/query/sessions",
+                        json=session.to_dict(),
+                    )
+                    resp.raise_for_status()
+                logger.info("Persisted session %s to Cosmos", session.id)
+                return
+            except Exception:
+                if attempt < max_attempts:
+                    delay = 2 ** attempt  # 2s, 4s
+                    logger.warning(
+                        "Persist attempt %d/%d failed for session %s, retrying in %ds",
+                        attempt, max_attempts, session.id, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.exception(
+                        "All %d persist attempts failed for session %s — "
+                        "session remains in memory until next finalize or restart",
+                        max_attempts, session.id,
+                    )
 
 
 # Module-level singleton
