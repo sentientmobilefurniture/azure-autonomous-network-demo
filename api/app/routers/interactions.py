@@ -39,7 +39,7 @@ def _get_store() -> DocumentStore:
     """Get the DocumentStore for interaction records."""
     return get_document_store(
         INTERACTIONS_DATABASE, INTERACTIONS_CONTAINER, "/scenario",
-        ensure_created=True,
+        ensure_created=False,
     )
 
 

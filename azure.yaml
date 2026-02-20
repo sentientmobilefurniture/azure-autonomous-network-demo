@@ -24,7 +24,7 @@ services:
     host: appservice
     hooks:
       prepackage:
-        shell: bash
+        shell: sh
         run: |
           cd ../frontend && npm ci && npm run build
           rm -rf ../api/static && cp -r dist ../api/static/

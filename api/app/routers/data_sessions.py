@@ -33,7 +33,7 @@ SESSIONS_CONTAINER = "interactions"
 def _get_store() -> DocumentStore:
     return get_document_store(
         SESSIONS_DATABASE, SESSIONS_CONTAINER, "/scenario",
-        ensure_created=True,
+        ensure_created=False,
     )
 
 

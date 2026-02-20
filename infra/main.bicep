@@ -179,6 +179,13 @@ module app 'modules/web-app.bicep' = {
     searchEndpoint: search.outputs.endpoint
     defaultScenario: defaultScenario
     fabricWorkspaceId: fabricWorkspaceId
+    subscriptionId: subscription().subscriptionId
+    resourceGroupName: rg.name
+    searchName: search.outputs.name
+    storageAccountName: storage.outputs.name
+    foundryName: aiFoundry.outputs.foundryName
+    runbooksIndexName: runbooksIndexName
+    ticketsIndexName: ticketsIndexName
   }
 }
 
