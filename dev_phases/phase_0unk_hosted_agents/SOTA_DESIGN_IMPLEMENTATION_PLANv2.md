@@ -1,30 +1,69 @@
-# SOTA Implementation Plan v2 — Microsoft Agent Framework Migration
+# SOTA Implementation Plan v2.1 — Declarative Local Agents + Web App
 
-> **Date**: 2026-02-21 (updated)  
-> **Framework**: `agent-framework` (`1.0.0rc1`)  
+> **Date**: 2026-02-21 (v2.1 — declarative YAML rewrite)  
+> **Framework**: `agent-framework` (`1.0.0rc1`) — verified on PyPI  
+> **Pattern**: Declarative YAML agents with typed Python tool functions  
 > **Hosting**: Azure Web App (replacing Container Apps)  
-> **Principle**: Replace ALL custom orchestration code with the official Microsoft Agent Framework  
+> **Live endpoint tested**: `https://foundrydev1.services.ai.azure.com/api/projects/devproj1`  
 > **Source code**: `/home/hanchoong/microsoft_skills/agent-framework/python/`
 
 ---
 
 ## Executive Summary
 
-v1 of the SOTA plan proposed `ImageBasedHostedAgentDefinition` + custom containers. This v2 takes a fundamentally different approach: **adopt `microsoft/agent-framework` as the runtime layer**, **merge graph-query-api into a single FastAPI process**, and **deploy on Azure Web App** instead of Container Apps.
+Replace the entire Foundry persistent agent + custom orchestrator architecture with **local declarative agents** defined in YAML, loaded by `AgentFactory` at startup, with tools as typed Python functions organized in modules.
 
-The agent-framework already provides:
-- `AzureAIAgentsProvider` → wraps our Foundry agents as `Agent` instances
-- `HandoffOrchestrator` / `GroupChatOrchestrator` → replaces our custom `ConnectedAgentTool` orchestration loop
-- `FunctionTool` → replaces our manual `FunctionToolDefinition` + `enable_auto_function_calls` wiring
-- Streaming via `agent.run(stream=True)` → replaces our 771-line `orchestrator.py`
+### Key architectural shift
 
-The infrastructure simplification:
-- **Merge** `graph-query-api/` into `api/` → single FastAPI process
-- **Delete** nginx, supervisord, multi-process Dockerfile
-- **Replace** Container App with Azure Web App → simpler deployment, no container registry
-- **Delete** OpenAPI proxy routers → FabricTool handles graph/telemetry queries natively
+| Aspect | Current | v2.1 (Declarative Local) |
+|--------|---------|-------------------------|
+| Agent definition | Python `create_agent()` calls to Foundry API | **YAML files** loaded by `AgentFactory` |
+| Agent lifecycle | Persistent in Foundry cloud | **In-process** — created at app startup |
+| Orchestration | Foundry ConnectedAgentTool (server-side) | **Single agent with all tools** — LLM routes directly |
+| Tool definitions | Manual `FunctionToolDefinition` + JSON schema | **Typed Python functions** — framework auto-generates schema |
+| Tool execution | `enable_auto_function_calls` in custom thread | **Framework handles internally** in `agent.run()` |
+| Streaming | Custom `SSEEventHandler` + `asyncio.Queue` bridge | **`agent.run(stream=True)`** → translate to SSE |
+| Provisioning | `provision_agents.py` (416 lines) → Foundry API | **Zero provisioning** — agents load from YAML |
+| Agent discovery | `agent_ids.py` TTL-cached polling (236 lines) | **None needed** — agents are local |
+| Prompts | Markdown files in `data/scenarios/*/prompts/` | **Inline in YAML** or `=File(path)` references |
+| Sessions | Custom `Session` dataclass + Cosmos persistence | **`AgentSession`** + Cosmos persistence |
 
-**Net result**: ~2,400 lines of backend Python eliminated, ~200 lines of infra config eliminated, replaced by ~300 lines of framework integration. Single-process Web App deployment.
+### The single-agent insight
+
+The 4 sub-agents (GraphExplorer, Telemetry, RunbookKB, HistoricalTicket) existed as separate Foundry agents because `ConnectedAgentTool` required it. In the local model, **one agent can have all tools directly**. The LLM decides which tool to call based on the query — no orchestrator-to-sub-agent delegation overhead.
+
+The frontend still sees progressive tool call disclosure (each tool call shows agent name, query, response) because the framework emits `Content(type='function_call')` events for each tool invocation. We name the tools descriptively (`graph_topology_query`, `telemetry_kql_query`, `search_runbooks`, `search_tickets`, `dispatch_field_engineer`) so the UI can display them as "steps".
+
+### Files eliminated
+
+| File | Lines | Reason |
+|------|-------|--------|
+| `api/app/orchestrator.py` | 772 | Framework handles everything |
+| `api/app/agent_ids.py` | 236 | No Foundry agents to discover |
+| `api/app/dispatch.py` | 139 | Moved to `api/app/tools/dispatch.py` |
+| `scripts/agent_provisioner.py` | 416 | YAML replaces provisioning |
+| `scripts/provision_agents.py` | 183 | No provisioning step |
+| `graph-query-api/` (entire) | 1,975 | Merged into api/ |
+| `Dockerfile` | 75 | Web App |
+| `nginx.conf`, `supervisord.conf` | 95 | Single process |
+| **Total eliminated** | **~3,891** | |
+
+### Files created
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `api/agents/orchestrator.yaml` | ~40 | Declarative agent definition |
+| `api/app/agent_loader.py` | ~30 | `AgentFactory` + tool binding |
+| `api/app/streaming.py` | ~150 | `agent.run(stream=True)` → SSE |
+| `api/app/tools/__init__.py` | ~20 | Tool bindings export |
+| `api/app/tools/graph.py` | ~60 | `graph_topology_query()` |
+| `api/app/tools/telemetry.py` | ~60 | `telemetry_kql_query()` |
+| `api/app/tools/search.py` | ~80 | `search_runbooks()`, `search_tickets()` |
+| `api/app/tools/dispatch.py` | ~140 | `dispatch_field_engineer()` (moved) |
+| `infra/modules/web-app.bicep` | ~60 | App Service Plan + Web App |
+| **Total created** | **~640** | |
+
+### Net: −3,251 lines
 
 ---
 
@@ -63,46 +102,54 @@ Container App (single container, supervisord + nginx)
 └── Dockerfile — multi-stage (node build + python + nginx + supervisord)
 ```
 
-### AFTER (Web App — single FastAPI process, zero infra plumbing)
+### AFTER (Web App — declarative agent, typed tools, single process)
 
 ```
-Azure Web App (single process, `gunicorn app.main:app`)
+Azure Web App (single process, gunicorn + FastAPI)
 ├── app/ (unified FastAPI)
-│   ├── main.py — single FastAPI app, all routes
+│   ├── main.py — single entry point, all routes
 │   │
-│   │ ── Agent layer (agent-framework) ──
-│   ├── agents.py (~80 lines) — AzureAIAgentsProvider, get_orchestrator_agent()
-│   ├── streaming.py (~120 lines) — agent.run(stream=True) → SSE translation
-│   ├── dispatch.py (139 lines) — dispatch_field_engineer (kept)
+│   │ ── Agent layer (declarative YAML) ──
+│   ├── agents/
+│   │   └── orchestrator.yaml           # THE agent — instructions + tool refs
+│   ├── agent_loader.py (~30 lines)     # AgentFactory + load_agent()
+│   ├── streaming.py (~150 lines)       # agent.run(stream=True) → SSE events
+│   │
+│   │ ── Tools (typed Python functions, auto-schema) ──
+│   ├── tools/
+│   │   ├── __init__.py                 # TOOL_BINDINGS export
+│   │   ├── graph.py                    # graph_topology_query(query: str) → str
+│   │   ├── telemetry.py               # telemetry_kql_query(query: str) → str
+│   │   ├── search.py                  # search_runbooks(query: str) → str
+│   │   │                              # search_tickets(query: str) → str
+│   │   └── dispatch.py                # dispatch_field_engineer(...) → str
 │   │
 │   │ ── Session layer ──
-│   ├── session_manager.py (~250 lines) — simplified, calls agent.run()
-│   ├── sessions.py (156 lines) — session dataclass (kept)
+│   ├── session_manager.py (~200 lines) # AgentSession + Cosmos persistence
+│   ├── sessions.py (156 lines)         # Session dataclass (kept)
 │   │
 │   │ ── Data layer (merged from graph-query-api) ──
 │   ├── routers/
-│   │   ├── sessions.py (~150 lines) — REST/SSE endpoints
-│   │   ├── topology.py — Fabric topology for graph viewer (moved)
-│   │   ├── search.py — AI Search for frontend viz (moved)
-│   │   ├── health.py — health checks (moved)
-│   │   ├── interactions.py — frontend interactions (moved)
-│   │   └── replay.py — session replay (moved)
-│   ├── cosmos_helpers.py — Cosmos DB helpers (moved)
-│   ├── fabric_discovery.py — Fabric workspace discovery (moved)
-│   └── models.py — data models (moved)
+│   │   ├── sessions.py                 # REST/SSE endpoints
+│   │   ├── topology.py                 # Fabric topology → graph viewer
+│   │   ├── search.py                   # AI Search → frontend viz
+│   │   ├── health.py                   # health checks
+│   │   ├── interactions.py             # frontend interactions
+│   │   └── replay.py                   # session replay
+│   ├── cosmos_helpers.py               # Cosmos DB (moved)
+│   ├── fabric_discovery.py             # Fabric workspace (moved)
+│   └── data_models.py                  # data models (moved)
 │
-├── static/ — React build output (served by FastAPI StaticFiles)
-└── startup.sh — `gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker`
+├── static/                              # React build (served by FastAPI)
+└── startup.sh                           # gunicorn command
 
-DELETED:
-├── graph-query-api/ (entire directory — merged into app/)
-├── supervisord.conf
-├── nginx.conf
-├── Dockerfile (replaced by Web App deployment)
-├── orchestrator.py (771 lines → 0)
-├── agent_ids.py (235 lines → 0)
-├── router_graph.py (76 lines → 0, FabricTool)
-├── router_telemetry.py (74 lines → 0, FabricTool)
+NO MORE:
+├── orchestrator.py (772 lines)         → agent.run() handles everything
+├── agent_ids.py (236 lines)            → agents are local, no discovery
+├── scripts/agent_provisioner.py (416)  → YAML replaces provisioning
+├── scripts/provision_agents.py (183)   → no provisioning step
+├── graph-query-api/ (entire dir)       → merged into app/
+├── Dockerfile, nginx.conf, supervisord → Web App deployment
 ```
 │   ├── dispatch.py (139 lines)
 │   │   └── dispatch_field_engineer FunctionTool
@@ -128,546 +175,348 @@ DELETED:
 (See diagram above — unified Web App)
 ```
 
+
 ---
 
 ## Phase 1: Install agent-framework & upgrade SDK (Day 1)
 
-### Step 1.1 — Update dependencies
-
-**File**: `api/pyproject.toml`
+### Step 1.1 — Update api/pyproject.toml
 
 ```toml
 # BEFORE
 dependencies = [
     "azure-ai-projects>=1.0.0,<2.0.0",
     "azure-ai-agents==1.2.0b6",
-    ...
+    "pyyaml>=6.0",
 ]
 
 # AFTER
 dependencies = [
-    "agent-framework-azure-ai>=1.0.0rc1",  # Pulls in agent-framework-core + azure-ai-agents
-    "agent-framework-orchestrations>=1.0.0rc1",  # Handoff/GroupChat
-    ...
+    "agent-framework-azure-ai>=1.0.0rc1",    # Pulls in core + azure-ai-agents
+    "agent-framework-declarative>=1.0.0rc1",  # YAML agent loader (AgentFactory)
 ]
 ```
 
-**Cross-ref**: `agent-framework/python/packages/azure-ai/pyproject.toml`:
-```toml
-dependencies = [
-    "agent-framework-core>=1.0.0rc1",
-    "azure-ai-agents == 1.2.0b5",
-]
-```
-
-**Note**: The framework pins `azure-ai-agents==1.2.0b5`. Our code currently uses `1.2.0b6`. This must be reconciled — either use the framework's pin or override.
-
-**File**: `pyproject.toml` (root)
-
-Same changes — replace direct `azure-ai-projects` / `azure-ai-agents` with `agent-framework-azure-ai`.
-
-### Step 1.2 — Verify installation
+### Step 1.2 — Verify
 
 ```bash
 cd api && uv sync && .venv/bin/python3 -c "
 from agent_framework import Agent
-from agent_framework_azure_ai import AzureAIAgentsProvider
-from agent_framework_orchestrations import HandoffOrchestrator
-print('All imports OK')
+from agent_framework_declarative import AgentFactory
+print('OK')
 "
 ```
 
 ---
 
-## Phase 2: Create Agent Provider (Day 1-2)
+## Phase 2: Create Typed Tool Modules (Day 1-2)
 
-### Step 2.1 — Create `api/app/agents.py`
+### Step 2.1 — Create api/app/tools/ directory
 
-This single file replaces `agent_ids.py` (235 lines) + the agent creation parts of `orchestrator.py`.
-
-```python
-"""
-Agent definitions using Microsoft Agent Framework.
-
-Replaces: orchestrator.py (config/agent wiring), agent_ids.py (discovery)
-"""
-
-import os
-import logging
-from typing import Any
-
-from agent_framework import Agent, FunctionTool
-from agent_framework_azure_ai import AzureAIAgentsProvider
-from azure.identity.aio import DefaultAzureCredential
-
-from app.dispatch import dispatch_field_engineer
-
-logger = logging.getLogger(__name__)
-
-# Singleton provider
-_provider: AzureAIAgentsProvider | None = None
-_credential: DefaultAzureCredential | None = None
-
-
-async def get_provider() -> AzureAIAgentsProvider:
-    """Get or create the AzureAIAgentsProvider singleton."""
-    global _provider, _credential
-    if _provider is None:
-        _credential = DefaultAzureCredential()
-        _provider = AzureAIAgentsProvider(
-            project_endpoint=os.environ.get("PROJECT_ENDPOINT"),
-            credential=_credential,
-        )
-    return _provider
-
-
-async def get_orchestrator_agent() -> Agent:
-    """Get the Orchestrator agent, providing the dispatch function tool.
-
-    The framework's AzureAIAgentsProvider handles:
-    - Agent discovery by ID (no more TTL-cached polling)
-    - Tool validation (ensures dispatch_field_engineer is provided)
-    - Streaming via agent.run(stream=True)
-    - Function auto-execution via FunctionTool
-    """
-    provider = await get_provider()
-    orchestrator_id = os.environ.get("ORCHESTRATOR_AGENT_ID", "")
-
-    if not orchestrator_id:
-        raise RuntimeError("ORCHESTRATOR_AGENT_ID not set")
-
-    # The FunctionTool wraps dispatch_field_engineer with auto-execution
-    dispatch_tool = FunctionTool.from_function(dispatch_field_engineer)
-
-    return await provider.get_agent(
-        id=orchestrator_id,
-        tools=[dispatch_tool],
-    )
-
-
-async def cleanup():
-    """Close provider and credential on shutdown."""
-    global _provider, _credential
-    if _provider:
-        await _provider.close()
-        _provider = None
-    if _credential:
-        await _credential.close()
-        _credential = None
-```
-
-**Cross-ref**: `agent-framework/python/packages/azure-ai/agent_framework_azure_ai/_agent_provider.py`:
-- `get_agent(id, tools=[...])` fetches by ID and validates function tools ✅
-- Provider manages `AgentsClient` lifecycle ✅
-- `_validate_function_tools` ensures dispatch_field_engineer is provided ✅
-
-**What this eliminates**:
-- `agent_ids.py` (235 lines) — `get_agent()` replaces `_discover_agents()` + TTL cache
-- `orchestrator.py` lines 30-85 — config helpers (`_get_credential`, `_get_project_client`, `is_configured`, `_load_orchestrator_id`, `_load_agent_names`)
-
-### Step 2.2 — Create `api/app/streaming.py`
-
-This replaces the ENTIRE 771-line `orchestrator.py` — the SSEEventHandler, asyncio.Queue bridge, thread lifecycle, retry logic.
+**File**: `api/app/tools/__init__.py`
 
 ```python
-"""
-Streaming bridge — agent.run(stream=True) → SSE events.
-
-Replaces: orchestrator.py (771 lines)
-"""
-
-import json
-import logging
-import uuid
-from datetime import datetime, timezone
-from typing import AsyncGenerator
-
-from agent_framework import AgentResponseUpdate
-
-logger = logging.getLogger(__name__)
-
-
-async def stream_agent_to_sse(
-    agent,
-    alert_text: str,
-    *,
-    conversation_id: str | None = None,
-) -> AsyncGenerator[dict, None]:
-    """Run the agent with streaming and yield SSE-shaped events.
-
-    The Agent Framework handles ALL of:
-    - Thread creation/reuse (via conversation_id option)
-    - Tool call execution (FunctionTool auto-dispatches)
-    - Connected agent delegation
-    - Retry on failure
-    - Streaming response chunks
-
-    We just translate framework events → our SSE schema.
-    """
-    msg_id = str(uuid.uuid4())
-
-    yield {
-        "event": "run.start",
-        "data": json.dumps({
-            "run_id": "",
-            "alert": alert_text,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }),
-    }
-
-    try:
-        step_counter = 0
-        options = {}
-        if conversation_id:
-            options["conversation_id"] = conversation_id
-
-        async with agent.run(
-            alert_text,
-            stream=True,
-            **options,
-        ) as stream:
-            async for update in stream:
-                sse_events = _translate_update(update, msg_id, step_counter)
-                for event in sse_events:
-                    if event.get("_step_increment"):
-                        step_counter += 1
-                    yield event
-
-        # Final response
-        response = await stream.get_response()
-        if response.text:
-            yield {
-                "event": "message.complete",
-                "data": json.dumps({"id": msg_id, "text": response.text}),
-            }
-        yield {
-            "event": "run.complete",
-            "data": json.dumps({
-                "steps": step_counter,
-                "time": "",
-            }),
-        }
-
-    except Exception as e:
-        logger.exception("Agent stream failed")
-        yield {
-            "event": "error",
-            "data": json.dumps({"message": str(e)}),
-        }
-
-
-def _translate_update(
-    update: AgentResponseUpdate,
-    msg_id: str,
-    step: int,
-) -> list[dict]:
-    """Translate a framework AgentResponseUpdate → SSE events.
-
-    The framework emits structured updates for:
-    - Tool calls (start/complete)
-    - Message text deltas
-    - Function call results
-    """
-    events = []
-
-    # Text content delta
-    if update.text:
-        events.append({
-            "event": "message.delta",
-            "data": json.dumps({"id": msg_id, "text": update.text}),
-        })
-
-    # Tool call events (the framework tracks these on RunStep callbacks)
-    if update.tool_calls:
-        for tc in update.tool_calls:
-            if tc.get("status") == "in_progress":
-                events.append({
-                    "event": "tool_call.start",
-                    "data": json.dumps({
-                        "id": tc.get("id", str(uuid.uuid4())),
-                        "step": step + 1,
-                        "agent": tc.get("agent", ""),
-                        "query": tc.get("query", ""),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }),
-                    "_step_increment": True,
-                })
-            elif tc.get("status") == "completed":
-                events.append({
-                    "event": "tool_call.complete",
-                    "data": json.dumps({
-                        "id": tc.get("id", ""),
-                        "step": step,
-                        "agent": tc.get("agent", ""),
-                        "duration": tc.get("duration", ""),
-                        "response": tc.get("response", ""),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }),
-                })
-
-    return events
-```
-
-**What this eliminates entirely**:
-- `SSEEventHandler` class (~200 lines)
-- `_run_in_thread()` function (~150 lines)
-- `run_orchestrator_session()` async generator (~80 lines)
-- `_parse_structured_output()` (~100 lines)
-- `_resolve_agent_name()` / `_extract_arguments()` (~80 lines)
-- `asyncio.Queue` bridge pattern
-- Thread-safe `_put()` helper
-- `MAX_RUN_ATTEMPTS` retry loop
-- Cancel event handling
-- Message ID generation for SSE
-
-The framework's `AzureAIAgentClient._chat_client.py` (1,476 lines) handles ALL of this internally via `AsyncAgentEventHandler`, including:
-- Run step tracking
-- Message delta streaming
-- Function tool auto-execution
-- MCP tool approval
-- Thread management
-
-**Cross-ref**: `agent-framework/python/packages/azure-ai/agent_framework_azure_ai/_chat_client.py` — the framework's own 1,476-line streaming handler does everything our 771-line `orchestrator.py` does, plus more (MCP approval, code interpreter, file search annotations, structured outputs).
-
----
-
-## Phase 3: Provisioning Rewrite (Day 2)
-
-### Step 3.1 — Rewrite `scripts/agent_provisioner.py`
-
-**Current**: 416 lines — OpenAPI spec loading, ConnectedAgentTool wiring, FunctionToolDefinition schema, delete-and-recreate.
-
-**New**: ~120 lines — use `AzureAIAgentsProvider.create_agent()`.
-
-```python
-"""
-Agent provisioning using Microsoft Agent Framework.
-
-Replaces the manual create_agent + ConnectedAgentTool + FunctionToolDefinition
-pattern with the framework's AzureAIAgentsProvider.
-"""
-
-import asyncio
-import os
-import logging
-
-from agent_framework import FunctionTool
-from agent_framework_azure_ai import AzureAIAgentsProvider
-from azure.identity.aio import DefaultAzureCredential
-
-from dispatch import dispatch_field_engineer  # local import
-
-logger = logging.getLogger("agent-provisioner")
-
-
-async def provision_all(
-    project_endpoint: str,
-    model: str,
-    prompts: dict[str, str],
-    search_connection_id: str,
-    runbooks_index: str,
-    tickets_index: str,
-) -> dict:
-    """Provision all 5 agents using the Agent Framework provider."""
-
-    async with (
-        DefaultAzureCredential() as credential,
-        AzureAIAgentsProvider(
-            project_endpoint=project_endpoint,
-            credential=credential,
-        ) as provider,
-    ):
-        # --- Sub-agents ---
-
-        ge = await provider.create_agent(
-            name="GraphExplorerAgent",
-            model=model,
-            instructions=prompts["graph_explorer"],
-            tools=[],  # FabricTool added via Foundry portal or future SDK support
-        )
-        logger.info("Created GraphExplorerAgent: %s", ge.id)
-
-        tel = await provider.create_agent(
-            name="TelemetryAgent",
-            model=model,
-            instructions=prompts["telemetry"],
-            tools=[],
-        )
-        logger.info("Created TelemetryAgent: %s", tel.id)
-
-        # AI Search tools — use low-level SDK tool objects passed as dicts
-        from azure.ai.agents.models import AzureAISearchTool, AzureAISearchQueryType
-
-        rb_search = AzureAISearchTool(
-            index_connection_id=search_connection_id,
-            index_name=runbooks_index,
-            query_type=AzureAISearchQueryType.SEMANTIC,
-            top_k=5,
-        )
-        rb = await provider.create_agent(
-            name="RunbookKBAgent",
-            model=model,
-            instructions=prompts["runbook"],
-            tools=rb_search.definitions,
-        )
-        logger.info("Created RunbookKBAgent: %s", rb.id)
-
-        tk_search = AzureAISearchTool(
-            index_connection_id=search_connection_id,
-            index_name=tickets_index,
-            query_type=AzureAISearchQueryType.SEMANTIC,
-            top_k=5,
-        )
-        tk = await provider.create_agent(
-            name="HistoricalTicketAgent",
-            model=model,
-            instructions=prompts["ticket"],
-            tools=tk_search.definitions,
-        )
-        logger.info("Created HistoricalTicketAgent: %s", tk.id)
-
-        # --- Orchestrator with ConnectedAgentTool + FunctionTool ---
-
-        from azure.ai.agents.models import ConnectedAgentTool
-
-        connected_tools = []
-        for agent_ref in [
-            (ge, "Graph topology explorer"),
-            (tel, "Telemetry and alert analyst"),
-            (rb, "Operational runbook searcher"),
-            (tk, "Historical incident searcher"),
-        ]:
-            ct = ConnectedAgentTool(
-                id=agent_ref[0].id,
-                name=agent_ref[0].name,
-                description=agent_ref[1],
-            )
-            connected_tools.extend(ct.definitions)
-
-        dispatch_tool = FunctionTool.from_function(dispatch_field_engineer)
-
-        orch = await provider.create_agent(
-            name="Orchestrator",
-            model=model,
-            instructions=prompts["orchestrator"],
-            tools=[*connected_tools, dispatch_tool],
-        )
-        logger.info("Created Orchestrator: %s", orch.id)
-
-        return {
-            "orchestrator_id": orch.id,
-            "sub_agents": {
-                "GraphExplorerAgent": ge.id,
-                "TelemetryAgent": tel.id,
-                "RunbookKBAgent": rb.id,
-                "HistoricalTicketAgent": tk.id,
-            },
-        }
-```
-
-**What this eliminates**:
-- `_load_openapi_spec()` (40 lines)
-- `CONNECTOR_OPENAPI_VARS` dict (25 lines)
-- `GRAPH_TOOL_DESCRIPTIONS` dict (5 lines)
-- `_build_connection_id()` (15 lines)
-- `cleanup_existing()` (20 lines)
-- Manual `FunctionToolDefinition` + `FunctionDefinition` schema (60 lines)
-- The `AgentProvisioner` class wrapper (50 lines)
-
-**Cross-ref**: `agent-framework/python/packages/azure-ai/agent_framework_azure_ai/_agent_provider.py` line 160:
-- `create_agent(name, model, instructions, tools)` — creates on Foundry AND returns wrapped `Agent` ✅
-- Tools are automatically converted via `to_azure_ai_agent_tools()` ✅
-- `FunctionTool.from_function(dispatch_field_engineer)` auto-generates the JSON schema from the Python docstring ✅
-
----
-
-## Phase 4: Session Management Simplification (Day 2-3)
-
-### Step 4.1 — Simplify `api/app/session_manager.py`
-
-The framework provides `AgentSession` with built-in history management. Our `SessionManager` simplifies to just Cosmos persistence + SSE subscriber management.
-
-**Current session_manager.py responsibilities**:
-1. Session creation → **KEEP** (Cosmos tracking)
-2. Launch orchestrator task → **REPLACE** with `agent.run(stream=True)`
-3. Event tracking (tool_call.complete → session.steps) → **SIMPLIFY**
-4. Multi-turn thread reuse → **FRAMEWORK HANDLES** (via `conversation_id`)
-5. Cancel support → **FRAMEWORK HANDLES** (via AbortController-style)
-6. Cosmos persistence → **KEEP**
-7. Idle timeout → **KEEP**
-
-**Key change**: The `start()` and `continue_session()` methods no longer call `run_orchestrator_session()`. Instead they call `stream_agent_to_sse()` from the new `streaming.py`.
-
-```python
-# BEFORE (session_manager.py → start())
-from app.orchestrator import run_orchestrator_session
-
-async for event in run_orchestrator_session(
-    session.alert_text, session._cancel_event
-):
-    session.push_event(event)
-    # ... track events
-
-# AFTER
-from app.streaming import stream_agent_to_sse
-from app.agents import get_orchestrator_agent
-
-agent = await get_orchestrator_agent()
-async for event in stream_agent_to_sse(
-    agent, session.alert_text,
-    conversation_id=session.thread_id,
-):
-    session.push_event(event)
-    # ... track events (same logic, different source)
-```
-
----
-
-## Phase 5: Alternative — AG-UI Protocol Endpoint (Day 3)
-
-### Option A: Keep Custom SSE (minimal frontend change)
-
-Keep the existing SSE event schema (`tool_call.start`, `message.delta`, etc.) and use `streaming.py` to translate framework events. **Frontend unchanged.**
-
-### Option B: AG-UI Protocol (radical frontend simplification)
-
-Use the framework's `add_agent_framework_fastapi_endpoint` to expose the agent directly via the AG-UI streaming protocol. **Frontend switches to AG-UI client.**
-
-```python
-# api/app/main.py
-from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint
-from app.agents import get_orchestrator_agent
-
-agent = await get_orchestrator_agent()
-add_agent_framework_fastapi_endpoint(app, agent, "/api/agent")
-```
-
-**Cross-ref**: `agent-framework/python/packages/ag-ui/agent_framework_ag_ui/__init__.py`:
-```python
-from ._endpoint import add_agent_framework_fastapi_endpoint
-```
-
-**Frontend would use**:
-```typescript
-// Replace useConversation.ts SSE parser with AG-UI client
-import { AGUIClient } from '@ag-ui/client';  // or direct fetch
-
-const client = new AGUIClient({ endpoint: '/api/agent' });
-const stream = client.run(alertText);
-for await (const event of stream) {
-  // AG-UI protocol events are standardized
+"""Tool bindings for the declarative agent."""
+from .graph import graph_topology_query
+from .telemetry import telemetry_kql_query
+from .search import search_runbooks, search_tickets
+from .dispatch import dispatch_field_engineer
+
+TOOL_BINDINGS = {
+    "graph_topology_query": graph_topology_query,
+    "telemetry_kql_query": telemetry_kql_query,
+    "search_runbooks": search_runbooks,
+    "search_tickets": search_tickets,
+    "dispatch_field_engineer": dispatch_field_engineer,
 }
 ```
 
-**Recommendation**: Start with **Option A** (zero frontend changes), evaluate Option B as a future enhancement.
+**File**: `api/app/tools/graph.py` — Typed function, schema auto-generated from `Annotated[str, Field(...)]`.
+
+```python
+from typing import Annotated
+import httpx
+from pydantic import Field
+
+async def graph_topology_query(
+    query: Annotated[str, Field(description=(
+        "GQL query. Uses MATCH/RETURN syntax. "
+        "Example: MATCH (r:CoreRouter) RETURN r.RouterId, r.Hostname. "
+        "Relationships: MATCH (a)-[r:connects_to]->(b)."
+    ))],
+) -> str:
+    """Execute a GQL graph query against the network topology."""
+    from app.config import GRAPH_QUERY_BASE
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(f"{GRAPH_QUERY_BASE}/query/graph", json={"query": query})
+        resp.raise_for_status()
+        return resp.text
+```
+
+**File**: `api/app/tools/telemetry.py`
+
+```python
+from typing import Annotated
+import httpx
+from pydantic import Field
+
+async def telemetry_kql_query(
+    query: Annotated[str, Field(description=(
+        "KQL query. Start with table name + pipe operators. "
+        "Tables: AlertStream, LinkTelemetry."
+    ))],
+) -> str:
+    """Execute a KQL query against network telemetry and alert data."""
+    from app.config import GRAPH_QUERY_BASE
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(f"{GRAPH_QUERY_BASE}/query/telemetry", json={"query": query})
+        resp.raise_for_status()
+        return resp.text
+```
+
+**File**: `api/app/tools/search.py`
+
+```python
+from typing import Annotated
+import httpx
+from pydantic import Field
+
+async def search_runbooks(
+    query: Annotated[str, Field(description="Search query for operational runbooks and procedures")],
+) -> str:
+    """Search the runbook knowledge base for procedures and troubleshooting steps."""
+    from app.config import GRAPH_QUERY_BASE
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(f"{GRAPH_QUERY_BASE}/query/search",
+            json={"agent": "RunbookKBAgent", "query": query, "top": 5})
+        resp.raise_for_status()
+        return resp.text
+
+async def search_tickets(
+    query: Annotated[str, Field(description="Search query for historical incident tickets")],
+) -> str:
+    """Search historical incident tickets for past resolutions and patterns."""
+    from app.config import GRAPH_QUERY_BASE
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(f"{GRAPH_QUERY_BASE}/query/search",
+            json={"agent": "HistoricalTicketAgent", "query": query, "top": 5})
+        resp.raise_for_status()
+        return resp.text
+```
+
+**File**: `api/app/tools/dispatch.py` — Move from `api/app/dispatch.py`, unchanged. Already has `Annotated` parameter types and full docstring.
+
+### Step 2.2 — Create YAML agent definition
+
+**File**: `api/agents/orchestrator.yaml`
+
+```yaml
+kind: Prompt
+name: NetworkInvestigator
+description: Autonomous NOC investigator agent
+instructions: |
+  You are an autonomous Network Operations Center (NOC) AI investigator.
+  
+  When you receive a network alert, systematically investigate it:
+  1. Graph topology — Use graph_topology_query to explore the network.
+  2. Telemetry & alerts — Use telemetry_kql_query for evidence.
+  3. Runbooks — Use search_runbooks for procedures.
+  4. Historical tickets — Use search_tickets for past incidents.
+  5. Diagnosis — Synthesize findings.
+  6. Action — If needed, use dispatch_field_engineer.
+  
+  Always explain your reasoning at each step.
+
+model:
+  id: =Env.MODEL_DEPLOYMENT_NAME
+  connection:
+    kind: Remote
+    endpoint: =Env.AZURE_AI_PROJECT_ENDPOINT
+
+tools:
+  - kind: function
+    name: graph_topology_query
+    bindings: { graph_topology_query: graph_topology_query }
+  - kind: function
+    name: telemetry_kql_query
+    bindings: { telemetry_kql_query: telemetry_kql_query }
+  - kind: function
+    name: search_runbooks
+    bindings: { search_runbooks: search_runbooks }
+  - kind: function
+    name: search_tickets
+    bindings: { search_tickets: search_tickets }
+  - kind: function
+    name: dispatch_field_engineer
+    bindings: { dispatch_field_engineer: dispatch_field_engineer }
+```
+
+### Step 2.3 — Create agent loader
+
+**File**: `api/app/agent_loader.py`
+
+```python
+"""Load the declarative agent from YAML at startup."""
+import os
+from pathlib import Path
+from agent_framework_declarative import AgentFactory
+from app.tools import TOOL_BINDINGS
+
+_agent = None
+AGENTS_DIR = Path(__file__).parent.parent / "agents"
+
+def load_agent():
+    global _agent
+    # Map our env vars to what the framework expects
+    os.environ.setdefault("AZURE_AI_PROJECT_ENDPOINT",
+        os.environ.get("PROJECT_ENDPOINT", ""))
+    os.environ.setdefault("AZURE_AI_MODEL_DEPLOYMENT_NAME",
+        os.environ.get("MODEL_DEPLOYMENT_NAME", ""))
+    factory = AgentFactory(bindings=TOOL_BINDINGS)
+    _agent = factory.create_agent_from_yaml_path(
+        str(AGENTS_DIR / "orchestrator.yaml"))
+    return _agent
+
+def get_agent():
+    if _agent is None:
+        raise RuntimeError("Agent not loaded. Call load_agent() at startup.")
+    return _agent
+```
 
 ---
 
-## Phase 6: Orchestration Upgrade — Handoff Pattern (Day 3-4)
+## Phase 3: Create Streaming Translator (Day 2)
 
-> **Skipped** — see assessment below.
+**File**: `api/app/streaming.py`
+
+Translates `agent.run(stream=True)` → our existing SSE schema so the frontend is unchanged.
+
+```python
+"""Stream agent.run() events → SSE events matching the frontend schema."""
+import json, uuid
+from datetime import datetime, timezone
+from typing import AsyncGenerator
+from agent_framework import AgentSession
+
+async def stream_agent_to_sse(
+    agent, alert_text: str, session: AgentSession | None = None,
+) -> AsyncGenerator[dict, None]:
+    msg_id = str(uuid.uuid4())
+    step_counter = 0
+    accumulated_text = ""
+    message_started = False
+
+    yield {"event": "run.start", "data": json.dumps({
+        "run_id": "", "alert": alert_text,
+        "timestamp": datetime.now(timezone.utc).isoformat()})}
+
+    try:
+        stream = agent.run(alert_text, stream=True, session=session)
+        async for update in stream:
+            for content in (update.contents or []):
+                if content.type == "text" and content.text:
+                    if not message_started:
+                        message_started = True
+                        yield {"event": "message.start",
+                               "data": json.dumps({"id": msg_id})}
+                    accumulated_text += content.text
+                    yield {"event": "message.delta",
+                           "data": json.dumps({"id": msg_id, "text": content.text})}
+
+                elif content.type == "function_call":
+                    step_counter += 1
+                    yield {"event": "tool_call.start", "data": json.dumps({
+                        "id": getattr(content, 'id', '') or str(uuid.uuid4()),
+                        "step": step_counter,
+                        "agent": getattr(content, 'name', ''),
+                        "query": (getattr(content, 'arguments', '') or '')[:500],
+                        "timestamp": datetime.now(timezone.utc).isoformat()})}
+
+                elif content.type == "function_result":
+                    yield {"event": "tool_call.complete", "data": json.dumps({
+                        "id": getattr(content, 'call_id', ''),
+                        "step": step_counter,
+                        "agent": getattr(content, 'name', ''),
+                        "duration": "", "query": "",
+                        "response": (getattr(content, 'text', '') or '')[:2000],
+                        "timestamp": datetime.now(timezone.utc).isoformat()})}
+
+        if accumulated_text:
+            yield {"event": "message.complete",
+                   "data": json.dumps({"id": msg_id, "text": accumulated_text})}
+        yield {"event": "run.complete",
+               "data": json.dumps({"steps": step_counter, "time": ""})}
+
+    except Exception as e:
+        yield {"event": "error",
+               "data": json.dumps({"message": str(e)})}
+```
 
 ---
+
+## Phase 4: Wire Agent Into Session Manager (Day 2-3)
+
+### Step 4.1 — Update session_manager.py
+
+Replace `run_orchestrator_session()` calls with `stream_agent_to_sse()`:
+
+```python
+# BEFORE
+from app.orchestrator import run_orchestrator_session
+async for event in run_orchestrator_session(
+    session.alert_text, session._cancel_event):
+    session.push_event(event)
+
+# AFTER
+from app.agent_loader import get_agent
+from app.streaming import stream_agent_to_sse
+agent = get_agent()
+async for event in stream_agent_to_sse(agent, session.alert_text):
+    session.push_event(event)
+```
+
+### Step 4.2 — Update main.py lifespan
+
+```python
+from contextlib import asynccontextmanager
+from app.agent_loader import load_agent
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_agent()
+    yield
+
+app = FastAPI(lifespan=lifespan)
+```
+
+### Step 4.3 — Delete replaced files
+
+```bash
+rm api/app/orchestrator.py       # 772 lines → framework handles it
+rm api/app/agent_ids.py          # 236 lines → no Foundry agents
+rm api/app/dispatch.py           # moved to api/app/tools/dispatch.py
+rm scripts/agent_provisioner.py  # 416 lines → YAML
+rm scripts/provision_agents.py   # 183 lines → no provisioning
+```
+
+---
+
+## Phase 5: Verify agent flow end-to-end (Day 3)
+
+```bash
+# 1. Compile check
+cd api && python3 -m py_compile app/agent_loader.py
+cd api && python3 -m py_compile app/streaming.py
+cd api && python3 -m py_compile app/tools/__init__.py
+
+# 2. Start locally
+cd api && source ../azure_config.env && uv run uvicorn app.main:app --port 8000
+
+# 3. Test SSE stream
+curl -s -N http://localhost:8000/api/sessions/{id}/stream
+```
+
+Frontend should show tool calls streaming in real-time — same visual as before.
 
 ## Phase 6: Merge graph-query-api into api/ (Day 3-4)
 
@@ -925,18 +774,21 @@ The Bicep `roleAssignments` resource references change from `containerApp.output
 
 | File | Lines | Reason |
 |------|-------|--------|
-| `api/app/orchestrator.py` | 772 | Framework handles streaming, tool execution, thread management |
-| `api/app/agent_ids.py` | 236 | `AzureAIAgentsProvider.get_agent()` replaces discovery |
-| `graph-query-api/router_graph.py` | 76 | FabricTool replaces OpenAPI proxy |
-| `graph-query-api/router_telemetry.py` | 74 | FabricTool replaces OpenAPI proxy |
+| `api/app/orchestrator.py` | 772 | `agent.run()` handles streaming + tool execution |
+| `api/app/agent_ids.py` | 236 | Agents are local (YAML), no Foundry discovery |
+| `api/app/dispatch.py` | 139 | Moved to `api/app/tools/dispatch.py` |
+| `scripts/agent_provisioner.py` | 416 | YAML replaces provisioning |
+| `scripts/provision_agents.py` | 183 | No provisioning step |
+| `graph-query-api/router_graph.py` | 76 | Tools call graph-query-api directly |
+| `graph-query-api/router_telemetry.py` | 74 | Tools call graph-query-api directly |
 | `graph-query-api/openapi/templates/*.yaml` | 122 | No more OpenAPI specs |
 | `graph-query-api/main.py` | 193 | Merged into api/app/main.py |
 | `graph-query-api/config.py` | 172 | Merged into api/app/paths.py |
-| `supervisord.conf` | 40 | Single process — no multi-process orchestration |
-| `nginx.conf` | 55 | FastAPI serves static files directly |
-| `Dockerfile` | 75 | Web App deployment — no container build |
+| `supervisord.conf` | 40 | Single process |
+| `nginx.conf` | 55 | FastAPI serves static files |
+| `Dockerfile` | 75 | Web App deployment |
 | `infra/modules/container-app.bicep` | 127 | Replaced by web-app.bicep |
-| **Total deleted** | **~1,942** | |
+| **Total deleted** | **~2,680** | |
 
 ### Files MOVED (graph-query-api → api/app/)
 
@@ -958,35 +810,39 @@ The Bicep `roleAssignments` resource references change from `containerApp.output
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `api/app/agents.py` | ~80 | AzureAIAgentsProvider singleton, get_orchestrator_agent() |
-| `api/app/streaming.py` | ~120 | agent.run(stream=True) → SSE event translation |
+| `api/agents/orchestrator.yaml` | ~40 | Declarative agent definition (instructions + tool refs) |
+| `api/app/agent_loader.py` | ~30 | `AgentFactory(bindings=TOOL_BINDINGS)` + `load_agent()` |
+| `api/app/streaming.py` | ~150 | `agent.run(stream=True)` → SSE event translation |
+| `api/app/tools/__init__.py` | ~20 | `TOOL_BINDINGS` export |
+| `api/app/tools/graph.py` | ~25 | `graph_topology_query()` typed function |
+| `api/app/tools/telemetry.py` | ~25 | `telemetry_kql_query()` typed function |
+| `api/app/tools/search.py` | ~40 | `search_runbooks()` + `search_tickets()` |
+| `api/app/tools/dispatch.py` | ~140 | `dispatch_field_engineer()` (moved, unchanged) |
 | `infra/modules/web-app.bicep` | ~60 | App Service Plan + Web App |
 | `startup.sh` | ~5 | gunicorn command |
-| **Total created** | **~265** | |
+| **Total created** | **~535** | |
 
 ### Files MODIFIED
 
 | File | Before | After | Delta |
 |------|--------|-------|-------|
-| `api/pyproject.toml` | 18 | ~25 | Deps change + graph-query-api deps merged |
-| `api/app/main.py` | ~50 | ~100 | Mount merged routers + static files |
-| `api/app/session_manager.py` | 367 | ~250 | −117 (no thread bridge, direct cosmos calls) |
-| `scripts/agent_provisioner.py` | 416 | ~120 | −296 (framework does the heavy lifting) |
-| `scripts/provision_agents.py` | 183 | ~100 | −83 (simplified) |
-| `api/app/routers/sessions.py` | 219 | ~150 | −69 (simplified) |
+| `api/pyproject.toml` | 18 | ~25 | SDK change + graph-query-api deps merged |
+| `api/app/main.py` | ~50 | ~100 | Mount merged routers + static files + lifespan |
+| `api/app/session_manager.py` | 367 | ~200 | −167 (stream_agent_to_sse replaces thread bridge) |
+| `api/app/routers/sessions.py` | 219 | ~150 | −69 |
 | `infra/main.bicep` | ~300 | ~280 | Swap container-app for web-app module |
-| `deploy.sh` | ~900 | ~850 | Remove container build, add `az webapp up` |
+| `deploy.sh` | ~1120 | ~1000 | Remove container + agent provisioning steps |
 | `azure.yaml` | ~20 | ~15 | Change host to `appservice` |
 
 ### Net Code Change
 
 | Category | Lines |
 |----------|-------|
-| Deleted (files removed) | −1,942 |
-| Simplified (modifications) | −565 |
-| Created (new files) | +265 |
-| Moved (neutral — same code, new location) | 0 |
-| **Net** | **−2,242** |
+| Deleted (files removed) | −2,680 |
+| Simplified (modifications) | −236 |
+| Created (new files) | +535 |
+| Moved (neutral) | 0 |
+| **Net** | **−2,381** |
 
 ---
 
@@ -997,20 +853,17 @@ The Bicep `roleAssignments` resource references change from `containerApp.output
 ```toml
 "azure-ai-projects>=1.0.0,<2.0.0"   # GA
 "azure-ai-agents==1.2.0b6"           # beta
+"pyyaml>=6.0"                       # OpenAPI spec parsing
 ```
 
 ### After
 
 ```toml
-"agent-framework-azure-ai>=1.0.0rc1"          # RC — pulls in azure-ai-agents==1.2.0b5
-"agent-framework-orchestrations>=1.0.0rc1"     # RC — handoff/group-chat (optional)
+"agent-framework-azure-ai>=1.0.0rc1"          # RC — pulls in core + azure-ai-agents
+"agent-framework-declarative>=1.0.0rc1"       # RC — YAML agent loader (AgentFactory)
 ```
 
-### Version Note
-
-The `agent-framework-azure-ai` package pins `azure-ai-agents==1.2.0b5`. Our code uses `1.2.0b6`. We need to:
-1. Use the framework's pin (`1.2.0b5`) — safest
-2. OR override with `1.2.0b6` in our `pyproject.toml` — test compatibility
+`pyyaml` removed (declarative package handles YAML). `azure-ai-projects` and `azure-ai-agents` are transitive deps — no direct pin needed.
 
 ---
 
@@ -1050,12 +903,13 @@ The `streaming.py` module translates framework events → the same SSE schema (`
 
 | Day | Phase | What Changes | Risk |
 |-----|-------|-------------|------|
-| 1 | 1-2 | Install framework, create agents.py, verify provider works | Low |
-| 2 | 3 | Rewrite provisioner, provision agents | Low |
-| 2-3 | 4 | Create streaming.py, update session_manager to use it | Medium |
-| 3 | 5 | Delete orchestrator.py + agent_ids.py, test end-to-end | High |
-| 3-4 | 6 | Merge graph-query-api into api/, delete OpenAPI proxies | Medium |
-| 4-5 | 7 | Create web-app.bicep, delete container-app.bicep, deploy | Medium |
+| 1 | 1 | Install agent-framework + declarative package | Low |
+| 1-2 | 2 | Create `api/app/tools/` module + `agents/orchestrator.yaml` + `agent_loader.py` | Low |
+| 2 | 3 | Create `streaming.py` (agent.run → SSE translator) | Medium |
+| 2-3 | 4 | Wire into session_manager, delete orchestrator.py + agent_ids.py + provisioners | High |
+| 3 | 5 | End-to-end test: alert → tool calls streaming → diagnosis | High |
+| 3-4 | 6 | Merge graph-query-api into api/ | Medium |
+| 4-5 | 7 | Web App Bicep + deploy.sh rewrite | Medium |
 
 ### Total: 5 working days
 
@@ -1101,31 +955,34 @@ The `streaming.py` module translates framework events → the same SSE schema (`
 ## Appendix: Key Import Patterns
 
 ```python
-# Core framework
-from agent_framework import Agent, FunctionTool, AgentSession, Message
-from agent_framework import AgentResponse, AgentResponseUpdate
+# Declarative agent loading
+from agent_framework_declarative import AgentFactory
 
-# Azure AI provider
-from agent_framework_azure_ai import AzureAIAgentsProvider
-from agent_framework_azure_ai._chat_client import AzureAIAgentClient, AzureAIAgentOptions
+# Core types
+from agent_framework import Agent, AgentSession, AgentResponse, AgentResponseUpdate
+from agent_framework import tool  # @tool decorator (if needed)
 
-# Orchestrations (if needed)
-from agent_framework_orchestrations import (
-    HandoffOrchestrator, HandoffConfiguration,
-    GroupChatOrchestrator, GroupChatSelectionFunction,
-    ConcurrentBuilder, SequentialBuilder,
-)
+# Typed tool parameters
+from typing import Annotated
+from pydantic import Field
 
-# AG-UI protocol (if needed)
-from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint
+# Tool binding pattern
+from app.tools import TOOL_BINDINGS
+factory = AgentFactory(bindings=TOOL_BINDINGS)
+agent = factory.create_agent_from_yaml_path("agents/orchestrator.yaml")
 
-# Azure credentials (async)
-from azure.identity.aio import DefaultAzureCredential
+# Streaming
+result = await agent.run("alert text")           # non-streaming
+stream = agent.run("alert text", stream=True)     # streaming
+async for update in stream:
+    for content in update.contents:
+        content.type  # 'text', 'function_call', 'function_result', 'usage'
+        content.text  # text delta (if type=='text')
 
-# Low-level SDK tools (still needed for ConnectedAgentTool, AzureAISearchTool)
-from azure.ai.agents.models import (
-    ConnectedAgentTool,
-    AzureAISearchTool,
-    AzureAISearchQueryType,
-)
+# Sessions (multi-turn)
+session = agent.create_session()
+r1 = await agent.run("initial alert", session=session)
+r2 = await agent.run("follow up", session=session)
+data = session.to_dict()  # serialize to Cosmos
+session = AgentSession.from_dict(data)  # restore
 ```

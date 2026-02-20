@@ -24,11 +24,19 @@ from fastapi.middleware.cors import CORSMiddleware
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("app").setLevel(logging.DEBUG)
 
-from app.routers import agents, logs, config, sessions  # noqa: E402
+from app.routers import logs, config, sessions  # noqa: E402
+# Merged from graph-query-api
+from app.routers import (  # noqa: E402
+    data_sessions, search, topology, health, interactions, replay,
+    graph_backend, telemetry_backend,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup: load the declarative agent
+    from app.agent_loader import load_agent
+    load_agent()
     # Startup: recover orphaned sessions
     from app.session_manager import session_manager
     await session_manager.recover_from_cosmos()
@@ -54,10 +62,18 @@ app.add_middleware(
 )
 
 # Mount REST routers
-app.include_router(agents.router)
 app.include_router(logs.router)
 app.include_router(config.router)
 app.include_router(sessions.router)
+# Merged from graph-query-api — mounted at /query/* to preserve frontend routes
+app.include_router(data_sessions.router)
+app.include_router(search.router)
+app.include_router(topology.router)
+app.include_router(health.router)
+app.include_router(interactions.router)
+app.include_router(replay.router)
+app.include_router(graph_backend.router)
+app.include_router(telemetry_backend.router)
 
 logger = logging.getLogger("app")
 
@@ -147,7 +163,6 @@ async def services_health():
         _probe("AI Foundry", _check_foundry),
         _probe("AI Search", _check_search),
         _probe("Cosmos DB", _check_cosmos),
-        _probe("Graph Query API", _check_gql_api),
         return_exceptions=False,
     )
 
@@ -174,3 +189,13 @@ async def services_models():
         models.append({"name": embedding_name, "type": "embedding", "status": "ready"})
 
     return {"models": models}
+
+
+# ---------------------------------------------------------------------------
+# Static file serving — React build (must be mounted LAST)
+# ---------------------------------------------------------------------------
+
+_static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+if os.path.isdir(_static_dir):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")

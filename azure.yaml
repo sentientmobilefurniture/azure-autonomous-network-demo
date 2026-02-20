@@ -15,14 +15,17 @@ hooks:
     run: hooks/postprovision.sh
     description: Populate azure_config.env with deployment outputs
 
-# Single unified service — all 3 services (nginx + API + graph-query-api)
-# run in one container via supervisord
+# Single unified service — FastAPI serves API + static frontend
+# Deployed to Azure App Service (Web App)
 services:
-  app:
-    project: .
+  api:
+    project: ./api
     language: python
-    host: containerapp
-    docker:
-      path: ./Dockerfile
-      context: .
-      remoteBuild: true
+    host: appservice
+    hooks:
+      prepackage:
+        shell: bash
+        run: |
+          cd ../frontend && npm ci && npm run build
+          rm -rf ../api/static && cp -r dist ../api/static/
+        description: Build frontend and copy to api/static/

@@ -19,7 +19,6 @@ import yaml
 from fastapi import APIRouter, HTTPException
 
 from app.paths import PROJECT_ROOT
-from app.agent_ids import load_agent_ids
 
 logger = logging.getLogger("app.config")
 
@@ -128,7 +127,7 @@ SCENARIO_CONFIG = _build_scenario_config(_manifest) if _manifest else {"agents":
 
 
 def _load_current_config() -> dict:
-    """Load current config from Foundry agent discovery + env-var defaults."""
+    """Load current config from env-var defaults."""
     _runbooks_default = (
         _manifest.get("data_sources", {}).get("search_indexes", {}).get("runbooks", {}).get("index_name", "runbooks-index")
         if _manifest else "runbooks-index"
@@ -141,15 +140,8 @@ def _load_current_config() -> dict:
         "graph": SCENARIO_NAME,
         "runbooks_index": os.getenv("RUNBOOKS_INDEX_NAME", _runbooks_default),
         "tickets_index": os.getenv("TICKETS_INDEX_NAME", _tickets_default),
-        "agents": None,
+        "agents": {"source": "declarative-yaml", "type": "local"},
     }
-
-    try:
-        data = load_agent_ids()
-        if data:
-            config["agents"] = data
-    except Exception:
-        pass
 
     return config
 

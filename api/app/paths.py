@@ -20,3 +20,12 @@ CONFIG_FILE = PROJECT_ROOT / "azure_config.env"
 
 # Load config once at import time (before reading env vars that may be in the file)
 load_dotenv(CONFIG_FILE)
+
+
+def _graph_query_base() -> str:
+    """Return the base URL for the graph query endpoints.
+
+    After the merge, graph-query-api routes run in-process at the same port.
+    Falls back to external URI if GRAPH_QUERY_API_URI is explicitly set.
+    """
+    return os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8000")

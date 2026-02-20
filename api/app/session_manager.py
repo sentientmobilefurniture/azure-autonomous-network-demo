@@ -21,10 +21,12 @@ from typing import Optional
 import httpx
 
 from app.sessions import Session, SessionStatus
-from app.orchestrator import run_orchestrator_session
+from app.agent_loader import get_agent
+from app.streaming import stream_agent_to_sse
+from agent_framework import AgentSession
 
-# graph-query-api runs alongside the API in the same container (supervisord)
-_GQ_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8100")
+# After merge, graph-query-api routes run in-process at the same port
+_GQ_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8000")
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +225,7 @@ class SessionManager:
         session._idle_task = asyncio.create_task(_idle_watch())
 
     async def start(self, session: Session):
-        """Launch the orchestrator for this session in a background task."""
+        """Launch the agent for this session in a background task."""
         # Push initial user message to event_log so the first turn is
         # structurally consistent with follow-up turns (H-MODEL-01).
         session.push_event({
@@ -235,8 +237,9 @@ class SessionManager:
 
         async def _run():
             try:
-                async for event in run_orchestrator_session(
-                    session.alert_text, session._cancel_event
+                agent = get_agent()
+                async for event in stream_agent_to_sse(
+                    agent, session.alert_text
                 ):
                     session.push_event(event)
 
@@ -274,7 +277,7 @@ class SessionManager:
     async def continue_session(self, session: Session, follow_up_text: str):
         """Send a follow-up message to an existing session.
 
-        Re-uses the Foundry thread for context continuity.
+        Re-uses the AgentSession for context continuity.
         Cancels any pending idle timeout.
         """
         if hasattr(session, '_idle_task') and session._idle_task:
@@ -289,10 +292,16 @@ class SessionManager:
 
         async def _run():
             try:
-                async for event in run_orchestrator_session(
-                    follow_up_text,
-                    session._cancel_event,
-                    existing_thread_id=session.thread_id,
+                agent = get_agent()
+                # Restore AgentSession from thread_id for multi-turn continuity
+                agent_session = None
+                if session.thread_id:
+                    agent_session = AgentSession(
+                        session_id=session.thread_id,
+                    )
+
+                async for event in stream_agent_to_sse(
+                    agent, follow_up_text, session=agent_session
                 ):
                     # Tag events with turn number
                     event["turn"] = session.turn_count

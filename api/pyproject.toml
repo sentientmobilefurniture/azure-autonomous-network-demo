@@ -9,10 +9,15 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "sse-starlette>=2.0.0",
     "azure-identity>=1.19.0",
-    "azure-ai-projects>=1.0.0,<2.0.0",
-    "azure-ai-agents==1.2.0b6",
-    "pyyaml>=6.0",
+    "agent-framework-azure-ai>=1.0.0rc1",
+    "agent-framework-declarative>=1.0.0b1",
     "httpx>=0.27.0",
+    "pyyaml>=6.0",
+    # Merged from graph-query-api
+    "azure-cosmos>=4.9.0",
+    "azure-mgmt-cosmosdb>=9.0.0",
+    "azure-kusto-data>=4.3.0",
+    "gunicorn>=22.0.0",
 ]
 
 [dependency-groups]

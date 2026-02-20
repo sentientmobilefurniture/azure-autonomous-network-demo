@@ -24,7 +24,7 @@ import httpx
 from app.sessions import SessionStatus
 from app.session_manager import session_manager
 
-_GQ_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8100")
+_GQ_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8000")
 
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -170,8 +170,6 @@ async def send_follow_up(session_id: str, req: FollowUpRequest):
         raise HTTPException(404, "Session not found")
     if session.status == SessionStatus.IN_PROGRESS:
         raise HTTPException(409, "Session is already processing a turn")
-    if not session.thread_id:
-        raise HTTPException(400, "Session has no Foundry thread (cannot follow up)")
 
     # Capture the event log length *before* adding user message + starting
     # the new turn.  The frontend passes this as ``since`` to the SSE
