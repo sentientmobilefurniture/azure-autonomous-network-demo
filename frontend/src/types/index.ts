@@ -84,6 +84,7 @@ export interface StepEvent {
   timestamp?: string;
   query?: string;
   response?: string;
+  pending?: boolean;         // true while waiting for sub-agent response
   error?: boolean;
   visualization?: VisualizationData;       // legacy (pre-v18 sessions)
   visualizations?: VisualizationData[];     // v18+: array of viz payloads

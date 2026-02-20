@@ -23,8 +23,39 @@ export function useSession() {
           // Transient — drives ThinkingDots indicator, not stored on message
           updated.status = 'investigating';
           break;
+        case 'step_started':
+          // Add a pending step — agent + query known, no response yet
+          updated.steps = [...(updated.steps ?? []), {
+            step: data.step as number,
+            agent: data.agent as string,
+            query: data.query as string | undefined,
+            reasoning: data.reasoning as string | undefined,
+            timestamp: data.timestamp as string | undefined,
+            pending: true,
+          }];
+          updated.status = 'investigating';
+          break;
+        case 'step_response':
+          // Match by step number and fill in the response
+          updated.steps = (updated.steps ?? []).map(s =>
+            s.step === (data as any).step
+              ? { ...s, ...(data as any), pending: false }
+              : s
+          );
+          updated.status = 'investigating';
+          break;
         case 'step_complete':
-          updated.steps = [...(updated.steps ?? []), data as any];
+          // If a pending step already exists for this step number, update it;
+          // otherwise append (backward compat for replay & non-incremental path)
+          if ((updated.steps ?? []).some(s => s.step === (data as any).step)) {
+            updated.steps = (updated.steps ?? []).map(s =>
+              s.step === (data as any).step
+                ? { ...s, ...(data as any), pending: false }
+                : s
+            );
+          } else {
+            updated.steps = [...(updated.steps ?? []), data as any];
+          }
           updated.status = 'investigating';
           break;
         case 'message':
@@ -77,6 +108,10 @@ export function useSession() {
             setThinking({ agent: data.agent ?? 'Orchestrator', status: data.status ?? '' });
           } else if (ev.event === 'step_start') {
             setThinking({ agent: data.agent ?? '', status: 'processing...' });
+          } else if (ev.event === 'step_started') {
+            setThinking(null);  // Clear dots — the step card itself shows loading
+          } else if (ev.event === 'step_response') {
+            setThinking(null);
           } else if (ev.event === 'step_complete' || ev.event === 'message' || ev.event === 'run_complete') {
             setThinking(null);
           } else if (ev.event === 'action_executed') {

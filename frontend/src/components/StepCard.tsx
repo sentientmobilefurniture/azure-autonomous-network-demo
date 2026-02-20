@@ -136,11 +136,11 @@ export function StepCard({ step, expanded: controlledExpanded, onToggle }: StepC
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className={`h-2 w-2 rounded-full flex-shrink-0 ${
-            step.error ? 'bg-status-error' : 'bg-brand'
+            step.error ? 'bg-status-error' : step.pending ? 'bg-brand animate-pulse' : 'bg-brand'
           }`} />
           <span className={`text-sm font-medium ${
             step.error ? 'text-status-error' : 'text-text-primary'
-          }`}>{step.agent}{step.error ? ' — FAILED' : ''}</span>
+          }`}>{step.agent}{step.error ? ' — FAILED' : step.pending ? ' — Querying…' : ''}</span>
         </div>
         <div className="flex items-center gap-2 text-xs text-text-muted">
           {step.timestamp && (
@@ -158,7 +158,19 @@ export function StepCard({ step, expanded: controlledExpanded, onToggle }: StepC
       {/* Collapsed preview */}
       {!expanded && (
         <>
-          {step.error && errorInfo ? (
+          {step.pending ? (
+            <>
+              {step.query && (
+                <p className="text-[11px] text-text-muted mt-1.5 truncate">
+                  ▸ Query: {step.query.slice(0, 80)}
+                </p>
+              )}
+              <div className="flex items-center gap-2 text-xs text-text-muted animate-pulse mt-1">
+                <div className="h-1.5 w-1.5 rounded-full bg-brand animate-bounce" />
+                <span>Querying…</span>
+              </div>
+            </>
+          ) : step.error && errorInfo ? (
             <div className="mt-1.5 flex items-center gap-1.5">
               <span className="text-xs">{errorInfo.icon}</span>
               <p className="text-[11px] text-status-error">{errorInfo.summary}</p>
@@ -200,7 +212,12 @@ export function StepCard({ step, expanded: controlledExpanded, onToggle }: StepC
                 </div>
               </div>
             )}
-            {step.response && (
+            {step.pending ? (
+              <div className="flex items-center gap-2 text-xs text-text-muted animate-pulse mt-3">
+                <div className="h-1.5 w-1.5 rounded-full bg-brand animate-bounce" />
+                <span>Waiting for response…</span>
+              </div>
+            ) : step.response && (
               <div className="mt-2">
                 {step.error && errorInfo ? (
                   <>
@@ -240,7 +257,7 @@ export function StepCard({ step, expanded: controlledExpanded, onToggle }: StepC
       </AnimatePresence>
 
       {/* Visualization button — bottom-right */}
-      {showVizButton && (
+      {showVizButton && !step.pending && (
         <div className="flex justify-end mt-2">
           <button
             onClick={(e) => {

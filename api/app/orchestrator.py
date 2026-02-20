@@ -118,6 +118,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             super().__init__()
             self.t0 = time.monotonic()
             self.step_starts: dict[str, float] = {}
+            self._pending_steps: dict[str, dict] = {}  # step_id → {tc_id → metadata}
             self.ui_step = 0
             self.total_tokens = 0
             self.response_text = ""
@@ -363,7 +364,37 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
 
             if status == "in_progress" and step.id not in self.step_starts:
                 self.step_starts[step.id] = time.monotonic()
-                # Emit an early "thinking" event so UI shows activity
+
+                # Try to extract tool call details early for incremental UI
+                if step_type == "tool_calls" and hasattr(step, "step_details"):
+                    tool_calls = getattr(step.step_details, "tool_calls", None)
+                    if tool_calls:
+                        for tc in tool_calls:
+                            self.ui_step += 1
+                            tc_id = getattr(tc, "id", None) or str(id(tc))
+                            agent_name = self._resolve_agent_name(tc)
+                            query, reasoning = self._extract_arguments(tc)
+                            # Remember step_id → {tc_id → metadata} for the completed handler
+                            if step.id not in self._pending_steps:
+                                self._pending_steps[step.id] = {}
+                            self._pending_steps[step.id][tc_id] = {
+                                "ui_step": self.ui_step,
+                                "agent": agent_name,
+                                "query": query[:500] if query else "",
+                                "reasoning": reasoning,
+                            }
+                            event = {
+                                "step": self.ui_step,
+                                "agent": agent_name,
+                                "query": query[:500] if query else "",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                            if reasoning:
+                                event["reasoning"] = reasoning
+                            _put("step_started", event)
+                        return  # Don't emit the generic thinking event
+
+                # Fallback: tool_calls not yet available
                 _put("step_thinking", {"agent": "Orchestrator", "status": "calling sub-agent..."})
 
             elif status == "failed" and step_type == "tool_calls":
@@ -390,26 +421,44 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     failed_agent, duration, err_code, err_msg, failed_query[:500] if failed_query else "(none)",
                 )
 
-                self.ui_step += 1
-                _put("step_complete", {
-                    "step": self.ui_step,
+                # Reuse pending ui_step if step_started was already emitted
+                pending = self._pending_steps.pop(step.id, None)
+                if pending:
+                    # Use the first pending tc's ui_step
+                    ui_step = next(iter(pending.values()))["ui_step"]
+                else:
+                    self.ui_step += 1
+                    ui_step = self.ui_step
+
+                fail_data = {
+                    "step": ui_step,
                     "agent": failed_agent,
                     "duration": duration,
                     "query": failed_query[:500] if failed_query else "",
                     "response": f"FAILED: [{err_code}] {err_msg}",
                     "error": True,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                }
+                _put("step_response", fail_data)
+                _put("step_complete", fail_data)
 
             elif status == "completed" and step_type == "tool_calls":
                 start = self.step_starts.get(step.id, self.t0)
                 duration = f"{time.monotonic() - start:.1f}s"
+                pending = self._pending_steps.pop(step.id, None)
 
                 if not hasattr(step.step_details, "tool_calls"):
                     return
 
                 for tc in step.step_details.tool_calls:
-                    self.ui_step += 1
+                    tc_id = getattr(tc, "id", None) or str(id(tc))
+
+                    # Reuse the same ui_step if we already emitted step_started
+                    if pending and tc_id in pending:
+                        ui_step = pending[tc_id]["ui_step"]
+                    else:
+                        self.ui_step += 1
+                        ui_step = self.ui_step
 
                     agent_name = self._resolve_agent_name(tc)
                     query, reasoning = self._extract_arguments(tc)
@@ -433,7 +482,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                             action_data = {"raw_output": str(fn_output)}
 
                         event_data = {
-                            "step": self.ui_step,
+                            "step": ui_step,
                             "agent": agent_name,
                             "duration": duration,
                             "query": query[:500] if query else "",
@@ -445,10 +494,10 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         if reasoning:
                             event_data["reasoning"] = reasoning
 
-                        _put("step_start", {"step": self.ui_step, "agent": agent_name})
+                        _put("step_response", event_data)
                         _put("step_complete", event_data)
                         _put("action_executed", {
-                            "step": self.ui_step,
+                            "step": ui_step,
                             "action_name": agent_name,
                             "action_data": action_data,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -476,14 +525,14 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     if len(response) > 2000:
                         response = response[:2000] + "…"
 
-                    logger.info("Emitting step %d: agent=%s duration=%s", self.ui_step, agent_name, duration)
+                    logger.info("Emitting step %d: agent=%s duration=%s", ui_step, agent_name, duration)
                     if query:
                         logger.info("  ↳ query: %s", query[:300])
                     if response:
                         logger.info("  ↳ response (%d chars): %s", len(response), response[:200])
 
                     event_data = {
-                        "step": self.ui_step,
+                        "step": ui_step,
                         "agent": agent_name,
                         "duration": duration,
                         "query": query,
@@ -495,7 +544,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     if reasoning:
                         event_data["reasoning"] = reasoning
 
-                    _put("step_start", {"step": self.ui_step, "agent": agent_name})
+                    _put("step_response", event_data)
                     _put("step_complete", event_data)
 
         # -- Streaming message text ------------------------------------------
@@ -775,6 +824,7 @@ async def run_orchestrator_session(
             super().__init__()
             self.t0 = time.monotonic()
             self.step_starts: dict[str, float] = {}
+            self._pending_steps: dict[str, dict] = {}  # step_id → {tc_id → metadata}
             self.ui_step = 0
             self.total_tokens = 0
             self.response_text = ""
@@ -980,6 +1030,37 @@ async def run_orchestrator_session(
 
             if status == "in_progress" and step.id not in self.step_starts:
                 self.step_starts[step.id] = time.monotonic()
+
+                # Try to extract tool call details early for incremental UI
+                if step_type == "tool_calls" and hasattr(step, "step_details"):
+                    tool_calls = getattr(step.step_details, "tool_calls", None)
+                    if tool_calls:
+                        for tc in tool_calls:
+                            self.ui_step += 1
+                            tc_id = getattr(tc, "id", None) or str(id(tc))
+                            agent_name = self._resolve_agent_name(tc)
+                            query, reasoning = self._extract_arguments(tc)
+                            # Remember step_id → {tc_id → metadata} for the completed handler
+                            if step.id not in self._pending_steps:
+                                self._pending_steps[step.id] = {}
+                            self._pending_steps[step.id][tc_id] = {
+                                "ui_step": self.ui_step,
+                                "agent": agent_name,
+                                "query": query[:500] if query else "",
+                                "reasoning": reasoning,
+                            }
+                            event = {
+                                "step": self.ui_step,
+                                "agent": agent_name,
+                                "query": query[:500] if query else "",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                            if reasoning:
+                                event["reasoning"] = reasoning
+                            _put("step_started", event)
+                        return  # Don't emit the generic thinking event
+
+                # Fallback: tool_calls not yet available
                 _put("step_thinking", {"agent": "Orchestrator", "status": "calling sub-agent..."})
 
             elif status == "failed" and step_type == "tool_calls":
@@ -1004,26 +1085,43 @@ async def run_orchestrator_session(
                     failed_agent, duration, err_code, err_msg, failed_query[:500] if failed_query else "(none)",
                 )
 
-                self.ui_step += 1
-                _put("step_complete", {
-                    "step": self.ui_step,
+                # Reuse pending ui_step if step_started was already emitted
+                pending = self._pending_steps.pop(step.id, None)
+                if pending:
+                    ui_step = next(iter(pending.values()))["ui_step"]
+                else:
+                    self.ui_step += 1
+                    ui_step = self.ui_step
+
+                fail_data = {
+                    "step": ui_step,
                     "agent": failed_agent,
                     "duration": duration,
                     "query": failed_query[:500] if failed_query else "",
                     "response": f"FAILED: [{err_code}] {err_msg}",
                     "error": True,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                }
+                _put("step_response", fail_data)
+                _put("step_complete", fail_data)
 
             elif status == "completed" and step_type == "tool_calls":
                 start = self.step_starts.get(step.id, self.t0)
                 duration = f"{time.monotonic() - start:.1f}s"
+                pending = self._pending_steps.pop(step.id, None)
 
                 if not hasattr(step.step_details, "tool_calls"):
                     return
 
                 for tc in step.step_details.tool_calls:
-                    self.ui_step += 1
+                    tc_id = getattr(tc, "id", None) or str(id(tc))
+
+                    # Reuse the same ui_step if we already emitted step_started
+                    if pending and tc_id in pending:
+                        ui_step = pending[tc_id]["ui_step"]
+                    else:
+                        self.ui_step += 1
+                        ui_step = self.ui_step
 
                     agent_name = self._resolve_agent_name(tc)
                     query, reasoning = self._extract_arguments(tc)
@@ -1046,7 +1144,7 @@ async def run_orchestrator_session(
                             action_data = {"raw_output": str(fn_output)}
 
                         event_data = {
-                            "step": self.ui_step,
+                            "step": ui_step,
                             "agent": agent_name,
                             "duration": duration,
                             "query": query[:500] if query else "",
@@ -1058,10 +1156,10 @@ async def run_orchestrator_session(
                         if reasoning:
                             event_data["reasoning"] = reasoning
 
-                        _put("step_start", {"step": self.ui_step, "agent": agent_name})
+                        _put("step_response", event_data)
                         _put("step_complete", event_data)
                         _put("action_executed", {
-                            "step": self.ui_step,
+                            "step": ui_step,
                             "action_name": agent_name,
                             "action_data": action_data,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1088,14 +1186,14 @@ async def run_orchestrator_session(
                     if len(response) > 2000:
                         response = response[:2000] + "…"
 
-                    logger.info("Emitting step %d: agent=%s duration=%s", self.ui_step, agent_name, duration)
+                    logger.info("Emitting step %d: agent=%s duration=%s", ui_step, agent_name, duration)
                     if query:
                         logger.info("  ↳ query: %s", query[:300])
                     if response:
                         logger.info("  ↳ response (%d chars): %s", len(response), response[:200])
 
                     event_data = {
-                        "step": self.ui_step,
+                        "step": ui_step,
                         "agent": agent_name,
                         "duration": duration,
                         "query": query,
@@ -1107,7 +1205,7 @@ async def run_orchestrator_session(
                     if reasoning:
                         event_data["reasoning"] = reasoning
 
-                    _put("step_start", {"step": self.ui_step, "agent": agent_name})
+                    _put("step_response", event_data)
                     _put("step_complete", event_data)
 
         def on_message_delta(self, delta):
