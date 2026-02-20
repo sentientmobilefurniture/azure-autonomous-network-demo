@@ -1,0 +1,61 @@
+openapi: "3.0.3"
+info:
+  title: Telemetry Query API
+  version: "0.6.0"
+  description: |
+    Micro-API for executing KQL queries against Fabric Eventhouse telemetry data.
+    Used by Foundry agents via OpenApiTool.
+# NOTE: Template placeholders ({base_url}, {query_language_description})
+# are substituted at runtime by agent_provisioner.py.
+servers:
+  - url: "{base_url}"
+    description: Deployed Container App
+
+paths:
+  /query/telemetry:
+    post:
+      operationId: query_telemetry
+      summary: Execute a KQL query against telemetry data
+      description: |
+        {query_language_description}
+        Returns columns and rows of alert or telemetry data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: |
+                    {query_language_description}
+      responses:
+        "200":
+          description: Query results (check 'error' field for query failures)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                  error:
+                    type: string
+                    nullable: true
+                    description: |
+                      If present, the query failed. Contains the error message.
+                      Read the message, fix your query, and retry.

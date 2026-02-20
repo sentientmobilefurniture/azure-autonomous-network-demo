@@ -1,0 +1,204 @@
+{
+  "metadata": {
+    "title": "Service Architecture",
+    "description": "Complete deployment architecture for the Autonomous Network Demo. Regenerate this file if architecture changes or new tools are added.",
+    "lastUpdated": "2026-02-20"
+  },
+  "nodes": [
+    {
+      "id": "container-app",
+      "label": "Container App",
+      "type": "container-app",
+      "meta": { "description": "Azure Container Apps instance running the unified container", "tech": "Docker, supervisord" }
+    },
+    {
+      "id": "nginx",
+      "label": "Nginx Reverse Proxy",
+      "type": "container-app",
+      "meta": { "description": "Serves static frontend, proxies /api/ → :8000, /query/ → :8100", "port": "80" }
+    },
+    {
+      "id": "frontend",
+      "label": "Frontend SPA",
+      "type": "container-app",
+      "meta": { "description": "React/Vite single-page application", "tech": "TypeScript, React, Tailwind CSS, react-force-graph-2d" }
+    },
+    {
+      "id": "api-server",
+      "label": "API Server",
+      "type": "container-app",
+      "meta": { "description": "FastAPI backend — sessions, alerts, config, orchestration", "tech": "Python, FastAPI, uvicorn", "port": "8000" }
+    },
+    {
+      "id": "graph-query-api",
+      "label": "Graph Query API",
+      "type": "container-app",
+      "meta": { "description": "Gremlin/KQL query proxy — topology, graph queries, telemetry", "tech": "Python, FastAPI, uvicorn", "port": "8100" }
+    },
+    {
+      "id": "orchestrator-agent",
+      "label": "Orchestrator Agent",
+      "type": "orchestrator",
+      "meta": { "description": "Azure AI Foundry orchestrator — routes to sub-agents", "model": "gpt-4.1" }
+    },
+    {
+      "id": "graph-explorer-agent",
+      "label": "Graph Explorer Agent",
+      "type": "agent",
+      "meta": { "description": "Network topology traversal and graph query agent", "model": "gpt-4.1" }
+    },
+    {
+      "id": "telemetry-agent",
+      "label": "Telemetry Agent",
+      "type": "agent",
+      "meta": { "description": "Time-series telemetry analysis agent", "model": "gpt-4.1" }
+    },
+    {
+      "id": "runbook-kb-agent",
+      "label": "Runbook KB Agent",
+      "type": "agent",
+      "meta": { "description": "Runbook knowledge base search agent", "model": "gpt-4.1" }
+    },
+    {
+      "id": "historical-ticket-agent",
+      "label": "Historical Ticket Agent",
+      "type": "agent",
+      "meta": { "description": "Past incident / ticket search agent", "model": "gpt-4.1" }
+    },
+    {
+      "id": "tool-graph-openapi",
+      "label": "OpenAPI: graph",
+      "type": "tool",
+      "meta": { "description": "OpenAPI tool spec for graph queries (/query/graph)", "tool_type": "openapi" }
+    },
+    {
+      "id": "tool-telemetry-openapi",
+      "label": "OpenAPI: telemetry",
+      "type": "tool",
+      "meta": { "description": "OpenAPI tool spec for telemetry queries (/query/telemetry)", "tool_type": "openapi" }
+    },
+    {
+      "id": "tool-runbooks-search",
+      "label": "AzureAISearch: runbooks",
+      "type": "tool",
+      "meta": { "description": "Azure AI Search tool for runbook index", "tool_type": "azure_ai_search" }
+    },
+    {
+      "id": "tool-tickets-search",
+      "label": "AzureAISearch: tickets",
+      "type": "tool",
+      "meta": { "description": "Azure AI Search tool for historical ticket index", "tool_type": "azure_ai_search" }
+    },
+    {
+      "id": "ds-fabric-graph",
+      "label": "Fabric GQL (Network Topology)",
+      "type": "datasource",
+      "meta": { "description": "Microsoft Fabric graph database storing network topology", "connector": "fabric-gql" }
+    },
+    {
+      "id": "ds-fabric-telemetry",
+      "label": "Fabric KQL (Telemetry)",
+      "type": "datasource",
+      "meta": { "description": "Microsoft Fabric KQL eventhouse for time-series telemetry", "connector": "fabric-kql" }
+    },
+    {
+      "id": "idx-runbooks",
+      "label": "Runbooks Search Index",
+      "type": "search-index",
+      "meta": { "description": "Azure AI Search index for runbook documents" }
+    },
+    {
+      "id": "idx-tickets",
+      "label": "Tickets Search Index",
+      "type": "search-index",
+      "meta": { "description": "Azure AI Search index for historical incident tickets" }
+    },
+    {
+      "id": "blob-runbooks",
+      "label": "Blob: runbooks",
+      "type": "blob-container",
+      "meta": { "description": "Blob storage container holding runbook documents" }
+    },
+    {
+      "id": "blob-tickets",
+      "label": "Blob: tickets",
+      "type": "blob-container",
+      "meta": { "description": "Blob storage container holding historical ticket documents" }
+    },
+    {
+      "id": "infra-foundry",
+      "label": "Azure AI Foundry",
+      "type": "foundry",
+      "meta": { "description": "Azure AI Foundry project — hosts agent deployments and model endpoints" }
+    },
+    {
+      "id": "infra-search",
+      "label": "Azure AI Search",
+      "type": "search-service",
+      "meta": { "description": "Azure AI Search service — indexes runbooks and tickets" }
+    },
+    {
+      "id": "infra-storage",
+      "label": "Azure Blob Storage",
+      "type": "storage",
+      "meta": { "description": "Azure Storage account for blob containers" }
+    },
+    {
+      "id": "infra-fabric",
+      "label": "Microsoft Fabric",
+      "type": "foundry",
+      "meta": { "description": "Microsoft Fabric workspace — Lakehouse, GraphQL API, KQL Eventhouse" }
+    },
+    {
+      "id": "infra-cosmos",
+      "label": "Cosmos DB (Sessions)",
+      "type": "datasource",
+      "meta": { "description": "Azure Cosmos DB NoSQL — persists chat sessions and event logs" }
+    }
+  ],
+  "edges": [
+    { "source": "container-app", "target": "nginx", "type": "contains", "label": "runs" },
+    { "source": "nginx", "target": "frontend", "type": "contains", "label": "serves static" },
+    { "source": "nginx", "target": "api-server", "type": "delegates_to", "label": "/api/ → :8000" },
+    { "source": "nginx", "target": "graph-query-api", "type": "delegates_to", "label": "/query/ → :8100" },
+
+    { "source": "api-server", "target": "orchestrator-agent", "type": "delegates_to", "label": "Foundry SDK" },
+    { "source": "api-server", "target": "infra-cosmos", "type": "queries", "label": "sessions" },
+
+    { "source": "orchestrator-agent", "target": "graph-explorer-agent", "type": "delegates_to", "label": "delegates" },
+    { "source": "orchestrator-agent", "target": "telemetry-agent", "type": "delegates_to", "label": "delegates" },
+    { "source": "orchestrator-agent", "target": "runbook-kb-agent", "type": "delegates_to", "label": "delegates" },
+    { "source": "orchestrator-agent", "target": "historical-ticket-agent", "type": "delegates_to", "label": "delegates" },
+
+    { "source": "graph-explorer-agent", "target": "tool-graph-openapi", "type": "uses_tool", "label": "uses" },
+    { "source": "telemetry-agent", "target": "tool-telemetry-openapi", "type": "uses_tool", "label": "uses" },
+    { "source": "runbook-kb-agent", "target": "tool-runbooks-search", "type": "uses_tool", "label": "uses" },
+    { "source": "historical-ticket-agent", "target": "tool-tickets-search", "type": "uses_tool", "label": "uses" },
+
+    { "source": "tool-graph-openapi", "target": "graph-query-api", "type": "queries", "label": "HTTP" },
+    { "source": "tool-telemetry-openapi", "target": "graph-query-api", "type": "queries", "label": "HTTP" },
+
+    { "source": "graph-query-api", "target": "ds-fabric-graph", "type": "queries", "label": "Gremlin" },
+    { "source": "graph-query-api", "target": "ds-fabric-telemetry", "type": "queries", "label": "KQL" },
+
+    { "source": "tool-runbooks-search", "target": "idx-runbooks", "type": "queries", "label": "queries" },
+    { "source": "tool-tickets-search", "target": "idx-tickets", "type": "queries", "label": "queries" },
+
+    { "source": "idx-runbooks", "target": "blob-runbooks", "type": "indexes_from", "label": "indexes" },
+    { "source": "idx-tickets", "target": "blob-tickets", "type": "indexes_from", "label": "indexes" },
+
+    { "source": "blob-runbooks", "target": "infra-storage", "type": "hosted_on", "label": "" },
+    { "source": "blob-tickets", "target": "infra-storage", "type": "hosted_on", "label": "" },
+    { "source": "idx-runbooks", "target": "infra-search", "type": "hosted_on", "label": "" },
+    { "source": "idx-tickets", "target": "infra-search", "type": "hosted_on", "label": "" },
+
+    { "source": "orchestrator-agent", "target": "infra-foundry", "type": "runs_on", "label": "" },
+    { "source": "graph-explorer-agent", "target": "infra-foundry", "type": "runs_on", "label": "" },
+    { "source": "telemetry-agent", "target": "infra-foundry", "type": "runs_on", "label": "" },
+    { "source": "runbook-kb-agent", "target": "infra-foundry", "type": "runs_on", "label": "" },
+    { "source": "historical-ticket-agent", "target": "infra-foundry", "type": "runs_on", "label": "" },
+
+    { "source": "ds-fabric-graph", "target": "infra-fabric", "type": "hosted_on", "label": "" },
+    { "source": "ds-fabric-telemetry", "target": "infra-fabric", "type": "hosted_on", "label": "" }
+  ]
+}

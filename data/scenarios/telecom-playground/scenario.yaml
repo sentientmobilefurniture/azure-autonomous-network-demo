@@ -1,0 +1,338 @@
+# ============================================================================
+# Scenario Manifest — Telecom Playground (Extended Telco Demo)
+# ============================================================================
+
+name: telecom-playground
+display_name: "Telecom Playground — Extended Telco Demo"
+description: >
+  A fibre cut on the Sydney-Melbourne corridor triggers a cascading alert
+  storm affecting enterprise VPNs, broadband, and mobile services. The AI
+  investigates root cause, blast radius, and remediation.
+version: "2.0"
+domain: telecommunications
+
+# ---------------------------------------------------------------------------
+# Use cases & example questions (surfaced in Scenario Info tab)
+# ---------------------------------------------------------------------------
+
+use_cases:
+  - "Fibre cut alert storm investigation with per-sensor fault localisation"
+  - "Wear-and-tear degradation detection via sensor trend analysis"
+  - "Automated field engineer dispatch based on duty roster and sensor GPS"
+  - "Alert storm triage — distinguishing acute failure from gradual degradation"
+  - "SLA breach risk assessment with quantified customer impact"
+
+example_questions:
+  - "What caused the alert storm on the Sydney-Melbourne corridor?"
+  - "Which specific sensor detected the fault first and where is it located?"
+  - "Who is the nearest on-duty field engineer to the fault location?"
+  - "Show me the sensor trend data for LINK-SYD-MEL-FIBRE-01 over the past 72 hours"
+  - "Which enterprise services are affected and what SLA penalties are we facing?"
+  - "Is this an acute failure or gradual degradation — what's the evidence?"
+
+# ---------------------------------------------------------------------------
+# Data layout — paths relative to this file's parent directory
+# ---------------------------------------------------------------------------
+
+paths:
+  entities: data/entities
+  graph_schema: graph_schema.yaml
+  telemetry: data/telemetry
+  runbooks: data/knowledge/runbooks
+  tickets: data/knowledge/tickets
+  prompts: data/prompts
+  default_alert: data/prompts/alert_storm.md
+  wear_tear_alert: data/prompts/alert_storm_wear_tear.md
+
+# ---------------------------------------------------------------------------
+# Data sources — defines all Azure resources this scenario needs
+# ---------------------------------------------------------------------------
+
+data_sources:
+  graph:
+    connector: "fabric-gql"
+    config:
+      database: "networkgraph"
+      graph: "telecom-playground-topology"
+      partition_key: "/partitionKey"
+    schema_file: "graph_schema.yaml"
+
+  telemetry:
+    connector: "fabric-kql"
+    config:
+      database: "telemetry"
+      container_prefix: "telecom-playground"
+      containers:
+        - name: AlertStream
+          partition_key: /SourceNodeType
+          csv_file: AlertStream.csv
+          id_field: AlertId
+          numeric_fields: [OpticalPowerDbm, BitErrorRate, CPUUtilPct, PacketLossPct]
+        - name: LinkTelemetry
+          partition_key: /LinkId
+          csv_file: LinkTelemetry.csv
+          id_field: null
+          numeric_fields: [UtilizationPct, OpticalPowerDbm, BitErrorRate, LatencyMs]
+        - name: SensorReadings
+          partition_key: /SensorId
+          csv_file: SensorReadings.csv
+          id_field: ReadingId
+          numeric_fields: [Value]
+
+  search_indexes:
+    runbooks:
+      index_name: "telecom-playground-runbooks-index"
+      source: "data/knowledge/runbooks"
+      blob_container: "runbooks"
+    tickets:
+      index_name: "telecom-playground-tickets-index"
+      source: "data/knowledge/tickets"
+      blob_container: "tickets"
+
+# ---------------------------------------------------------------------------
+# Agents — defines the complete agent topology for this scenario
+# ---------------------------------------------------------------------------
+
+agents:
+  - name: "GraphExplorerAgent"
+    role: "graph_explorer"
+    model: "gpt-4.1"
+    instructions_file: "prompts/graph_explorer/"
+    compose_with_connector: true
+    tools:
+      - type: "openapi"
+        spec_template: "graph"
+        keep_path: "/query/graph"
+
+  - name: "TelemetryAgent"
+    role: "telemetry"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_telemetry_agent_v2.md"
+    tools:
+      - type: "openapi"
+        spec_template: "telemetry"
+        keep_path: "/query/telemetry"
+
+  - name: "RunbookKBAgent"
+    role: "runbook"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_runbook_kb_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "runbooks"
+
+  - name: "HistoricalTicketAgent"
+    role: "ticket"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_historical_ticket_agent.md"
+    tools:
+      - type: "azure_ai_search"
+        index_key: "tickets"
+
+  - name: "Orchestrator"
+    role: "orchestrator"
+    model: "gpt-4.1"
+    instructions_file: "prompts/foundry_orchestrator_agent.md"
+    is_orchestrator: true
+    connected_agents:
+      - "GraphExplorerAgent"
+      - "TelemetryAgent"
+      - "RunbookKBAgent"
+      - "HistoricalTicketAgent"
+
+# ---------------------------------------------------------------------------
+# Graph visualisation hints (frontend node styling)
+# ---------------------------------------------------------------------------
+
+graph_styles:
+  node_types:
+    CoreRouter:    { color: "#38BDF8", size: 28, icon: "router" }
+    AggSwitch:     { color: "#FB923C", size: 22, icon: "switch" }
+    BaseStation:   { color: "#A78BFA", size: 18, icon: "antenna" }
+    TransportLink: { color: "#3B82F6", size: 16, icon: "link" }
+    MPLSPath:      { color: "#C084FC", size: 14, icon: "path" }
+    Service:       { color: "#CA8A04", size: 20, icon: "service" }
+    SLAPolicy:     { color: "#FB7185", size: 12, icon: "policy" }
+    BGPSession:    { color: "#F472B6", size: 14, icon: "session" }
+    PhysicalConduit: { color: "#F59E0B", size: 20, icon: "conduit" }
+    AmplifierSite:   { color: "#10B981", size: 16, icon: "amplifier" }
+    Advisory:        { color: "#EF4444", size: 18, icon: "advisory" }
+    Sensor:          { color: "#22D3EE", size: 10, icon: "sensor" }
+    Depot:           { color: "#6366F1", size: 16, icon: "depot" }
+    DutyRoster:      { color: "#F97316", size: 14, icon: "person" }
+
+# ---------------------------------------------------------------------------
+# Telemetry baselines (used to generate prompt sections)
+# ---------------------------------------------------------------------------
+
+telemetry_baselines:
+  link_telemetry:
+    - metric: LatencyMs
+      normal: "2–15 ms"
+      degraded: "> 50 ms"
+      down: "9999 ms"
+    - metric: OpticalPowerDbm
+      normal: "-8 to -12 dBm"
+      degraded: "< -20 dBm"
+      down: "< -30 dBm"
+    - metric: BitErrorRate
+      normal: "< 1e-9"
+      degraded: "> 1e-6"
+      down: "≈ 1"
+    - metric: UtilizationPct
+      normal: "20–70%"
+      degraded: "> 80%"
+      down: "0% (with other down indicators)"
+  alert_stream:
+    - metric: PacketLossPct
+      normal: "< 1%"
+      anomalous: "> 2%"
+    - metric: CPUUtilPct
+      normal: "< 70%"
+      anomalous: "> 85%"
+    - metric: OpticalPowerDbm
+      normal: "-8 to -12 dBm"
+      anomalous: "< -20 dBm"
+    - metric: BitErrorRate
+      normal: "< 1e-9"
+      anomalous: "> 1e-6"
+  sensor_readings:
+    - metric: OpticalPower (dBm)
+      normal: "-8 to -12 dBm"
+      degraded: "< -20 dBm"
+      critical: "< -30 dBm"
+    - metric: BitErrorRate (ratio)
+      normal: "< 1e-9"
+      degraded: "> 1e-6"
+      critical: "> 1e-3"
+    - metric: Temperature (°C)
+      normal: "20–45 °C"
+      degraded: "> 55 °C"
+      critical: "> 70 °C"
+    - metric: Vibration (g)
+      normal: "< 0.5 g"
+      degraded: "> 1.0 g"
+      critical: "> 2.0 g"
+
+# ---------------------------------------------------------------------------
+# Demo flows — guided walkthroughs for live demonstrations
+# ---------------------------------------------------------------------------
+
+demo_flows:
+  - title: "Fibre Cut Alert Storm — Root Cause & Field Dispatch"
+    description: >
+      It's 2:31 PM and the Fabric Eventhouse anomaly detector fires. Twenty
+      correlated alerts land within a single second — VPN tunnels down, broadband
+      degraded, mobile backhaul failing across both Sydney and Melbourne. The
+      anomaly detector groups the burst and triggers the agentic investigation
+      flow, passing the raw alert batch as input. The AI must identify the root
+      cause, assess blast radius, locate the fault via per-sensor data, find the
+      nearest on-duty field engineer, and dispatch them to the site.
+    steps:
+      - prompt: |
+          [AUTOMATED TRIGGER — Fabric Eventhouse Anomaly Detector]
+          An anomaly burst has been detected: 20 correlated alerts within 1 second across the SYD-MEL corridor. Raw alert data below.
+
+
+          14:31:14.077 WARNING MOB-5G-MEL-3011 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.124 WARNING MOB-5G-SYD-2042 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.133 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.161 CRITICAL VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.185 WARNING MOB-5G-SYD-2041 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.222 WARNING MOB-5G-MEL-3011 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.259 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.289 MAJOR BB-BUNDLE-SYD-NORTH SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.518 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.551 WARNING MOB-5G-MEL-3011 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.558 WARNING MOB-5G-SYD-2042 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.565 WARNING MOB-5G-SYD-2041 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.657 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.704 CRITICAL VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.808 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.847 CRITICAL VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.847 WARNING MOB-5G-SYD-2041 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS below threshold
+          14:31:14.902 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+          14:31:14.968 CRITICAL VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel unreachable — primary MPLS path down
+          14:31:14.986 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband degraded — upstream path impacted
+        expect: >
+          The AI should: (1) parse the alert storm, deduplicate, identify SYD-MEL
+          corridor as common factor, (2) trace topology to LINK-SYD-MEL-FIBRE-01
+          as root cause, (3) query per-sensor readings to isolate the fault between
+          Campbelltown and Goulburn splice points, (4) look up the duty roster for
+          the nearest on-call field engineer, and (5) dispatch_field_engineer action
+          to send Dave Mitchell (Goulburn Regional) to sensor SENS-SYD-MEL-F1-OPT-002
+          at GPS -34.7546, 149.7186 with instructions to inspect for physical fibre damage.
+      - prompt: "Which enterprise services are affected and what SLA penalties are we facing?"
+        expect: >
+          Full blast radius: VPN-ACME-CORP ($50K/hr GOLD SLA), VPN-BIGBANK ($25K/hr
+          SILVER SLA), broadband bundles, mobile backhaul. Quantifies total customer
+          impact and SLA breach timelines.
+      - prompt: "Has the field engineer confirmed the fault location yet?"
+        expect: >
+          The orchestrator should note that the dispatch action was sent and
+          summarize the dispatch details (engineer name, destination coordinates,
+          physical signs to look for). If real email were implemented, it would
+          check for a response — for demo, it recaps the dispatch action.
+
+  - title: "Wear & Tear Alert Storm — Gradual Degradation & Proactive Dispatch"
+    description: >
+      It's 9:15 AM. Unlike the sudden fibre cut, this alert storm has been
+      building slowly. Optical power on the SYD-MEL corridor has been dropping
+      over the past 72 hours — now it's crossed the degradation threshold and
+      services are experiencing intermittent quality issues. The Fabric Eventhouse
+      anomaly detector fires a burst of 15 correlated WARNING/MAJOR alerts. The
+      AI must distinguish this gradual wear-and-tear pattern from an acute
+      failure, use per-sensor trend data to identify the degrading component,
+      and proactively dispatch a field engineer before total failure occurs.
+    steps:
+      - prompt: |
+          [AUTOMATED TRIGGER — Fabric Eventhouse Anomaly Detector]
+          An anomaly burst has been detected: 15 correlated alerts within 30 seconds on the SYD-MEL corridor. Mixed OPTICAL_DEGRADATION, HIGH_BER, and SERVICE_DEGRADATION alerts. Severity: mostly WARNING/MAJOR (no CRITICAL). Raw alert data below.
+
+
+          09:15:02.112 MAJOR LINK-SYD-MEL-FIBRE-01 OPTICAL_DEGRADATION Optical power degrading — approaching maintenance threshold
+          09:15:03.445 MAJOR LINK-SYD-MEL-FIBRE-01 HIGH_BER Bit error rate above acceptable threshold — link quality degrading
+          09:15:05.201 WARNING VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel quality degraded — increased jitter and packet loss
+          09:15:05.892 WARNING VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel quality degraded — latency spikes on primary MPLS path
+          09:15:07.334 WARNING MOB-5G-MEL-3011 SERVICE_DEGRADATION Backhaul degradation — intermittent voice quality drops
+          09:15:08.712 WARNING BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband quality degraded — upstream jitter
+          09:15:12.003 MAJOR LINK-SYD-MEL-FIBRE-01 OPTICAL_DEGRADATION Optical power continuing to degrade — now below -19 dBm
+          09:15:14.556 MAJOR VPN-ACME-CORP SERVICE_DEGRADATION VPN tunnel experiencing sustained packet loss above 4%
+          09:15:15.889 WARNING MOB-5G-SYD-2041 SERVICE_DEGRADATION Backhaul degradation — voice quality MOS dropping
+          09:15:18.223 MAJOR LINK-SYD-MEL-FIBRE-01 HIGH_BER Bit error rate accelerating — 7.2e-7 and rising
+          09:15:20.445 MAJOR VPN-BIGBANK SERVICE_DEGRADATION VPN tunnel latency exceeding 45ms — approaching SLA threshold
+          09:15:22.778 WARNING BB-BUNDLE-SYD-NORTH SERVICE_DEGRADATION Customer broadband quality degraded — bufferbloat
+          09:15:25.112 WARNING MOB-5G-SYD-2042 SERVICE_DEGRADATION Backhaul degradation — video call quality below threshold
+          09:15:28.334 WARNING LINK-SYD-MEL-FIBRE-01 CAPACITY_EXCEEDED Link utilization spiking as traffic fails over
+          09:15:31.667 MAJOR BB-BUNDLE-MEL-EAST SERVICE_DEGRADATION Customer broadband — sustained packet loss above 5%
+        expect: >
+          The AI should: (1) recognise this as a DEGRADATION pattern (not acute
+          failure) based on severity levels and alert types, (2) trace to
+          LINK-SYD-MEL-FIBRE-01 as the degrading component, (3) query per-sensor
+          trend data for LINK-SYD-MEL-FIBRE-01 sensors to identify the specific
+          segment showing the worst degradation (Goulburn area — correlating with
+          the amplifier site AMP-SYD-MEL-GOULBURN), (4) check amplifier
+          calibration dates (AMP-SYD-MEL-GOULBURN last calibrated 2025-09-15 —
+          5 months ago), (5) look up duty roster for nearest regional field
+          engineer, and (6) fire dispatch_field_engineer to send them to
+          inspect the Goulburn amplifier site and the fibre segment for signs
+          of vibration damage, conduit wear, or amplifier degradation — BEFORE
+          total failure occurs.
+      - prompt: "Show me the sensor trend data for LINK-SYD-MEL-FIBRE-01 over the past 72 hours"
+        expect: >
+          TelemetryAgent queries SensorReadings table for all sensors on
+          LINK-SYD-MEL-FIBRE-01. Shows the gradual optical power decline at
+          the Goulburn splice point (SENS-SYD-MEL-F1-OPT-002) from -12 dBm
+          to -19+ dBm over 72 hours, while the Campbelltown sensor
+          (SENS-SYD-MEL-F1-OPT-001) stayed normal — proving the degradation
+          is localised to the Goulburn-Albury segment. Also shows rising
+          vibration readings at AMP-SYD-MEL-GOULBURN.
+      - prompt: "What should the field engineer look for when they arrive?"
+        expect: >
+          The orchestrator should synthesise from: (1) runbook for optical
+          degradation / amplifier maintenance, (2) sensor location data
+          (GPS coordinates, mount location descriptions), and (3) the specific
+          metrics indicating what's wrong. Should produce a checklist:
+          inspect amplifier housing for physical damage, check fibre splice
+          points for moisture ingress, measure vibration at the conduit,
+          clean optical connectors, re-run amplifier self-test.
