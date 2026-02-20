@@ -10,8 +10,8 @@ import { ResizableGraph } from './components/ResizableGraph';
 import { ResizableSidebar } from './components/ResizableSidebar';
 import { ResizableTerminal } from './components/ResizableTerminal';
 import { Toast } from './components/Toast';
-import { useConversation } from './hooks/useConversation';
-import { useSessions } from './hooks/useSessions';
+import { useChatStore } from './stores/chatStore';
+import { useSessionStore } from './stores/sessionStore';
 import { useAutoScroll } from './hooks/useAutoScroll';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { ScenarioPanel } from './components/ScenarioPanel';
@@ -23,30 +23,40 @@ type AppTab = 'investigate' | 'resources' | 'scenario' | 'ontology';
 
 export default function App() {
   const SCENARIO = useScenario();
+
+  // Zustand stores
+  const messages = useChatStore((s) => s.messages);
+  const running = useChatStore((s) => s.status === 'streaming');
   const {
-    messages,
-    running,
-    activeSessionId,
     createSession,
     sendFollowUp,
     viewSession,
     cancelSession,
     handleNewSession,
-    deleteSession,
     saveSession,
-  } = useConversation();
+  } = useChatStore.getState();
 
-  const { sessions, loading: sessionsLoading, refetch: refetchSessions } = useSessions(SCENARIO.name);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const sessions = useSessionStore((s) => s.sessions);
+  const sessionsLoading = useSessionStore((s) => s.loading);
+  const fetchSessions = useSessionStore((s) => s.fetchSessions);
+  const deleteSessionAction = useSessionStore((s) => s.deleteSession);
+
   const { isNearBottom, scrollToBottom, scrollRef } = useAutoScroll(messages);
+
+  // Fetch sessions on mount
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
 
   // Refetch session list when a run finishes (running transitions true → false)
   const prevRunning = useRef(running);
   useEffect(() => {
     if (prevRunning.current && !running) {
-      refetchSessions();
+      fetchSessions();
     }
     prevRunning.current = running;
-  }, [running, refetchSessions]);
+  }, [running, fetchSessions]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -70,7 +80,7 @@ export default function App() {
     } else if (!running) {
       await createSession(SCENARIO.name, text);
     }
-    refetchSessions();
+    fetchSessions();
   };
 
   return (
@@ -144,9 +154,9 @@ export default function App() {
                   sessions={sessions}
                   loading={sessionsLoading}
                   onSelect={(id) => viewSession(id)}
-                  onDelete={(id) => deleteSession(id)}
+                  onDelete={(id) => deleteSessionAction(id)}
                   onNewSession={handleNewSession}
-                  onRefresh={refetchSessions}
+                  onRefresh={fetchSessions}
                   activeSessionId={activeSessionId}
                   collapsed={sidebarCollapsed}
                   onToggleCollapse={() => setSidebarCollapsed(v => !v)}
@@ -158,9 +168,9 @@ export default function App() {
                   sessions={sessions}
                   loading={sessionsLoading}
                   onSelect={(id) => viewSession(id)}
-                  onDelete={(id) => deleteSession(id)}
+                  onDelete={(id) => deleteSessionAction(id)}
                   onNewSession={handleNewSession}
-                  onRefresh={refetchSessions}
+                  onRefresh={fetchSessions}
                   activeSessionId={activeSessionId}
                   collapsed={sidebarCollapsed}
                   onToggleCollapse={() => setSidebarCollapsed(v => !v)}

@@ -28,6 +28,17 @@ export default defineConfig({
           });
         },
       },
+      '/api/sessions': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        // SSE: disable response buffering for /api/sessions/*/stream
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['cache-control'] = 'no-cache';
+            proxyRes.headers['x-accel-buffering'] = 'no';
+          });
+        },
+      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
@@ -37,9 +48,8 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/query': {
-        target: 'http://localhost:8100',
+        target: 'http://localhost:8000',
         changeOrigin: true,
-        // SSE support for scenario upload progress streaming
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes) => {
             proxyRes.headers['cache-control'] = 'no-cache';
