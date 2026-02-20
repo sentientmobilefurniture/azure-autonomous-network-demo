@@ -14,11 +14,15 @@ export function ResizableGraph({ children }: { children: React.ReactNode }) {
       <div
         className="h-5 cursor-row-resize shrink-0 border-y border-border
                    bg-neutral-bg2 hover:bg-neutral-bg3 active:bg-brand/10
-                   transition-colors z-10 flex items-center justify-center group/handle"
+                   transition-colors z-10 flex items-center justify-center gap-1 group/handle"
         {...handleProps}
       >
-        <div className="w-10 h-1.5 rounded-full bg-text-muted/20
-                        group-hover/handle:bg-brand/40 transition-colors" />
+        <div className="w-1 h-1 rounded-full bg-text-muted/30
+                        group-hover/handle:bg-brand/50 transition-colors" />
+        <div className="w-8 h-1 rounded-full bg-text-muted/30
+                        group-hover/handle:bg-brand/50 transition-colors" />
+        <div className="w-1 h-1 rounded-full bg-text-muted/30
+                        group-hover/handle:bg-brand/50 transition-colors" />
       </div>
     </div>
   );

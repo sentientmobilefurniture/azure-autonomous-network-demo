@@ -35,6 +35,17 @@ GRAPH_BACKEND: str = os.getenv("GRAPH_BACKEND", "fabric-gql").lower()
 
 TOPOLOGY_SOURCE: str = os.getenv("TOPOLOGY_SOURCE", "static").lower()
 
+# Fix 7: Guard against live topology on small capacities.
+# Live mode fires 7 GQL queries per request — catastrophic on < F32.
+_FABRIC_CAPACITY_SKU = os.getenv("FABRIC_CAPACITY_SKU", "F8")
+_sku_num = int("".join(filter(str.isdigit, _FABRIC_CAPACITY_SKU)) or "8")
+if TOPOLOGY_SOURCE == "live" and _sku_num < 32:
+    logger.warning(
+        "TOPOLOGY_SOURCE=live is not supported on %s (< F32). "
+        "Overriding to 'static'.", _FABRIC_CAPACITY_SKU
+    )
+    TOPOLOGY_SOURCE = "static"
+
 
 # ---------------------------------------------------------------------------
 # AI Search settings (used by /query/health)

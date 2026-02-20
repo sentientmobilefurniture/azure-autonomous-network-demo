@@ -11,11 +11,15 @@ export function ResizableSidebar({ children }: { children: React.ReactNode }) {
       <div
         className="w-5 cursor-col-resize shrink-0 border-x border-border
                    hover:bg-neutral-bg3 active:bg-brand/10
-                   transition-colors z-10 flex items-center justify-center group/handle"
+                   transition-colors z-10 flex flex-col items-center justify-center gap-1 group/handle"
         {...handleProps}
       >
-        <div className="h-10 w-1.5 rounded-full bg-text-muted/20
-                        group-hover/handle:bg-brand/40 transition-colors" />
+        <div className="h-1 w-1 rounded-full bg-text-muted/30
+                        group-hover/handle:bg-brand/50 transition-colors" />
+        <div className="h-8 w-1 rounded-full bg-text-muted/30
+                        group-hover/handle:bg-brand/50 transition-colors" />
+        <div className="h-1 w-1 rounded-full bg-text-muted/30
+                        group-hover/handle:bg-brand/50 transition-colors" />
       </div>
       <div style={{ width }} className="overflow-y-auto overflow-x-hidden h-full">{children}</div>
     </aside>

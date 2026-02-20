@@ -23,6 +23,41 @@ logger = logging.getLogger("graph-query-api.health")
 
 router = APIRouter(prefix="/query")
 
+# ---------------------------------------------------------------------------
+# Health cache — avoid hitting Fabric on every probe (Fix 5)
+# ---------------------------------------------------------------------------
+
+_health_cache: dict[str, tuple[float, dict]] = {}  # key → (expires_at, result)
+HEALTH_CACHE_TTL = float(os.getenv("HEALTH_CACHE_TTL", "30"))  # seconds
+
+
+async def _cached_ping(key: str, ping_fn) -> dict:
+    """Return cached ping result or execute ping_fn and cache."""
+    now = time.time()
+    cached = _health_cache.get(key)
+    if cached and now < cached[0]:
+        result = cached[1].copy()
+        result["cached"] = True
+        return result
+    result = await ping_fn()
+    _health_cache[key] = (now + HEALTH_CACHE_TTL, result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# KQL singleton — reused across all health checks (Fix 5)
+# ---------------------------------------------------------------------------
+
+_kql_singleton = None
+
+
+def _get_kql_singleton():
+    global _kql_singleton
+    if _kql_singleton is None:
+        from backends.fabric_kql import FabricKQLBackend
+        _kql_singleton = FabricKQLBackend()
+    return _kql_singleton
+
 
 @router.get("/health")
 async def query_health():
@@ -37,28 +72,33 @@ AI_SEARCH_API_VERSION = "2024-07-01"
 
 
 async def _ping_graph_backend(connector: str, config: dict, graph_name: str) -> dict:
-    """Ping a graph backend by connector type."""
+    """Ping a graph backend by connector type (cached)."""
     backend_type = {
         "fabric-gql": "fabric-gql",
         "mock": "mock",
     }.get(connector, connector)
 
-    try:
-        backend = get_backend_for_graph(graph_name, backend_type)
-        return await backend.ping()
-    except Exception as e:
-        return {"ok": False, "query": "(failed to create backend)", "detail": str(e), "latency_ms": 0}
-
-
-async def _ping_telemetry_backend(connector: str, config: dict) -> dict:
-    """Ping a telemetry backend by connector type."""
-    if connector == "fabric-kql":
+    async def _do_ping():
         try:
-            from backends.fabric_kql import FabricKQLBackend
-            backend = FabricKQLBackend()
+            backend = get_backend_for_graph(graph_name, backend_type)
             return await backend.ping()
         except Exception as e:
             return {"ok": False, "query": "(failed to create backend)", "detail": str(e), "latency_ms": 0}
+
+    return await _cached_ping(f"graph:{connector}:{graph_name}", _do_ping)
+
+
+async def _ping_telemetry_backend(connector: str, config: dict) -> dict:
+    """Ping a telemetry backend by connector type (cached, singleton)."""
+    if connector == "fabric-kql":
+        async def _do_ping():
+            try:
+                backend = _get_kql_singleton()
+                return await backend.ping()
+            except Exception as e:
+                return {"ok": False, "query": "(failed to create backend)", "detail": str(e), "latency_ms": 0}
+
+        return await _cached_ping(f"telemetry:{connector}", _do_ping)
 
     return {"ok": False, "query": "(unknown telemetry connector)", "detail": f"Unknown connector: {connector}", "latency_ms": 0}
 
@@ -142,7 +182,16 @@ async def health_check_sources(scenario: str = Query(default=SCENARIO_NAME, desc
             **ping_result,
         })
 
-    return {"sources": results, "checked_at": datetime.now(timezone.utc).isoformat()}
+    return {"sources": results, "checked_at": datetime.now(timezone.utc).isoformat(), "fabric_gate": _get_gate_status()}
+
+
+def _get_gate_status() -> dict:
+    """Return FabricThrottleGate status for the health endpoint."""
+    try:
+        from backends.fabric_throttle import get_fabric_gate
+        return get_fabric_gate().status()
+    except Exception:
+        return {"state": "unknown"}
 
 
 @router.post("/health/rediscover")

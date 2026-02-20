@@ -96,8 +96,13 @@ class Session:
                     except ValueError:
                         pass
 
-    def subscribe(self) -> tuple[list[dict], asyncio.Queue]:
+    def subscribe(self, since_index: int = 0) -> tuple[list[dict], asyncio.Queue]:
         """Return (existing_events, live_queue) for SSE replay + tail.
+
+        Args:
+            since_index: skip the first N events in the log.  Used by
+                follow-up turns so the SSE stream only replays events
+                from the *current* turn instead of the entire session.
 
         Atomic: snapshot and subscriber registration happen under the same
         lock, so no event can fall between the snapshot and the queue.
@@ -107,9 +112,15 @@ class Session:
         with self._lock:
             if self._loop is None:
                 self._loop = loop
-            snapshot = list(self.event_log)
+            snapshot = list(self.event_log[since_index:])
             self._subscribers.append(q)
         return snapshot, q
+
+    @property
+    def event_count(self) -> int:
+        """Current length of event_log — safe for cross-thread reads."""
+        with self._lock:
+            return len(self.event_log)
 
     def unsubscribe(self, q: asyncio.Queue):
         with self._lock:

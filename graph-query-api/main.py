@@ -44,6 +44,7 @@ from router_graph import router as graph_router, close_graph_backend
 from router_telemetry import router as telemetry_router
 from router_topology import router as topology_router
 from router_interactions import router as interactions_router
+from router_sessions import router as sessions_router
 from router_replay import router as replay_router
 from router_search import router as search_router
 from router_health import router as health_router
@@ -70,6 +71,16 @@ async def _lifespan(app: FastAPI):
             "Missing env vars for %s backend (will rely on request body values): %s",
             GRAPH_BACKEND, ", ".join(missing),
         )
+
+    # Fix 6: Pre-warm Fabric discovery cache so hot-path requests never
+    # block the event loop on a synchronous cache miss.
+    try:
+        import asyncio as _aio
+        from fabric_discovery import get_fabric_config
+        await _aio.to_thread(get_fabric_config)
+        logger.info("Fabric discovery cache pre-warmed at startup")
+    except Exception as e:
+        logger.warning("Fabric discovery pre-warm failed (non-fatal): %s", e)
 
     logger.info("Starting with GRAPH_BACKEND=%s", GRAPH_BACKEND)
     yield
@@ -132,6 +143,7 @@ app.include_router(graph_router)
 app.include_router(telemetry_router)
 app.include_router(topology_router)
 app.include_router(interactions_router)
+app.include_router(sessions_router)
 app.include_router(replay_router)
 app.include_router(search_router)
 app.include_router(health_router)

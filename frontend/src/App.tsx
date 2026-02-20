@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Header } from './components/Header';
 import { TabBar } from './components/TabBar';
@@ -15,10 +15,11 @@ import { useSessions } from './hooks/useSessions';
 import { useAutoScroll } from './hooks/useAutoScroll';
 import { ResourceVisualizer } from './components/ResourceVisualizer';
 import { ScenarioPanel } from './components/ScenarioPanel';
+import { OntologyPanel } from './components/OntologyPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { useScenario } from './ScenarioContext';
 
-type AppTab = 'investigate' | 'resources' | 'scenario';
+type AppTab = 'investigate' | 'resources' | 'scenario' | 'ontology';
 
 export default function App() {
   const SCENARIO = useScenario();
@@ -37,6 +38,15 @@ export default function App() {
 
   const { sessions, loading: sessionsLoading, refetch: refetchSessions } = useSessions(SCENARIO.name);
   const { isNearBottom, scrollToBottom, scrollRef } = useAutoScroll(messages, thinking);
+
+  // Refetch session list when a run finishes (running transitions true → false)
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    if (prevRunning.current && !running) {
+      refetchSessions();
+    }
+    prevRunning.current = running;
+  }, [running, refetchSessions]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -87,6 +97,8 @@ export default function App() {
       <div className="flex-1 flex flex-col min-h-0" role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={activeTab}>
         {activeTab === 'resources' ? (
           <ResourceVisualizer />
+        ) : activeTab === 'ontology' ? (
+          <OntologyPanel />
         ) : activeTab === 'scenario' ? (
           <ScenarioPanel onUsePrompt={(q) => {
             handleSubmit(q);
@@ -136,6 +148,7 @@ export default function App() {
                   onSelect={(id) => viewSession(id)}
                   onDelete={(id) => deleteSession(id)}
                   onNewSession={handleNewSession}
+                  onRefresh={refetchSessions}
                   activeSessionId={activeSessionId}
                   collapsed={sidebarCollapsed}
                   onToggleCollapse={() => setSidebarCollapsed(v => !v)}
@@ -149,6 +162,7 @@ export default function App() {
                   onSelect={(id) => viewSession(id)}
                   onDelete={(id) => deleteSession(id)}
                   onNewSession={handleNewSession}
+                  onRefresh={refetchSessions}
                   activeSessionId={activeSessionId}
                   collapsed={sidebarCollapsed}
                   onToggleCollapse={() => setSidebarCollapsed(v => !v)}

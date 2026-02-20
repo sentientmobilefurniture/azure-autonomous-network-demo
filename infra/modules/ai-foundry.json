@@ -1,0 +1,287 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.40.2.10011",
+      "templateHash": "11820526672116698925"
+    }
+  },
+  "parameters": {
+    "foundryName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the AI Foundry resource (CognitiveServices account)"
+      }
+    },
+    "projectName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the AI Foundry Project"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Resource tags"
+      }
+    },
+    "aiSearchId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the AI Search service"
+      }
+    },
+    "aiSearchName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the AI Search service"
+      }
+    },
+    "storageAccountId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the Storage account"
+      }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Storage account"
+      }
+    },
+    "storageContainerName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the blob container for runbooks"
+      }
+    },
+    "cosmosAccountId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the Cosmos DB NoSQL account"
+      }
+    },
+    "cosmosAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Cosmos DB NoSQL account"
+      }
+    },
+    "gptCapacity": {
+      "type": "int",
+      "defaultValue": 10,
+      "metadata": {
+        "description": "GPT model capacity in 1K TPM units (e.g. 10 = 10K tokens/min)"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2025-06-01",
+      "name": "[parameters('foundryName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "AIServices",
+      "sku": {
+        "name": "S0"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "customSubDomainName": "[parameters('foundryName')]",
+        "publicNetworkAccess": "Enabled",
+        "allowProjectManagement": true
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), 'text-embedding-3-small')]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": 10
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "text-embedding-3-small",
+          "version": "1"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2025-09-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), 'gpt-4.1')]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": "[parameters('gptCapacity')]"
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "gpt-4.1",
+          "version": "2025-04-14"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('foundryName'), 'text-embedding-3-small')]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/connections",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), 'aisearch-connection')]",
+      "properties": {
+        "authType": "AAD",
+        "category": "CognitiveSearch",
+        "target": "[format('https://{0}.search.windows.net', parameters('aiSearchName'))]",
+        "isSharedToAll": true,
+        "metadata": {
+          "ApiType": "Azure",
+          "ApiVersion": "2025-05-01",
+          "ResourceId": "[parameters('aiSearchId')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/connections",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), 'storage-connection')]",
+      "properties": {
+        "authType": "AAD",
+        "category": "AzureBlob",
+        "target": "[format('https://{0}.blob.{1}', parameters('storageAccountName'), environment().suffixes.storage)]",
+        "isSharedToAll": true,
+        "metadata": {
+          "AccountName": "[parameters('storageAccountName')]",
+          "ContainerName": "[parameters('storageContainerName')]",
+          "ResourceId": "[parameters('storageAccountId')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/connections",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), 'storage-account-connection')]",
+      "properties": {
+        "authType": "AAD",
+        "category": "AzureStorageAccount",
+        "target": "[format('https://{0}.blob.{1}', parameters('storageAccountName'), environment().suffixes.storage)]",
+        "isSharedToAll": true,
+        "metadata": {
+          "AccountName": "[parameters('storageAccountName')]",
+          "ResourceId": "[parameters('storageAccountId')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/connections",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), 'cosmos-connection')]",
+      "properties": {
+        "authType": "AAD",
+        "category": "CosmosDb",
+        "target": "[format('https://{0}.documents.azure.com:443/', parameters('cosmosAccountName'))]",
+        "isSharedToAll": true,
+        "metadata": {
+          "AccountName": "[parameters('cosmosAccountName')]",
+          "ResourceId": "[parameters('cosmosAccountId')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/projects",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), parameters('projectName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "description": "AI Foundry Project for the Autonomous Network NOC demo",
+        "displayName": "Autonomous Network NOC Project"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/capabilityHosts",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', parameters('foundryName'), format('{0}-caphost', parameters('foundryName')))]",
+      "properties": {
+        "capabilityHostKind": "Agents",
+        "storageConnections": [
+          "storage-account-connection"
+        ],
+        "vectorStoreConnections": [
+          "cosmos-connection"
+        ],
+        "threadStorageConnections": [
+          "cosmos-connection"
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/connections', parameters('foundryName'), 'cosmos-connection')]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryName'), parameters('projectName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/connections', parameters('foundryName'), 'storage-account-connection')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "foundryId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName'))]"
+    },
+    "foundryName": {
+      "type": "string",
+      "value": "[parameters('foundryName')]"
+    },
+    "foundryEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName')), '2025-06-01').endpoint]"
+    },
+    "foundryPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryName')), '2025-06-01', 'full').identity.principalId]"
+    },
+    "projectName": {
+      "type": "string",
+      "value": "[parameters('projectName')]"
+    },
+    "projectEndpoint": {
+      "type": "string",
+      "value": "[format('https://{0}.services.ai.azure.com/api/projects/{1}', parameters('foundryName'), parameters('projectName'))]"
+    }
+  }
+}

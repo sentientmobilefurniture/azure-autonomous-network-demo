@@ -159,6 +159,8 @@ module aiFoundry 'modules/ai-foundry.bicep' = {
     storageAccountId: storage.outputs.id
     storageAccountName: storage.outputs.name
     storageContainerName: 'network-data'
+    cosmosAccountId: cosmosNoSql.outputs.cosmosAccountId
+    cosmosAccountName: cosmosNoSql.outputs.cosmosAccountName
     gptCapacity: gptCapacity
   }
 }

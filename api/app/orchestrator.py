@@ -511,6 +511,15 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
 
     MAX_RUN_ATTEMPTS = 2  # initial + 1 retry on failure
 
+    def _is_capacity_error(error_text: str) -> bool:
+        """Check if an error message indicates Fabric capacity exhaustion."""
+        capacity_markers = [
+            "429", "capacity", "circuit breaker", "throttl",
+            "Fabric capacity", "too many requests", "503",
+        ]
+        lower = error_text.lower()
+        return any(m.lower() in lower for m in capacity_markers)
+
     def _thread_target():
         overall_t0 = time.monotonic()
         total_steps = 0
@@ -598,6 +607,22 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     # Check if the run failed
                     if handler.run_failed:
                         last_error_detail = handler.run_error_detail
+                        # Skip retry entirely for Fabric capacity errors —
+                        # retrying would double the load (Fix 3).
+                        if _is_capacity_error(last_error_detail):
+                            logger.warning(
+                                "Skipping orchestrator retry — Fabric capacity error: %s",
+                                last_error_detail[:200],
+                            )
+                            error_emitted = True
+                            _put("error", {
+                                "message": (
+                                    f"Investigation stopped — Fabric capacity exhausted. "
+                                    f"{total_steps} steps completed.\n\n"
+                                    f"{last_error_detail}"
+                                ),
+                            })
+                            break
                         if attempt < MAX_RUN_ATTEMPTS:
                             logger.warning(
                                 "Orchestrator run failed, will retry (attempt %d/%d): %s",
@@ -1096,6 +1121,15 @@ async def run_orchestrator_session(
 
     MAX_RUN_ATTEMPTS = 2
 
+    def _is_capacity_error(error_text: str) -> bool:
+        """Check if an error message indicates Fabric capacity exhaustion."""
+        capacity_markers = [
+            "429", "capacity", "circuit breaker", "throttl",
+            "Fabric capacity", "too many requests", "503",
+        ]
+        lower = error_text.lower()
+        return any(m.lower() in lower for m in capacity_markers)
+
     def _thread_target():
         overall_t0 = time.monotonic()
         total_steps = 0
@@ -1199,6 +1233,22 @@ async def run_orchestrator_session(
 
                     if handler.run_failed:
                         last_error_detail = handler.run_error_detail
+                        # Skip retry entirely for Fabric capacity errors —
+                        # retrying would double the load (Fix 3).
+                        if _is_capacity_error(last_error_detail):
+                            logger.warning(
+                                "Skipping orchestrator retry — Fabric capacity error: %s",
+                                last_error_detail[:200],
+                            )
+                            error_emitted = True
+                            _put("error", {
+                                "message": (
+                                    f"Investigation stopped — Fabric capacity exhausted. "
+                                    f"{total_steps} steps completed.\n\n"
+                                    f"{last_error_detail}"
+                                ),
+                            })
+                            break
                         if attempt < MAX_RUN_ATTEMPTS:
                             logger.warning(
                                 "Orchestrator run failed, will retry (attempt %d/%d): %s",

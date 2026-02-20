@@ -50,9 +50,11 @@ class FabricKQLBackend:
     async def execute_query(self, query: str, **kwargs) -> dict:
         """Execute a KQL query against the Eventhouse.
 
+        Concurrency is bounded by the shared FabricThrottleGate.
         Returns: {"columns": [...], "rows": [...]}
         """
         from fabric_discovery import get_fabric_config, is_kql_ready
+        from backends.fabric_throttle import get_fabric_gate
 
         if not is_kql_ready():
             return {"error": True, "detail": "KQL backend not configured — Eventhouse not discovered"}
@@ -61,10 +63,14 @@ class FabricKQLBackend:
         client = self._get_client()
         db = kwargs.get("database") or cfg.kql_db_name
 
+        gate = get_fabric_gate()
+        await gate.acquire()
+
         try:
             response = await asyncio.to_thread(client.execute, db, query)
             primary = response.primary_results[0] if response.primary_results else None
             if primary is None:
+                await gate.record_success()
                 return {"columns": [], "rows": []}
 
             columns = [
@@ -80,10 +86,17 @@ class FabricKQLBackend:
                         val = val.isoformat()
                     row_dict[col.column_name] = val
                 rows.append(row_dict)
+            await gate.record_success()
             return {"columns": columns, "rows": rows}
         except Exception as e:
             logger.error("KQL query failed: %s", e)
+            # Check if it's a capacity error
+            err_str = str(e).lower()
+            if "429" in err_str or "throttl" in err_str or "capacity" in err_str:
+                await gate.record_server_error()
             return {"error": True, "detail": str(e)}
+        finally:
+            gate.release()
 
     async def ping(self) -> dict:
         """Health check — run a minimal KQL management command."""

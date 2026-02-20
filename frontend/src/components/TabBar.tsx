@@ -1,6 +1,6 @@
 interface TabBarProps {
-  activeTab: 'investigate' | 'resources' | 'scenario';
-  onTabChange: (tab: 'investigate' | 'resources' | 'scenario') => void;
+  activeTab: 'investigate' | 'resources' | 'scenario' | 'ontology';
+  onTabChange: (tab: 'investigate' | 'resources' | 'scenario' | 'ontology') => void;
 }
 
 export function TabBar({ activeTab, onTabChange }: TabBarProps) {
@@ -8,6 +8,7 @@ export function TabBar({ activeTab, onTabChange }: TabBarProps) {
     { id: 'investigate' as const, label: '▸ Investigate', tooltip: '' },
     { id: 'resources' as const, label: '◇ Resources', tooltip: 'Regenerate data/architecture_graph.json if architecture changes or new tools are added' },
     { id: 'scenario' as const, label: '📋 Scenario', tooltip: '' },
+    { id: 'ontology' as const, label: '🔗 Graph Ontology', tooltip: 'Graph entity types, relationships, and query patterns' },
   ];
 
   return (

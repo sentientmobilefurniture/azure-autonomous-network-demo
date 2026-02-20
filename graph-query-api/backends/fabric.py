@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from typing import Callable
 
 import httpx
@@ -20,8 +22,26 @@ from adapters.fabric_config import (
     FABRIC_API_URL,
     FABRIC_SCOPE,
 )
+from backends.fabric_throttle import get_fabric_gate
 
 logger = logging.getLogger("graph-query-api.fabric")
+
+# Retry limits by error type (see documentation/fabric_control.md Fix 2)
+_MAX_429_RETRIES = 2
+_MAX_COLDSTART_RETRIES = 5
+_MAX_CONTINUATION_RETRIES = 5
+_DEFAULT_429_WAIT = 30  # seconds
+_TOKEN_STALE_THRESHOLD = 3000  # seconds (~50 min) before re-acquiring
+
+
+def _parse_retry_after(response: httpx.Response, default: int = 30) -> int:
+    """Parse Retry-After header from a 429 response."""
+    raw = response.headers.get("Retry-After", "")
+    try:
+        val = int(raw)
+        return val if 0 < val <= 120 else default
+    except (ValueError, TypeError):
+        return default
 
 
 async def acquire_fabric_token() -> str:
@@ -80,6 +100,10 @@ used by other backends so routers don't need changes.
             {"status": {...}, "result": {"columns": [...], "data": [...]}}
 
         We return the normalised: {"columns": [...], "data": [...]}
+
+        Concurrency is bounded by the shared FabricThrottleGate (semaphore +
+        circuit breaker). Retry strategy is differentiated by error type —
+        see documentation/fabric_control.md Fix 2.
         """
         from fabric_discovery import get_fabric_config, is_fabric_ready
 
@@ -98,13 +122,34 @@ used by other backends so routers don't need changes.
             f"{FABRIC_API_URL}/workspaces/{workspace_id}"
             f"/GraphModels/{graph_model_id}/executeQuery?beta=true"
         )
-        token = await self._get_token()
-        client = self._get_client()
 
-        # Retry loop — handles 429, cold start (02000), and ColdStartTimeout
-        max_retries = 8
+        gate = get_fabric_gate()
+        await gate.acquire()
+
+        try:
+            return await self._execute_query_inner(
+                query, url, gate, **kwargs
+            )
+        finally:
+            gate.release()
+
+    async def _execute_query_inner(
+        self, query: str, url: str, gate, **kwargs
+    ) -> dict:
+        """Inner retry loop — runs with semaphore held."""
+        client = self._get_client()
+        token = await self._get_token()
+        token_acquired_at = time.monotonic()
+
+        max_attempts = max(
+            _MAX_429_RETRIES, _MAX_COLDSTART_RETRIES, _MAX_CONTINUATION_RETRIES
+        )
+        retries_429 = 0
+        retries_coldstart = 0
+        retries_continuation = 0
         continuation_token: str | None = None
-        for attempt in range(max_retries):
+
+        for attempt in range(max_attempts):
             payload: dict = {"query": query}
             if continuation_token:
                 payload["continuationToken"] = continuation_token
@@ -118,55 +163,95 @@ used by other backends so routers don't need changes.
                 },
             )
 
+            # --- HTTP 429: capacity throttled ---
             if response.status_code == 429:
-                wait = 15 * (attempt + 1)
+                retries_429 += 1
+                await gate.record_429()
+                if retries_429 > _MAX_429_RETRIES:
+                    raise HTTPException(
+                        status_code=429,
+                        detail="Fabric capacity exhausted — too many 429s.",
+                    )
+                wait = _parse_retry_after(response, _DEFAULT_429_WAIT)
+                wait *= random.uniform(0.75, 1.25)
                 logger.warning(
-                    "Fabric API 429 — retrying in %ds (attempt %d/%d)",
-                    wait, attempt + 1, max_retries,
+                    "Fabric API 429 — retrying in %.0fs (429 retry %d/%d)",
+                    wait, retries_429, _MAX_429_RETRIES,
                 )
                 await asyncio.sleep(wait)
-                token = await self._get_token()
                 continue
 
-            # ColdStartTimeout — Fabric graph engine still warming up
+            # --- HTTP 500: check for ColdStartTimeout ---
             if response.status_code == 500:
-                body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+                body = (
+                    response.json()
+                    if response.headers.get("content-type", "").startswith(
+                        "application/json"
+                    )
+                    else {}
+                )
                 if body.get("errorCode") == "ColdStartTimeout":
-                    wait = 15 * (attempt + 1)
+                    retries_coldstart += 1
+                    if retries_coldstart > _MAX_COLDSTART_RETRIES:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Fabric GQL engine cold start — retries exhausted. "
+                                   "The graph model is warming up. Please try again in a minute.",
+                        )
+                    wait = min(10 * (2 ** (retries_coldstart - 1)), 60)
+                    wait *= random.uniform(0.75, 1.25)
                     logger.warning(
-                        "Fabric GQL ColdStartTimeout — retrying in %ds (attempt %d/%d)",
-                        wait, attempt + 1, max_retries,
+                        "Fabric GQL ColdStartTimeout — retrying in %.0fs "
+                        "(attempt %d/%d)",
+                        wait, retries_coldstart, _MAX_COLDSTART_RETRIES,
                     )
                     continuation_token = None
                     await asyncio.sleep(wait)
-                    token = await self._get_token()
+                    # Re-acquire token only if stale
+                    if time.monotonic() - token_acquired_at > _TOKEN_STALE_THRESHOLD:
+                        token = await self._get_token()
+                        token_acquired_at = time.monotonic()
                     continue
 
-            if response.status_code != 200:
-                detail = response.text[:500]
+                # Non-ColdStartTimeout 5xx — fail immediately
+                await gate.record_server_error()
                 raise HTTPException(
                     status_code=response.status_code,
-                    detail=f"Fabric GQL query failed: {detail}",
+                    detail=f"Fabric GQL query failed: {response.text[:500]}",
                 )
 
+            # --- Any other non-200 — fail immediately ---
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Fabric GQL query failed: {response.text[:500]}",
+                )
+
+            # --- 200 OK: parse body ---
             body = response.json()
             status_code = body.get("status", {}).get("code", "")
             result = body.get("result", body)
 
-            # Status 02000 = "No data available, retry with continuation token"
-            # This happens during graph engine cold start — data is loading.
+            # Status 02000 = cold-start continuation — data still loading
             if status_code == "02000" and result.get("nextPage"):
+                retries_continuation += 1
+                if retries_continuation > _MAX_CONTINUATION_RETRIES:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Fabric GQL continuation retries exhausted.",
+                    )
                 continuation_token = result["nextPage"]
                 wait = 10
                 logger.info(
                     "Fabric GQL cold start (status 02000) — retrying with "
                     "continuation token in %ds (attempt %d/%d)",
-                    wait, attempt + 1, max_retries,
+                    wait, retries_continuation, _MAX_CONTINUATION_RETRIES,
                 )
                 await asyncio.sleep(wait)
-                token = await self._get_token()
                 continue
 
+            # Success
+            await gate.record_success()
             return {
                 "columns": result.get("columns", []),
                 "data": result.get("data", []),
@@ -174,8 +259,7 @@ used by other backends so routers don't need changes.
 
         raise HTTPException(
             status_code=503,
-            detail="Fabric GQL engine cold start — retries exhausted. "
-                   "The graph model is warming up. Please try again in a minute.",
+            detail="Fabric GQL retries exhausted. Please try again shortly.",
         )
 
     # ------------------------------------------------------------------

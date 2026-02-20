@@ -50,18 +50,28 @@ export function useSession() {
 
   // ---- SSE connection ----
 
-  const connectToStream = useCallback((sessionId: string, targetMsgId: string) => {
+  const connectToStream = useCallback((sessionId: string, targetMsgId: string, since = 0) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setRunning(true);
 
-    fetchEventSource(`/api/sessions/${sessionId}/stream`, {
+    const streamUrl = since > 0
+      ? `/api/sessions/${sessionId}/stream?since=${since}`
+      : `/api/sessions/${sessionId}/stream`;
+    fetchEventSource(streamUrl, {
       signal: ctrl.signal,
       onmessage: (ev) => {
         if (!ev.event || !ev.data) return;
         try {
           const data = JSON.parse(ev.data);
+
+          // Server sends 'done' when the turn is finished — close cleanly
+          if (ev.event === 'done') {
+            ctrl.abort();
+            return;
+          }
+
           // Update thinking state for live feedback
           if (ev.event === 'step_thinking') {
             setThinking({ agent: data.agent ?? 'Orchestrator', status: data.status ?? '' });
@@ -78,9 +88,14 @@ export function useSession() {
         }
       },
       onerror: () => {
-        // SSE dropped — session continues server-side
+        // Throw to prevent fetchEventSource from retrying.
+        // The session persists server-side; the user can reconnect
+        // via viewSession or by sending a follow-up.
+        throw new Error('SSE closed');
       },
       openWhenHidden: true,
+    }).catch(() => {
+      // Expected — thrown by onerror to stop retries, or by abort
     }).finally(() => {
       setRunning(false);
       setThinking(null);
@@ -146,14 +161,15 @@ export function useSession() {
     setMessages(prev => [...prev, userMsg, orchMsg]);
 
     // POST follow-up to existing session
-    await fetch(`/api/sessions/${activeSessionId}/message`, {
+    const res = await fetch(`/api/sessions/${activeSessionId}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
+    const { event_offset = 0 } = await res.json();
 
-    // Reconnect SSE for new events
-    connectToStream(activeSessionId, orchMsgId);
+    // Reconnect SSE starting from the new turn's events only
+    connectToStream(activeSessionId, orchMsgId, event_offset);
   }, [activeSessionId, connectToStream]);
 
   // ---- New session (park current, clear UI) ----

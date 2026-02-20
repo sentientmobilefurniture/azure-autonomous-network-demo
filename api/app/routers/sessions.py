@@ -14,13 +14,17 @@ See documentation/persistent.md §3.3 for the full design.
 
 import asyncio
 import json
+import os
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+import httpx
 
 from app.sessions import SessionStatus
 from app.session_manager import session_manager
+
+_GQ_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8100")
 
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -53,19 +57,12 @@ async def get_session(session_id: str):
     if session:
         return session.to_dict()
 
-    # Fallback: load from Cosmos DB (cross-partition query by ID)
+    # Fallback: load from Cosmos DB via graph-query-api
     try:
-        from stores import get_document_store
-        store = get_document_store(
-            "interactions", "interactions", "/scenario",
-            ensure_created=True,
-        )
-        items = await store.list(
-            query="SELECT * FROM c WHERE c.id = @id",
-            parameters=[{"name": "@id", "value": session_id}],
-        )
-        if items:
-            return items[0]  # Already a dict from Cosmos
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{_GQ_BASE}/query/sessions/{session_id}")
+            if resp.status_code == 200:
+                return resp.json()
     except Exception:
         pass
 
@@ -73,18 +70,23 @@ async def get_session(session_id: str):
 
 
 @router.get("/{session_id}/stream")
-async def stream_session(session_id: str):
-    """SSE stream: replays all past events then tails live events.
+async def stream_session(session_id: str, since: int = Query(default=0, ge=0)):
+    """SSE stream: replays past events then tails live events.
 
-    Safe to call multiple times — each call gets the full history
-    plus any new events. Closes when session completes.
+    Query params:
+        since — event index to start from (skip earlier events).
+               Used by follow-up turns so only new-turn events are
+               replayed, avoiding the prior diagnosis being echoed.
+
+    Safe to call multiple times — each call gets the history
+    (from ``since``) plus any new events. Closes when session completes.
     """
     session = session_manager.get(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
 
     async def _generate():
-        history, live_queue = session.subscribe()
+        history, live_queue = session.subscribe(since_index=since)
         try:
             # Phase 1: replay all buffered events
             for event in history:
@@ -108,6 +110,11 @@ async def stream_session(session_id: str):
                         while not live_queue.empty():
                             yield live_queue.get_nowait()
                         break
+
+            # Signal the client that this turn is done — prevents
+            # fetchEventSource from treating the TCP close as an error
+            # and retrying in a loop.
+            yield {"event": "done", "data": json.dumps({"status": session.status.value})}
         finally:
             session.unsubscribe(live_queue)
 
@@ -149,6 +156,11 @@ async def send_follow_up(session_id: str, req: FollowUpRequest):
     if not session.thread_id:
         raise HTTPException(400, "Session has no Foundry thread (cannot follow up)")
 
+    # Capture the event log length *before* adding user message + starting
+    # the new turn.  The frontend passes this as ``since`` to the SSE
+    # stream so it only receives events from the new turn.
+    event_offset = session.event_count
+
     # Record the user message as an event
     session.turn_count += 1
     session.push_event({
@@ -158,7 +170,11 @@ async def send_follow_up(session_id: str, req: FollowUpRequest):
     })
 
     await session_manager.continue_session(session, req.text)
-    return {"status": "processing", "turn": session.turn_count}
+    return {
+        "status": "processing",
+        "turn": session.turn_count,
+        "event_offset": event_offset,
+    }
 
 
 @router.delete("/{session_id}")
@@ -173,14 +189,13 @@ async def delete_session(session_id: str, scenario: str = Query(default="")):
         session_manager._active.pop(session_id, None)
         session_manager._recent.pop(session_id, None)
 
-    # Also delete from Cosmos DB
+    # Also delete from Cosmos DB via graph-query-api
     try:
-        from stores import get_document_store
-        store = get_document_store(
-            "interactions", "interactions", "/scenario",
-            ensure_created=True,
-        )
-        await store.delete(session_id, partition_key=scenario or None)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.delete(
+                f"{_GQ_BASE}/query/sessions/{session_id}",
+                params={"scenario": scenario} if scenario else {},
+            )
     except Exception:
         pass  # Best effort — may not exist in Cosmos yet
 

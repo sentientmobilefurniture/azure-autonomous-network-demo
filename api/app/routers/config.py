@@ -5,6 +5,7 @@ GET  /api/config/current        — return current active configuration
 GET  /api/config/resources      — resource graph (agents, tools, data sources, infra)
 GET  /api/config/architecture   — static architecture graph from file
 GET  /api/config/scenario       — active scenario metadata
+GET  /api/config/ontology       — graph ontology schema (core_schema.md)
 """
 
 from __future__ import annotations
@@ -383,3 +384,22 @@ async def get_scenario():
         "useCases": _manifest.get("use_cases", []),
         "demoFlows": _manifest.get("demo_flows", []),
     }
+
+
+# ---------------------------------------------------------------------------
+# Ontology — serve graph_explorer/core_schema.md as raw markdown
+# ---------------------------------------------------------------------------
+
+_ONTOLOGY_CANDIDATES = [
+    Path("/app/data/scenarios") / SCENARIO_NAME / "data" / "prompts" / "graph_explorer" / "core_schema.md",
+    PROJECT_ROOT / "data" / "scenarios" / SCENARIO_NAME / "data" / "prompts" / "graph_explorer" / "core_schema.md",
+]
+
+
+@router.get("/ontology", summary="Graph ontology schema (core_schema.md)")
+async def get_ontology():
+    """Return the graph ontology markdown for the active scenario."""
+    for p in _ONTOLOGY_CANDIDATES:
+        if p.exists():
+            return {"markdown": p.read_text(encoding="utf-8")}
+    raise HTTPException(404, "core_schema.md not found for this scenario")

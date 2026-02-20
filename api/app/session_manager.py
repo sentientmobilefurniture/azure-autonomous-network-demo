@@ -14,15 +14,21 @@ See documentation/persistent.md §3.2 for the full design.
 import asyncio
 import json
 import logging
+import os
 from collections import OrderedDict
 from typing import Optional
+
+import httpx
 
 from app.sessions import Session, SessionStatus
 from app.orchestrator import run_orchestrator_session
 
+# graph-query-api runs alongside the API in the same container (supervisord)
+_GQ_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8100")
+
 logger = logging.getLogger(__name__)
 
-MAX_ACTIVE_SESSIONS = 20   # prevent runaway resource usage
+MAX_ACTIVE_SESSIONS = int(os.getenv("MAX_ACTIVE_SESSIONS", "8"))
 MAX_RECENT_SESSIONS = 100  # in-memory cache of completed sessions
 
 
@@ -87,22 +93,17 @@ class SessionManager:
         mem_sessions = self.list_all(scenario)
         mem_ids = {s["id"] for s in mem_sessions}
 
-        # Backfill from Cosmos DB (skip anything already in memory)
+        # Backfill from Cosmos DB via graph-query-api
         try:
-            from stores import get_document_store
-            store = get_document_store(
-                "interactions", "interactions", "/scenario",
-                ensure_created=True,
-            )
-            query = "SELECT * FROM c"
-            params = []
+            params = {"limit": limit}
             if scenario:
-                query += " WHERE c.scenario = @scenario"
-                params.append({"name": "@scenario", "value": scenario})
-            # Cosmos DB SQL requires literal integers for OFFSET/LIMIT (no parameters)
-            query += f" ORDER BY c.created_at DESC OFFSET 0 LIMIT {int(limit)}"
-
-            cosmos_items = await store.list(query=query, parameters=params or None)
+                params["scenario"] = scenario
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{_GQ_BASE}/query/sessions", params=params,
+                )
+                resp.raise_for_status()
+            cosmos_items = resp.json().get("sessions", [])
             for item in cosmos_items:
                 if item.get("id") not in mem_ids:
                     mem_sessions.append({
@@ -217,6 +218,10 @@ class SessionManager:
         if hasattr(session, '_idle_task') and session._idle_task:
             session._idle_task.cancel()
 
+        # Reset cancel flag from any prior turn so the new run isn't
+        # immediately aborted.
+        session._cancel_event.clear()
+
         session.status = SessionStatus.IN_PROGRESS
         session.error_detail = ""  # Reset per-turn error
 
@@ -259,15 +264,14 @@ class SessionManager:
         asyncio.create_task(_run())
 
     async def _persist_to_cosmos(self, session: Session):
-        """Persist a finalized session to Cosmos DB."""
+        """Persist a finalized session to Cosmos DB via graph-query-api."""
         try:
-            # Uses the same DocumentStore as router_interactions
-            from stores import get_document_store
-            store = get_document_store(
-                "interactions", "interactions", "/scenario",
-                ensure_created=True,
-            )
-            await store.upsert(session.to_dict())
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.put(
+                    f"{_GQ_BASE}/query/sessions",
+                    json=session.to_dict(),
+                )
+                resp.raise_for_status()
             logger.info("Persisted session %s to Cosmos", session.id)
         except Exception:
             logger.exception("Failed to persist session %s", session.id)

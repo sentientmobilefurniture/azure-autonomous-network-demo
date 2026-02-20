@@ -97,13 +97,14 @@ interface SessionSidebarProps {
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onNewSession: () => void;
+  onRefresh: () => void;
   activeSessionId: string | null;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }
 
 export function SessionSidebar({
-  sessions, loading, onSelect, onDelete, onNewSession,
+  sessions, loading, onSelect, onDelete, onNewSession, onRefresh,
   activeSessionId, collapsed, onToggleCollapse,
 }: SessionSidebarProps) {
   const [filter, setFilter] = useState('');
@@ -123,13 +124,24 @@ export function SessionSidebar({
             Sessions
           </span>
         )}
-        <button
-          onClick={onToggleCollapse}
-          className="text-text-muted hover:text-text-primary text-xs transition-colors"
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? '◀' : '▶'}
-        </button>
+        <div className="flex items-center gap-1">
+          {!collapsed && (
+            <button
+              onClick={onRefresh}
+              className="text-text-muted hover:text-brand text-xs transition-colors p-0.5"
+              title="Refresh sessions"
+            >
+              ↻
+            </button>
+          )}
+          <button
+            onClick={onToggleCollapse}
+            className="text-text-muted hover:text-text-primary text-xs transition-colors"
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? '◀' : '▶'}
+          </button>
+        </div>
       </div>
 
       {/* Search filter */}
