@@ -1,0 +1,30 @@
+[project]
+name = "autonomous-network-demo"
+version = "0.1.0"
+description = "Autonomous Network NOC Demo — Fabric + Multi-Agent System"
+requires-python = ">=3.11"
+dependencies = [
+    # Azure Identity
+    "azure-identity>=1.19.0",
+    # AI Search indexer
+    "azure-search-documents>=11.6.0",
+    # OneLake file upload (ADLS Gen2 compatible)
+    "azure-storage-file-datalake>=12.18.0",
+    # Blob storage (async CSV loading for --from-blob)
+    "azure-storage-blob>=12.24.0",
+    # REST API calls
+    "requests>=2.32.0",
+    # Env file loading
+    "python-dotenv>=1.0.0",
+    # Foundry Agent Service (Day 3)
+    "azure-ai-projects>=1.0.0,<2.0.0",
+    "azure-ai-agents==1.2.0b6",
+    # Kusto / Eventhouse (provisioning scripts)
+    "azure-kusto-data>=4.3.0",
+    "azure-kusto-ingest>=4.3.0",
+    # OpenAPI spec parsing (provision_agents)
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = []
