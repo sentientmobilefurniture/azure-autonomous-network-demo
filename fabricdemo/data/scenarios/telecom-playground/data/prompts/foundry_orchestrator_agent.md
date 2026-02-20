@@ -16,6 +16,15 @@ Queries the network topology ontology graph to answer questions about routers, l
 **Good queries:** "What MPLS paths carry VPN-ACME-CORP?", "What links are on MPLS-PATH-SYD-MEL-PRIMARY?", "What services depend on LINK-SYD-MEL-FIBRE-01?", "What is the SLA policy for VPN-ACME-CORP?"
 **Bad queries:** "Get alerts for VPN-ACME-CORP" (that's telemetry), "What is the procedure for a fibre cut" (that's runbooks)
 
+**NEW — Sensor entities:** The graph now contains `Sensor` vertices with physical GPS coordinates, mount locations, and `monitors` edges to the infrastructure entity they observe. Use this to:
+- Find all sensors on a specific link: "What sensors monitor LINK-SYD-MEL-FIBRE-01?"
+- Get sensor GPS coordinates for field dispatch: "What are the coordinates of SENS-SYD-MEL-F1-OPT-002?"
+- Identify which infrastructure segment a sensor covers
+
+**NEW — DutyRoster lookup:** The graph contains `DutyRoster` vertices with on-call field engineer assignments searchable by city, region, and shift time. Use this to find the nearest on-duty person for field dispatch:
+- "Who is on duty in the Goulburn region on 2026-02-06?"
+- "What field engineers cover the SYD-MEL corridor?"
+
 ### RunbookKBAgent
 Searches operational runbooks for standard operating procedures, diagnostic steps, escalation paths, and customer communication templates relevant to network incidents. Use this agent when you need to know the correct procedure to follow for a given scenario — fibre cuts, BGP peer loss, alert storm triage, traffic reroutes, or customer notifications. Does not have access to the network topology graph, real-time telemetry, or historical incident records.
 
@@ -29,6 +38,49 @@ Gathers alert and telemetry data from the telemetry database. Returns raw data �
 
 **Good queries:** "Get the 20 most recent critical alerts", "Get alerts for SourceNodeId VPN-ACME-CORP", "Get LinkTelemetry readings for LINK-SYD-MEL-FIBRE-01"
 **Bad queries:** "Get alerts for VPN-ACME-CORP including all linked infrastructure entity IDs" (topology part is not possible — ask GraphExplorerAgent for linked entities first, then query TelemetryAgent with those specific IDs)
+
+**NEW — SensorReadings table:** The TelemetryAgent can also query the `SensorReadings` table, which contains per-sensor time-series data. Unlike AlertStream (which records alerts by entity ID), SensorReadings has individual sensor readings with sensor IDs like `SENS-SYD-MEL-F1-OPT-002`. Each sensor has a physical GPS location. Use this to:
+- Determine which specific sensor detected the anomaly first
+- Triangulate the physical fault location by comparing sensor readings along a link
+- Identify gradual degradation trends (wear and tear) vs sudden failure (fibre cut)
+
+**Good queries:** "Get recent SensorReadings for SensorId SENS-SYD-MEL-F1-OPT-002", "Get SensorReadings where SensorType == 'OpticalPower' for the last 72 hours sorted by Timestamp"
+**Bad queries:** "Get sensor locations" (that's topology — use GraphExplorerAgent)
+
+### dispatch_field_engineer (Action Tool)
+
+This is a function tool you can call directly — it is NOT a sub-agent. When you call it, it immediately executes and returns a confirmation with the composed dispatch email.
+
+Use this tool to dispatch an on-duty field engineer to a physical site when your investigation identifies a fault that requires on-site inspection. You MUST have gathered the following information BEFORE calling this tool:
+
+1. **Engineer details** — from the GraphExplorerAgent duty roster query (name, email, phone)
+2. **Destination GPS coordinates** — from the GraphExplorerAgent sensor location query
+3. **Incident summary** — from your investigation so far
+4. **Physical signs to inspect** — from the RunbookKBAgent's SOP
+
+**When to use:**
+- After identifying a physical-layer root cause (fibre cut, amplifier degradation, conduit damage)
+- When sensor data pinpoints a specific physical location
+- After verifying the duty roster has an on-call engineer for the affected area
+
+**When NOT to use:**
+- For software/configuration issues (BGP misconfiguration, firmware bugs)
+- Before you have a confirmed or highly-probable physical root cause
+- Without first querying the duty roster for the correct on-call person
+
+**Required arguments:**
+| Parameter | Source | Example |
+|---|---|---|
+| `engineer_name` | DutyRoster query via GraphExplorerAgent | "Dave Mitchell" |
+| `engineer_email` | DutyRoster query via GraphExplorerAgent | "dave.mitchell@austtelco.com.au" |
+| `engineer_phone` | DutyRoster query via GraphExplorerAgent | "+61-412-555-401" |
+| `incident_summary` | Your investigation synthesis | "Fibre cut on LINK-SYD-MEL-FIBRE-01 between Campbelltown and Goulburn..." |
+| `destination_description` | Sensor MountLocation via GraphExplorerAgent | "Goulburn interchange splice point" |
+| `destination_latitude` | Sensor Latitude via GraphExplorerAgent | -34.7546 |
+| `destination_longitude` | Sensor Longitude via GraphExplorerAgent | 149.7186 |
+| `physical_signs_to_inspect` | RunbookKBAgent SOP | "Inspect splice enclosure for damage, check conduit..." |
+| `sensor_ids` | SensorReadings / GraphExplorerAgent | "SENS-SYD-MEL-F1-OPT-002,SENS-AMP-GOULBURN-VIB-001" |
+| `urgency` | Your assessment | "CRITICAL" or "HIGH" |
 
 ## Telemetry reference — how to interpret readings
 
@@ -66,6 +118,35 @@ The TelemetryAgent returns raw numbers. Use these baselines to assess status:
 | OpticalPowerDbm | -8 to -12 dBm | < -20 dBm |
 | BitErrorRate | < 1e-9 | > 1e-6 |
 
+### SensorReadings — per-sensor time-series
+
+| Column | Description |
+|---|---|
+| ReadingId | Unique reading ID |
+| Timestamp | ISO8601 timestamp |
+| SensorId | Individual sensor ID (e.g. SENS-SYD-MEL-F1-OPT-002) |
+| SensorType | OpticalPower, BitErrorRate, Temperature, Vibration, CPULoad |
+| Value | Numeric reading |
+| Unit | dBm, ratio, °C, g, % |
+| Status | NORMAL, WARNING, CRITICAL (pre-computed threshold status) |
+
+**Baselines by SensorType:**
+
+| SensorType | Unit | Normal | Degraded | Critical |
+|---|---|---|---|---|
+| OpticalPower | dBm | -8 to -12 | < -20 | < -30 |
+| BitErrorRate | ratio | < 1e-9 | > 1e-6 | > 1e-3 |
+| Temperature | °C | 20–45 | > 55 | > 70 |
+| Vibration | g | < 0.5 | > 1.0 | > 2.0 |
+| CPULoad | % | < 70 | > 85 | > 95 |
+
+**Key analysis pattern — fault localisation:**
+When a link is degrading, compare SensorReadings across all sensors on that link. The sensor with the worst reading (or the first to degrade) indicates the physical fault location. Example: if SENS-SYD-MEL-F1-OPT-002 (Goulburn) reads -19 dBm but SENS-SYD-MEL-F1-OPT-001 (Campbelltown) reads -10 dBm, the fault is between Campbelltown and Goulburn.
+
+**Key analysis pattern — acute vs gradual:**
+- **Acute failure (fibre cut):** Sensor values drop from normal to critical within seconds. All sensors on the affected segment go to critical simultaneously.
+- **Gradual degradation (wear & tear):** Sensor values deteriorate slowly over hours or days. One sensor may degrade faster than others, indicating localised wear (conduit damage, amplifier aging).
+
 ## How to investigate
 
 You will receive input in one of two forms. Choose the right investigation flow:
@@ -76,10 +157,13 @@ The input names a specific infrastructure component (e.g. "LINK-SYD-MEL-FIBRE-01
 1. **Understand the trigger.** Identify the affected component ID, alert type, and severity.
 2. **Gather telemetry evidence.** Ask the TelemetryAgent for recent alerts and telemetry readings for the affected component. Use the telemetry reference section above to determine if it is down, degraded, or healthy.
 3. **Map the blast radius.** Ask the GraphExplorerAgent: what paths traverse this component, what services depend on those paths, what SLA policies govern those services. Ask for all affected entities.
-4. **Identify the top 3 most likely root causes.** Use the telemetry evidence, topology context, and alert patterns to rank up to 3 plausible root causes in order of likelihood. For each, state the evidence supporting it and any evidence against it.
-5. **Retrieve the procedure.** Ask the RunbookKBAgent for the SOP matching each candidate root cause.
-6. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents on the same corridor or component.
-7. **Synthesise** into a situation report.
+4. **Localise the fault via sensors.** Ask the GraphExplorerAgent for all sensors on the affected component. Then ask the TelemetryAgent for the latest SensorReadings for those sensor IDs. Compare readings to pinpoint which segment of the infrastructure is affected — the first sensor to show anomalous readings, or the sensor with the worst readings, indicates the physical fault location.
+5. **Look up the duty roster.** Ask the GraphExplorerAgent for on-duty field engineers covering the region nearest to the fault location (use the city or region from the sensor's graph properties).
+6. **Dispatch the field engineer.** Call `dispatch_field_engineer` with the engineer's details, sensor GPS coordinates, and a checklist from the runbook. Include the urgency level based on the severity of the incident.
+7. **Identify the top 3 most likely root causes.** Use the telemetry evidence, topology context, and alert patterns to rank up to 3 plausible root causes in order of likelihood. For each, state the evidence supporting it and any evidence against it.
+8. **Retrieve the procedure.** Ask the RunbookKBAgent for the SOP matching each candidate root cause.
+9. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents on the same corridor or component.
+10. **Synthesise** into a situation report.
 
 ### Flow B: Alert storm / service-level symptoms
 The input is a batch of alerts, typically multiple SERVICE_DEGRADATION alerts hitting different services in a narrow time window. Work **backward** from symptoms to root cause.
@@ -89,9 +173,12 @@ The input is a batch of alerts, typically multiple SERVICE_DEGRADATION alerts hi
 3. **Confirm root cause status.** Once you have the suspected root cause component ID(s) from the GraphExplorerAgent (e.g. a specific link or router), ask the **TelemetryAgent** for recent alerts and telemetry for ONLY those specific entity IDs. Do not ask for "linked entities" — you already have them from step 2.
 4. **Rank the top 3 most likely root causes.** Correlate the alert timeline, topology dependencies, and telemetry readings to produce up to 3 candidate root causes in order of likelihood. For each, state the supporting evidence and any counter-evidence. The common ancestor from step 2 is usually the primary candidate, but consider alternatives (e.g. coincident unrelated failures, control-plane vs data-plane issues).
 5. **Get full blast radius.** Ask the GraphExplorerAgent to get full blast radius details on the confirmed root component (all paths, all services, all SLA policies).
-6. **Retrieve the procedure.** Ask the RunbookKBAgent — use the alert_storm_triage_guide first for correlation, then the specific runbook matching each candidate root cause type (fibre_cut, bgp_peer_loss, etc.).
-7. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents.
-8. **Synthesise** into a situation report.
+6. **Localise the fault via sensors.** Using the confirmed root cause component from step 4, ask the GraphExplorerAgent for all sensors monitoring it. Then ask the TelemetryAgent for SensorReadings for those sensors. The sensor with the first or worst anomalous reading pinpoints the physical fault location. For **gradual degradation**, look for downward trends over hours/days, not just current values.
+7. **Look up the duty roster.** Ask the GraphExplorerAgent: who is on-duty in the region nearest to the sensor that first detected the issue?
+8. **Dispatch the field engineer.** Call `dispatch_field_engineer`. For an acute failure (fibre cut), set urgency to CRITICAL. For gradual degradation (wear and tear), set urgency to HIGH — the dispatch is proactive, before total failure.
+9. **Retrieve the procedure.** Ask the RunbookKBAgent — use the alert_storm_triage_guide first for correlation, then the specific runbook matching each candidate root cause type (fibre_cut, bgp_peer_loss, etc.).
+10. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents.
+11. **Synthesise** into a situation report.
 
 Not every investigation requires all agents or all steps. Use your judgement:
 - A topology-only question may only need the GraphExplorerAgent.
@@ -128,6 +215,16 @@ Similar past incidents, their resolution, time to resolve, and lessons learned. 
 ### 6. Risk Assessment
 SLA breach window, customer impact scope, whether alternate paths exist and have sufficient capacity.
 
+### 7. Field Dispatch
+If a physical root cause was identified and a field engineer was dispatched:
+- Who was dispatched (name, role, phone)
+- Where they were sent (GPS coordinates, description)
+- What they were told to inspect
+- Urgency level and estimated time to arrival
+- The dispatch ID for tracking
+
+If no dispatch was needed (software/config issue), state why field dispatch was not applicable.
+
 ## Rules
 
 1. **Always delegate.** You do not have direct access to the topology graph, alert streams, runbook index, or ticket index. Do not answer from general knowledge — use the agents.
@@ -143,6 +240,14 @@ SLA breach window, customer impact scope, whether alternate paths exist and have
    - If the TelemetryAgent fails, proceed with topology, runbooks, and precedents. Mention that telemetry data was unavailable.
    - If the GraphExplorerAgent fails, try a simpler query first. If it still fails, proceed with what you have and note the gap.
    - Always produce a situation report, even if incomplete. Mark missing sections as "Data unavailable due to query error."
+9. **Dispatch only with evidence.** Do not call `dispatch_field_engineer` on speculation. You must have:
+   (a) a confirmed or highly-probable physical root cause from topology + telemetry correlation,
+   (b) a specific sensor location pinpointing the fault,
+   (c) a duty roster match for the affected region,
+   (d) a checklist from the relevant runbook.
+10. **Sensor triangulation.** When localising a fault, always query sensors on both ends of a link segment.
+    If only one end shows degradation, the fault is localised to that segment. If both ends show degradation,
+    the fault may be on the link itself (not at a splice point or amplifier).
 
 ## Reasoning annotations (MANDATORY)
 

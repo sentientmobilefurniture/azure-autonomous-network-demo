@@ -31,13 +31,19 @@ vertices:
     csv_file: DimCoreRouter.csv
     id_column: RouterId
     partition_key: router
-    properties: [RouterId, City, Region, Vendor, Model, FirmwareVersion]
+    properties: [RouterId, City, Region, Vendor, Model, FirmwareVersion, Latitude, Longitude]
+    property_types:
+      Latitude: Double
+      Longitude: Double
 
   - label: AggSwitch
     csv_file: DimAggSwitch.csv
     id_column: SwitchId
     partition_key: switch
-    properties: [SwitchId, City, UplinkRouterId]
+    properties: [SwitchId, City, UplinkRouterId, Latitude, Longitude]
+    property_types:
+      Latitude: Double
+      Longitude: Double
 
   - label: BaseStation
     csv_file: DimBaseStation.csv
@@ -97,7 +103,25 @@ vertices:
     csv_file: DimAmplifierSite.csv
     id_column: SiteId
     partition_key: amplifier
-    properties: [SiteId, Location, InstalledYear, LastCalibration]
+    properties: [SiteId, Location, InstalledYear, LastCalibration, Latitude, Longitude]
+    property_types:
+      Latitude: Double
+      Longitude: Double
+
+  - label: Sensor
+    csv_file: DimSensor.csv
+    id_column: SensorId
+    partition_key: sensor
+    properties: [SensorId, SensorType, MonitoredEntityId, MonitoredEntityType, MountLocation, Latitude, Longitude, InstalledDate, Status]
+    property_types:
+      Latitude: Double
+      Longitude: Double
+
+  - label: DutyRoster
+    csv_file: DimDutyRoster.csv
+    id_column: RosterId
+    partition_key: dutyroster
+    properties: [RosterId, PersonName, Email, Phone, City, Region, ShiftStart, ShiftEnd, Role, HomeBase, VehicleId]
 
   - label: Advisory
     csv_file: DimAdvisory.csv
@@ -341,3 +365,48 @@ edges:
     properties:
       - name: MatchReason
         column: MatchReason
+
+  # Sensor monitors TransportLink
+  - label: monitors
+    csv_file: DimSensor.csv
+    filter:
+      column: MonitoredEntityType
+      value: TransportLink
+    source:
+      label: Sensor
+      property: SensorId
+      column: SensorId
+    target:
+      label: TransportLink
+      property: LinkId
+      column: MonitoredEntityId
+
+  # Sensor monitors CoreRouter
+  - label: monitors
+    csv_file: DimSensor.csv
+    filter:
+      column: MonitoredEntityType
+      value: CoreRouter
+    source:
+      label: Sensor
+      property: SensorId
+      column: SensorId
+    target:
+      label: CoreRouter
+      property: RouterId
+      column: MonitoredEntityId
+
+  # Sensor monitors AmplifierSite
+  - label: monitors
+    csv_file: DimSensor.csv
+    filter:
+      column: MonitoredEntityType
+      value: AmplifierSite
+    source:
+      label: Sensor
+      property: SensorId
+      column: SensorId
+    target:
+      label: AmplifierSite
+      property: SiteId
+      column: MonitoredEntityId

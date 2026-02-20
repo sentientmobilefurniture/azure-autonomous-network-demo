@@ -25,6 +25,8 @@ from azure.ai.agents.models import (
     ConnectedAgentTool,
     OpenApiTool,
     OpenApiAnonymousAuthDetails,
+    FunctionToolDefinition,
+    FunctionDefinition,
 )
 
 logger = logging.getLogger("agent-provisioner")
@@ -327,11 +329,83 @@ class AgentProvisioner:
             )
             connected_tools.extend(ct.definitions)
 
+        # FunctionTool definition for dispatch_field_engineer.
+        # Uses FunctionToolDefinition with a raw JSON schema — no Python
+        # callable needed at provisioning time.  The actual callable is
+        # loaded at runtime in orchestrator.py via enable_auto_function_calls.
+        dispatch_tool_def = FunctionToolDefinition(
+            function=FunctionDefinition(
+                name="dispatch_field_engineer",
+                description=(
+                    "Dispatch a field engineer to a physical site to investigate a "
+                    "network incident. Composes a dispatch notification with incident "
+                    "details, exact GPS coordinates, and inspection checklist. Call "
+                    "this after identifying a physical root cause, locating the fault "
+                    "via sensors, and finding the nearest on-duty engineer from the "
+                    "duty roster."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "engineer_name": {
+                            "type": "string",
+                            "description": "Full name from duty roster",
+                        },
+                        "engineer_email": {
+                            "type": "string",
+                            "description": "Email address from duty roster",
+                        },
+                        "engineer_phone": {
+                            "type": "string",
+                            "description": "Phone number from duty roster",
+                        },
+                        "incident_summary": {
+                            "type": "string",
+                            "description": "Brief incident summary",
+                        },
+                        "destination_description": {
+                            "type": "string",
+                            "description": "Human-readable location description",
+                        },
+                        "destination_latitude": {
+                            "type": "number",
+                            "description": "GPS latitude (WGS84)",
+                        },
+                        "destination_longitude": {
+                            "type": "number",
+                            "description": "GPS longitude (WGS84)",
+                        },
+                        "physical_signs_to_inspect": {
+                            "type": "string",
+                            "description": "Inspection checklist for what to look for on arrival",
+                        },
+                        "sensor_ids": {
+                            "type": "string",
+                            "description": "Comma-separated triggering sensor IDs",
+                        },
+                        "urgency": {
+                            "type": "string",
+                            "enum": ["CRITICAL", "HIGH", "STANDARD"],
+                            "description": "Urgency level",
+                        },
+                    },
+                    "required": [
+                        "engineer_name", "engineer_email", "engineer_phone",
+                        "incident_summary", "destination_description",
+                        "destination_latitude", "destination_longitude",
+                        "physical_signs_to_inspect", "sensor_ids",
+                    ],
+                },
+            )
+        )
+
+        all_tools = connected_tools + [dispatch_tool_def]
+
         orch = agents_client.create_agent(
             model=model,
             name="Orchestrator",
             instructions=prompts.get("orchestrator", "You are an orchestrator agent."),
-            tools=connected_tools,
+            tools=all_tools,
         )
         emit("orchestrator", f"Created: {orch.id}")
 

@@ -14,14 +14,16 @@ Backbone routers at city level. Each city has one core router.
 | Vendor | String | Equipment manufacturer. | `Cisco` |
 | Model | String | Hardware model. | `ASR-9922` |
 | FirmwareVersion | String | Currently running firmware version. Used for Advisory correlation. | `IOS-XR-7.9.2` |
+| Latitude | Double | GPS latitude (WGS84). | `-33.8688` |
+| Longitude | Double | GPS longitude (WGS84). | `151.2093` |
 
 **All instances:**
 
-| RouterId | City | Region | Vendor | Model | FirmwareVersion |
-|---|---|---|---|---|---|
-| CORE-SYD-01 | Sydney | NSW | Cisco | ASR-9922 | IOS-XR-7.9.2 |
-| CORE-MEL-01 | Melbourne | VIC | Cisco | ASR-9922 | IOS-XR-7.9.2 |
-| CORE-BNE-01 | Brisbane | QLD | Juniper | MX10008 | JUNOS-23.4R1 |
+| RouterId | City | Region | Vendor | Model | FirmwareVersion | Latitude | Longitude |
+|---|---|---|---|---|---|---|---|
+| CORE-SYD-01 | Sydney | NSW | Cisco | ASR-9922 | IOS-XR-7.9.2 | -33.8688 | 151.2093 |
+| CORE-MEL-01 | Melbourne | VIC | Cisco | ASR-9922 | IOS-XR-7.9.2 | -37.8136 | 144.9631 |
+| CORE-BNE-01 | Brisbane | QLD | Juniper | MX10008 | JUNOS-23.4R1 | -27.4698 | 153.0251 |
 
 ---
 
@@ -59,17 +61,19 @@ Aggregation switches between core routers and base stations. Two per city.
 | **SwitchId** | String | **Primary key.** | `AGG-SYD-NORTH-01` |
 | City | String | City. | `Sydney` |
 | UplinkRouterId | String | Upstream core router (FK → CoreRouter.RouterId). | `CORE-SYD-01` |
+| Latitude | Double | GPS latitude (WGS84). | `-33.7960` |
+| Longitude | Double | GPS longitude (WGS84). | `151.1840` |
 
 **All instances:**
 
-| SwitchId | City | UplinkRouterId |
-|---|---|---|
-| AGG-SYD-NORTH-01 | Sydney | CORE-SYD-01 |
-| AGG-SYD-SOUTH-01 | Sydney | CORE-SYD-01 |
-| AGG-MEL-EAST-01 | Melbourne | CORE-MEL-01 |
-| AGG-MEL-WEST-01 | Melbourne | CORE-MEL-01 |
-| AGG-BNE-CENTRAL-01 | Brisbane | CORE-BNE-01 |
-| AGG-BNE-SOUTH-01 | Brisbane | CORE-BNE-01 |
+| SwitchId | City | UplinkRouterId | Latitude | Longitude |
+|---|---|---|---|---|
+| AGG-SYD-NORTH-01 | Sydney | CORE-SYD-01 | -33.7960 | 151.1840 |
+| AGG-SYD-SOUTH-01 | Sydney | CORE-SYD-01 | -33.9410 | 151.1730 |
+| AGG-MEL-EAST-01 | Melbourne | CORE-MEL-01 | -37.8200 | 145.0650 |
+| AGG-MEL-WEST-01 | Melbourne | CORE-MEL-01 | -37.8100 | 144.8850 |
+| AGG-BNE-CENTRAL-01 | Brisbane | CORE-BNE-01 | -27.4700 | 153.0230 |
+| AGG-BNE-SOUTH-01 | Brisbane | CORE-BNE-01 | -27.5540 | 153.0480 |
 
 ---
 
@@ -229,15 +233,17 @@ Optical amplifier sites along long-haul fibre routes. Amplifiers boost optical s
 | Location | String | Physical location description. | `Goulburn NSW — 195km from Sydney` |
 | InstalledYear | Integer | Year the amplifier was installed. | `2018` |
 | LastCalibration | Date | Date of last calibration. | `2025-09-15` |
+| Latitude | Double | GPS latitude (WGS84). | `-34.7546` |
+| Longitude | Double | GPS longitude (WGS84). | `149.7186` |
 
 **All instances:**
 
-| SiteId | Location | InstalledYear | LastCalibration |
-|---|---|---|---|
-| AMP-SYD-MEL-GOULBURN | Goulburn NSW — 195km from Sydney | 2018 | 2025-09-15 |
-| AMP-SYD-MEL-ALBURY | Albury NSW — 460km from Sydney | 2018 | 2025-06-20 |
-| AMP-SYD-BNE-COFFS | Coffs Harbour NSW — 540km from Sydney | 2019 | 2025-11-01 |
-| AMP-MEL-BNE-GRAFTON | Grafton NSW — 340km from Melbourne | 2020 | 2025-03-10 |
+| SiteId | Location | InstalledYear | LastCalibration | Latitude | Longitude |
+|---|---|---|---|---|---|
+| AMP-SYD-MEL-GOULBURN | Goulburn NSW — 195km from Sydney | 2018 | 2025-09-15 | -34.7546 | 149.7186 |
+| AMP-SYD-MEL-ALBURY | Albury NSW — 460km from Sydney | 2018 | 2025-06-20 | -36.0737 | 146.9135 |
+| AMP-SYD-BNE-COFFS | Coffs Harbour NSW — 540km from Sydney | 2019 | 2025-11-01 | -30.2963 | 153.1157 |
+| AMP-MEL-BNE-GRAFTON | Grafton NSW — 340km from Melbourne | 2020 | 2025-03-10 | -29.6900 | 152.9330 |
 
 ---
 
@@ -264,6 +270,100 @@ Vendor security/bug advisories that affect specific firmware versions running on
 | ADV-JUNIPER-2025-001 | Juniper | HIGH | MPLS LDP session reset during ECMP rebalancing | CORE-BNE-01 (runs JUNOS-23.4R1) |
 
 <!-- Note: "Affected Routers" in the table above is derived from FactAdvisoryMapping joins, not a column in DimAdvisory.csv -->
+
+---
+
+### Sensor (18 instances)
+
+Physical sensors attached to infrastructure nodes. Each sensor has a specific type,
+monitors a specific entity, and has GPS coordinates for field dispatch.
+
+| Column | Type | Purpose | Example Value |
+|---|---|---|---|
+| **SensorId** | String | **Primary key.** | `SENS-SYD-MEL-F1-OPT-002` |
+| SensorType | String | Measurement type: `OpticalPower`, `BitErrorRate`, `Temperature`, `CPULoad`, `Vibration`. | `OpticalPower` |
+| MonitoredEntityId | String | FK to the infrastructure entity this sensor observes. | `LINK-SYD-MEL-FIBRE-01` |
+| MonitoredEntityType | String | Type of the monitored entity: `TransportLink`, `CoreRouter`, `AmplifierSite`. | `TransportLink` |
+| MountLocation | String | Human-readable where-to-find description. | `Splice point — Goulburn interchange` |
+| Latitude | Double | GPS latitude (WGS84). | `-34.7546` |
+| Longitude | Double | GPS longitude (WGS84). | `149.7186` |
+| InstalledDate | String | Installation date. | `2018-06-15` |
+| Status | String | `ACTIVE` or `INACTIVE`. | `ACTIVE` |
+
+**All instances:**
+
+| SensorId | SensorType | MonitoredEntityId | MonitoredEntityType | MountLocation | Lat/Long |
+|---|---|---|---|---|---|
+| SENS-SYD-MEL-F1-OPT-001 | OpticalPower | LINK-SYD-MEL-FIBRE-01 | TransportLink | Campbelltown splice | -34.065, 150.814 |
+| SENS-SYD-MEL-F1-OPT-002 | OpticalPower | LINK-SYD-MEL-FIBRE-01 | TransportLink | Goulburn interchange | -34.755, 149.719 |
+| SENS-SYD-MEL-F1-OPT-003 | OpticalPower | LINK-SYD-MEL-FIBRE-01 | TransportLink | North of Albury | -36.024, 146.912 |
+| SENS-SYD-MEL-F1-BER-001 | BitErrorRate | LINK-SYD-MEL-FIBRE-01 | TransportLink | SYD head-end CORE-SYD-01 rack B3 | -33.869, 151.209 |
+| SENS-SYD-MEL-F1-BER-002 | BitErrorRate | LINK-SYD-MEL-FIBRE-01 | TransportLink | MEL tail-end CORE-MEL-01 rack A7 | -37.814, 144.963 |
+| SENS-SYD-MEL-F2-OPT-001 | OpticalPower | LINK-SYD-MEL-FIBRE-02 | TransportLink | Campbelltown splice (FIBRE-02) | -34.065, 150.814 |
+| SENS-SYD-MEL-F2-OPT-002 | OpticalPower | LINK-SYD-MEL-FIBRE-02 | TransportLink | Goulburn interchange (shared conduit) | -34.755, 149.719 |
+| SENS-SYD-BNE-F1-OPT-001 | OpticalPower | LINK-SYD-BNE-FIBRE-01 | TransportLink | Gosford (80km N of Sydney) | -33.425, 151.342 |
+| SENS-SYD-BNE-F1-OPT-002 | OpticalPower | LINK-SYD-BNE-FIBRE-01 | TransportLink | Coffs Harbour (AMP-SYD-BNE-COFFS) | -30.296, 153.116 |
+| SENS-MEL-BNE-F1-OPT-001 | OpticalPower | LINK-MEL-BNE-FIBRE-01 | TransportLink | Sale (120km E of Melbourne) | -38.100, 147.068 |
+| SENS-MEL-BNE-F1-OPT-002 | OpticalPower | LINK-MEL-BNE-FIBRE-01 | TransportLink | Grafton (AMP-MEL-BNE-GRAFTON) | -29.690, 152.933 |
+| SENS-CORE-SYD-01-TEMP-001 | Temperature | CORE-SYD-01 | CoreRouter | Main chassis exhaust vent | -33.869, 151.209 |
+| SENS-CORE-SYD-01-CPU-001 | CPULoad | CORE-SYD-01 | CoreRouter | Control plane module | -33.869, 151.209 |
+| SENS-CORE-MEL-01-TEMP-001 | Temperature | CORE-MEL-01 | CoreRouter | Main chassis exhaust vent | -37.814, 144.963 |
+| SENS-CORE-MEL-01-CPU-001 | CPULoad | CORE-MEL-01 | CoreRouter | Control plane module | -37.814, 144.963 |
+| SENS-CORE-BNE-01-TEMP-001 | Temperature | CORE-BNE-01 | CoreRouter | Main chassis exhaust vent | -27.470, 153.025 |
+| SENS-AMP-GOULBURN-VIB-001 | Vibration | AMP-SYD-MEL-GOULBURN | AmplifierSite | Amplifier housing vibration monitor | -34.755, 149.719 |
+| SENS-AMP-ALBURY-VIB-001 | Vibration | AMP-SYD-MEL-ALBURY | AmplifierSite | Amplifier housing vibration monitor | -36.074, 146.914 |
+
+### Relationships
+- `(Sensor)-[monitors]->(TransportLink|CoreRouter|AmplifierSite)` — which infrastructure this sensor observes
+
+### Key query patterns
+- "What sensors are on LINK-SYD-MEL-FIBRE-01?" → find all Sensor nodes with `monitors` edge to that link
+- "Where is sensor SENS-SYD-MEL-F1-OPT-002 located?" → return Latitude, Longitude, MountLocation
+- "What sensors are near Goulburn?" → filter by Latitude/Longitude proximity or MountLocation text
+
+---
+
+### DutyRoster (8 instances)
+
+On-call field engineer assignments. Searchable by city/region and shift time (ShiftStart/ShiftEnd).
+DutyRoster is a disconnected entity — no edges to other entities. It is a lookup table for field dispatch.
+
+| Column | Type | Purpose | Example Value |
+|---|---|---|---|
+| **RosterId** | String | **Primary key.** | `DUTY-SYD-2026-02-06-DAY` |
+| PersonName | String | Full name of the engineer. | `Marcus Chen` |
+| Email | String | Email address. | `marcus.chen@austtelco.com.au` |
+| Phone | String | Phone number. | `+61-412-555-101` |
+| City | String | Assignment city. | `Sydney` |
+| Region | String | State/region. | `NSW` |
+| ShiftStart | String | ISO8601 shift start time. | `2026-02-06T06:00:00Z` |
+| ShiftEnd | String | ISO8601 shift end time. | `2026-02-06T18:00:00Z` |
+| Role | String | `FieldEngineer` (city) or `RegionalFieldEngineer` (inter-city corridors). | `FieldEngineer` |
+| HomeBase | String | Depot location with lat/long. | `Campbelltown Depot -34.0650 150.8140` |
+| VehicleId | String | Assigned vehicle ID. | `VEH-SYD-03` |
+
+**All instances:**
+
+| RosterId | PersonName | City | Region | Role | ShiftStart | ShiftEnd |
+|---|---|---|---|---|---|---|
+| DUTY-SYD-2026-02-06-DAY | Marcus Chen | Sydney | NSW | FieldEngineer | 06:00 | 18:00 |
+| DUTY-SYD-2026-02-06-NIGHT | Sarah O'Brien | Sydney | NSW | FieldEngineer | 18:00 | 06:00+1 |
+| DUTY-MEL-2026-02-06-DAY | James Nguyen | Melbourne | VIC | FieldEngineer | 06:00 | 18:00 |
+| DUTY-MEL-2026-02-06-NIGHT | Priya Sharma | Melbourne | VIC | FieldEngineer | 18:00 | 06:00+1 |
+| DUTY-BNE-2026-02-06-DAY | Tom Williams | Brisbane | QLD | FieldEngineer | 06:00 | 18:00 |
+| DUTY-REGIONAL-SYD-MEL-2026-02-06 | Dave Mitchell | Goulburn | NSW | RegionalFieldEngineer | 06:00 | 18:00 |
+| DUTY-REGIONAL-SYD-MEL-2026-02-06-SOUTH | Karen Lee | Albury | NSW | RegionalFieldEngineer | 06:00 | 18:00 |
+| DUTY-REGIONAL-SYD-BNE-2026-02-06 | Paul Jacobs | Coffs Harbour | NSW | RegionalFieldEngineer | 06:00 | 18:00 |
+
+### Properties
+- `Email`, `Phone` — contact details for dispatch
+- `HomeBase` — depot location with lat/long for proximity matching
+- `VehicleId` — assigned vehicle ID
+
+### Key query patterns
+- "Who is on duty in Goulburn region?" → filter by City or Region
+- "What field engineers cover the SYD-MEL corridor?" → filter by Role == RegionalFieldEngineer and Region == NSW
+- "Who is on duty at 14:31 on 2026-02-06?" → filter ShiftStart <= timestamp <= ShiftEnd
 
 ---
 
@@ -316,3 +416,7 @@ An optical amplifier site boosts the signal on a transport link. Long-haul links
 ### affects_version: Advisory → CoreRouter
 
 A vendor advisory affects a router running a vulnerable firmware version. Pre-mapped from Advisory.AffectedVersions matching CoreRouter.FirmwareVersion. Query pattern: "Are any of our routers running firmware affected by known advisories?" and "Could the OSPF flaps on CORE-SYD-01 be caused by a known bug?"
+
+### monitors: Sensor → TransportLink | CoreRouter | AmplifierSite
+
+A sensor physically monitors an infrastructure entity. The edge's target type depends on `MonitoredEntityType` in DimSensor.csv. Query pattern: "What sensors monitor LINK-SYD-MEL-FIBRE-01?" → find all Sensor nodes with `monitors` edge to that link. "Where is the closest sensor to the Goulburn amplifier?" → find Sensor nodes monitoring AMP-SYD-MEL-GOULBURN.

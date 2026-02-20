@@ -1,7 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTopology, TopologyNode, TopologyEdge } from '../hooks/useTopology';
 import { GraphCanvas, GraphCanvasHandle } from './graph/GraphCanvas';
+import { GraphHeaderBar } from './graph/GraphHeaderBar';
 import { GraphToolbar } from './graph/GraphToolbar';
+import { GraphEdgeToolbar } from './graph/GraphEdgeToolbar';
 import { GraphTooltip } from './graph/GraphTooltip';
 import { GraphContextMenu } from './graph/GraphContextMenu';
 import { usePausableSimulation } from '../hooks/usePausableSimulation';
@@ -37,6 +39,18 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
     setContextMenu({ x: event.clientX, y: event.clientY, node });
   }, []);
 
+  // ── Data version (bumped on fetch/refresh, not on filter toggles) ──
+
+  const [dataVersion, setDataVersion] = useState(0);
+  const prevNodeCountRef = useRef(data.nodes.length);
+  useEffect(() => {
+    // Only bump version when the raw (unfiltered) data actually changes
+    if (data.nodes.length !== prevNodeCountRef.current) {
+      prevNodeCountRef.current = data.nodes.length;
+      setDataVersion((v) => v + 1);
+    }
+  }, [data.nodes.length]);
+
   // ── User customization (persisted to localStorage) ──
 
   const [nodeDisplayField, setNodeDisplayField] = useState<Record<string, string>>(() => {
@@ -54,7 +68,32 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
 
   // Label filtering
   const [activeLabels, setActiveLabels] = useState<string[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+
+  // Bar visibility toggles
+  const [showNodeBar, setShowNodeBar] = useState(true);
+  const [showEdgeBar, setShowEdgeBar] = useState(true);
+
+  // Edge label filtering
+  const [activeEdgeLabels, setActiveEdgeLabels] = useState<string[]>([]);
+  const [edgeColorOverride, setEdgeColorOverride] = useState<Record<string, string>>(() => {
+    try {
+      const stored = localStorage.getItem(`graph-edge-colors:${storagePrefix}`);
+      return stored ? JSON.parse(stored) : {};
+    } catch { return {}; }
+  });
+
+  // Text style controls (persisted to localStorage)
+  const [labelStyle, setLabelStyle] = useState<{
+    nodeFontSize: number | null;
+    nodeColor: string | null;
+    edgeFontSize: number | null;
+    edgeColor: string | null;
+  }>(() => {
+    try {
+      const stored = localStorage.getItem(`graph-label-style:${storagePrefix}`);
+      return stored ? JSON.parse(stored) : { nodeFontSize: null, nodeColor: null, edgeFontSize: null, edgeColor: null };
+    } catch { return { nodeFontSize: null, nodeColor: null, edgeFontSize: null, edgeColor: null }; }
+  });
 
   // Persist customization
   useEffect(() => {
@@ -63,47 +102,98 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
   useEffect(() => {
     localStorage.setItem(`graph-colors:${storagePrefix}`, JSON.stringify(nodeColorOverride));
   }, [nodeColorOverride, storagePrefix]);
+  useEffect(() => {
+    localStorage.setItem(`graph-edge-colors:${storagePrefix}`, JSON.stringify(edgeColorOverride));
+  }, [edgeColorOverride, storagePrefix]);
+  useEffect(() => {
+    localStorage.setItem(`graph-label-style:${storagePrefix}`, JSON.stringify(labelStyle));
+  }, [labelStyle, storagePrefix]);
+
+  // ── Derived edge labels ──
+
+  const availableEdgeLabels = useMemo(
+    () => [...new Set(data.edges.map((e) => e.label))].sort(),
+    [data.edges],
+  );
 
   // ── Node/edge filtering ──
 
   const filteredNodes = data.nodes.filter((n) => {
     if (activeLabels.length > 0 && !activeLabels.includes(n.label)) return false;
-    if (searchQuery && !n.id.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
   const nodeIdSet = new Set(filteredNodes.map((n) => n.id));
   const filteredEdges = data.edges.filter((e) => {
     const srcId = typeof e.source === 'string' ? e.source : e.source.id;
     const tgtId = typeof e.target === 'string' ? e.target : e.target.id;
-    return nodeIdSet.has(srcId) && nodeIdSet.has(tgtId);
+    if (!nodeIdSet.has(srcId) || !nodeIdSet.has(tgtId)) return false;
+    // Edge label filter (empty = all shown)
+    if (activeEdgeLabels.length > 0 && !activeEdgeLabels.includes(e.label)) return false;
+    return true;
   });
 
-  // Reserve toolbar height
-  const TOOLBAR_HEIGHT = 36;
+  // Reserve toolbar height: header always shown + conditional node/edge bars
+  const BAR_HEIGHT = 36;
+  const TOOLBAR_HEIGHT = BAR_HEIGHT + (showNodeBar ? BAR_HEIGHT : 0) + (showEdgeBar ? BAR_HEIGHT : 0);
 
   return (
     <div className="glass-card h-full flex flex-col overflow-hidden">
-      <GraphToolbar
+      <GraphHeaderBar
         meta={data.meta}
         loading={loading}
-        availableLabels={data.meta?.labels ?? []}
-        activeLabels={activeLabels}
-        onToggleLabel={(l) =>
-          setActiveLabels((prev) =>
-            prev.includes(l) ? prev.filter((x) => x !== l) : [...prev, l]
-          )
-        }
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        onRefresh={() => { refetch(); resetPause(); }}
-        onZoomToFit={() => canvasRef.current?.zoomToFit()}
         isPaused={isPaused}
         onTogglePause={handleTogglePause}
-        nodeColorOverride={nodeColorOverride}
-        onSetColor={(label, color) =>
-          setNodeColorOverride((prev) => ({ ...prev, [label]: color }))
-        }
+        onZoomToFit={() => canvasRef.current?.zoomToFit()}
+        onRefresh={() => { refetch(); resetPause(); }}
+        showNodeBar={showNodeBar}
+        onToggleNodeBar={() => setShowNodeBar((v) => !v)}
+        showEdgeBar={showEdgeBar}
+        onToggleEdgeBar={() => setShowEdgeBar((v) => !v)}
       />
+
+      {showNodeBar && (
+        <GraphToolbar
+          availableLabels={data.meta?.labels ?? []}
+          activeLabels={activeLabels}
+          onToggleLabel={(l) =>
+            setActiveLabels((prev) =>
+              prev.includes(l) ? prev.filter((x) => x !== l) : [...prev, l]
+            )
+          }
+          visibleNodeCount={filteredNodes.length}
+          totalNodeCount={data.nodes.length}
+          nodeColorOverride={nodeColorOverride}
+          onSetColor={(label, color) =>
+            setNodeColorOverride((prev) => ({ ...prev, [label]: color }))
+          }
+          nodeLabelFontSize={labelStyle.nodeFontSize}
+          onNodeLabelFontSizeChange={(s) => setLabelStyle((prev) => ({ ...prev, nodeFontSize: s }))}
+          nodeLabelColor={labelStyle.nodeColor}
+          onNodeLabelColorChange={(c) => setLabelStyle((prev) => ({ ...prev, nodeColor: c }))}
+        />
+      )}
+
+      {showEdgeBar && (
+        <GraphEdgeToolbar
+          availableEdgeLabels={availableEdgeLabels}
+          activeEdgeLabels={activeEdgeLabels}
+          onToggleEdgeLabel={(l) =>
+            setActiveEdgeLabels((prev) =>
+              prev.includes(l) ? prev.filter((x) => x !== l) : [...prev, l]
+            )
+          }
+          visibleEdgeCount={filteredEdges.length}
+          totalEdgeCount={data.edges.length}
+          edgeColorOverride={edgeColorOverride}
+          onSetEdgeColor={(label, color) =>
+            setEdgeColorOverride((prev) => ({ ...prev, [label]: color }))
+          }
+          edgeLabelFontSize={labelStyle.edgeFontSize}
+          onEdgeLabelFontSizeChange={(s) => setLabelStyle((prev) => ({ ...prev, edgeFontSize: s }))}
+          edgeLabelColor={labelStyle.edgeColor}
+          onEdgeLabelColorChange={(c) => setLabelStyle((prev) => ({ ...prev, edgeColor: c }))}
+        />
+      )}
 
       {error && (
         <div className="text-xs text-status-error px-3 py-1">{error}</div>
@@ -135,6 +225,11 @@ export function GraphTopologyViewer({ width, height }: GraphTopologyViewerProps)
           height={height - TOOLBAR_HEIGHT}
           nodeDisplayField={nodeDisplayField}
           nodeColorOverride={nodeColorOverride}
+          dataVersion={dataVersion}
+          nodeLabelFontSize={labelStyle.nodeFontSize}
+          nodeLabelColor={labelStyle.nodeColor}
+          edgeLabelFontSize={labelStyle.edgeFontSize}
+          edgeLabelColor={labelStyle.edgeColor}
           onNodeHover={handleNodeHover}
           onLinkHover={handleLinkHover}
           onNodeRightClick={handleNodeRightClick}

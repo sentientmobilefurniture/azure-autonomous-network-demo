@@ -19,6 +19,15 @@ interface GraphCanvasProps {
   height: number;
   nodeDisplayField: Record<string, string>;
   nodeColorOverride: Record<string, string>;
+  /** Bumped only on initial load / refresh — NOT on filter changes.
+   *  Auto-fit fires only when this value changes. */
+  dataVersion: number;
+  /** Node label overrides (null = auto / theme default) */
+  nodeLabelFontSize?: number | null;
+  nodeLabelColor?: string | null;
+  /** Edge label overrides (null = theme default) */
+  edgeLabelFontSize?: number | null;
+  edgeLabelColor?: string | null;
   onNodeHover: (node: TopologyNode | null) => void;
   onLinkHover: (edge: TopologyEdge | null) => void;
   onNodeRightClick: (node: TopologyNode, event: MouseEvent) => void;
@@ -30,7 +39,9 @@ interface GraphCanvasProps {
 export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
   function GraphCanvas(
     { nodes, edges, width, height,
-      nodeDisplayField, nodeColorOverride,
+      nodeDisplayField, nodeColorOverride, dataVersion,
+      nodeLabelFontSize, nodeLabelColor,
+      edgeLabelFontSize, edgeLabelColor,
       onNodeHover, onLinkHover, onNodeRightClick, onBackgroundClick,
       onMouseEnter, onMouseLeave },
     ref,
@@ -47,12 +58,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
       },
     }), []);
 
-    // Fit graph to view on data change
+    // Fit graph to view on data load / refresh (NOT on filter toggles)
     useEffect(() => {
       if (fgRef.current && nodes.length > 0) {
         setTimeout(() => fgRef.current?.zoomToFit(400, 40), 500);
       }
-    }, [nodes.length]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataVersion]);
 
     // Color resolver (centralized: override → scenario → constants → auto)
     const getNodeColor = useNodeColor(nodeColorOverride);
@@ -117,14 +129,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
           ? node.id
           : String(node.properties[displayField] ?? node.id);
 
-        const fontSize = Math.max(10 / globalScale, 3);
-        ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = textPrimary;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.fillText(label, node.x!, node.y! + size + 2);
+        const autoSize = Math.max(10 / globalScale, 3);
+        const fontSize = nodeLabelFontSize != null ? nodeLabelFontSize / globalScale : autoSize;
+        if (fontSize > 0) {
+          ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
+          ctx.fillStyle = nodeLabelColor ?? textPrimary;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(label, node.x!, node.y! + size + 2);
+        }
       },
-      [getNodeColor, getNodeSize, nodeDisplayField, themeColors],
+      [getNodeColor, getNodeSize, nodeDisplayField, themeColors, nodeLabelFontSize, nodeLabelColor],
     );
 
     // Edge label rendering
@@ -137,15 +152,18 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
 
         const midX = (src.x + tgt.x) / 2;
         const midY = (src.y! + tgt.y!) / 2;
-        const fontSize = Math.max(8 / globalScale, 2.5);
+        const autoSize = Math.max(8 / globalScale, 2.5);
+        const fontSize = edgeLabelFontSize != null ? edgeLabelFontSize / globalScale : autoSize;
 
-        ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
-        ctx.fillStyle = themeColors.textMuted;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(link.label, midX, midY);
+        if (fontSize > 0) {
+          ctx.font = `${fontSize}px 'Segoe UI', system-ui, sans-serif`;
+          ctx.fillStyle = edgeLabelColor ?? themeColors.textMuted;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(link.label, midX, midY);
+        }
       },
-      [themeColors],
+      [themeColors, edgeLabelFontSize, edgeLabelColor],
     );
 
     // Double-click handler: center + zoom to specific node

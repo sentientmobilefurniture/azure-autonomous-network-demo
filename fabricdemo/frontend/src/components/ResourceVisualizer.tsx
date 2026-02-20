@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { useResourceGraph } from '../hooks/useResourceGraph';
+import { useArchitectureGraph } from '../hooks/useArchitectureGraph';
 import { ResourceCanvas, ResourceCanvasHandle } from './resource/ResourceCanvas';
 import { ResourceToolbar } from './resource/ResourceToolbar';
 import { ResourceTooltip } from './resource/ResourceTooltip';
@@ -8,8 +8,8 @@ import { usePausableSimulation } from '../hooks/usePausableSimulation';
 import { useTooltipTracking } from '../hooks/useTooltipTracking';
 
 /**
- * ResourceVisualizer — full-page tab component showing the agent & data-source
- * flow graph for the active scenario.
+ * ResourceVisualizer — full-page tab component showing the complete service
+ * architecture graph loaded from a static data/architecture_graph.json file.
  *
  * Mirrors the layout/interaction patterns of GraphTopologyViewer but with
  * resource-specific node types, shapes, and a layered force layout.
@@ -17,7 +17,7 @@ import { useTooltipTracking } from '../hooks/useTooltipTracking';
 const INFRA_TYPES = new Set<ResourceNodeType>(['foundry', 'storage', 'search-service', 'container-app']);
 
 export function ResourceVisualizer() {
-  const { nodes, edges, loading, error } = useResourceGraph();
+  const { nodes, edges, loading, error } = useArchitectureGraph();
   const canvasRef = useRef<ResourceCanvasHandle>(null);
 
   // ── Container sizing (fill available space) ───────────────────────────

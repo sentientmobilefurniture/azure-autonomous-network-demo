@@ -3,6 +3,7 @@ import type { ChatMessage, ThinkingState } from '../types';
 import { UserMessage } from './UserMessage';
 import { OrchestratorThoughts } from './OrchestratorThoughts';
 import { StepCard } from './StepCard';
+import { ActionCard } from './ActionCard';
 import { DiagnosisBlock } from './DiagnosisBlock';
 import { ThinkingDots } from './ThinkingDots';
 
@@ -67,11 +68,15 @@ export function ChatPanel({
                       <div className="ml-4 h-1.5 border-l-2 border-brand/20" aria-hidden="true" />
                     </>
                   )}
-                  <StepCard
-                    step={s}
-                    expanded={expandedSteps[`${msg.id}-${s.step}`] ?? false}
-                    onToggle={() => toggleStep(msg.id, s.step)}
-                  />
+                  {/* Branch on is_action — ternary, not early return */}
+                  {s.is_action
+                    ? <ActionCard step={s} />
+                    : <StepCard
+                        step={s}
+                        expanded={expandedSteps[`${msg.id}-${s.step}`] ?? false}
+                        onToggle={() => toggleStep(msg.id, s.step)}
+                      />
+                  }
                 </div>
               ))}
 

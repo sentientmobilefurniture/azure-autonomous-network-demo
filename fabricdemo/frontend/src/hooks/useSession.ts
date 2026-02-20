@@ -39,6 +39,10 @@ export function useSession() {
           updated.errorMessage = data.message as string;
           updated.status = 'error';
           break;
+        case 'action_executed':
+          // action_executed is informational — the actual step data comes
+          // via step_complete with is_action:true. No additional state update needed.
+          break;
       }
       return updated;
     }));
@@ -65,6 +69,8 @@ export function useSession() {
             setThinking({ agent: data.agent ?? '', status: 'processing...' });
           } else if (ev.event === 'step_complete' || ev.event === 'message' || ev.event === 'run_complete') {
             setThinking(null);
+          } else if (ev.event === 'action_executed') {
+            setThinking(null);  // Clear thinking state — action executed
           }
           updateOrchestratorMessage(targetMsgId, ev.event, data);
         } catch (parseErr) {
@@ -216,6 +222,10 @@ export function useSession() {
         else if (evType === 'message') currentOrch.diagnosis = data.text;
         else if (evType === 'run_complete') currentOrch.runMeta = data;
         else if (evType === 'error') { currentOrch.errorMessage = data.message; currentOrch.status = 'error'; }
+        else if (evType === 'action_executed') {
+          // action_executed is supplementary — step_complete already carries the data
+          // No additional processing needed for replay
+        }
       }
     }
     if (currentOrch) msgs.push(currentOrch);

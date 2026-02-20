@@ -196,7 +196,7 @@ export function GraphResultView({ data }: GraphResultViewProps) {
             backgroundColor="transparent"
             width={containerRef.current?.clientWidth ?? 600}
             height={320}
-            cooldownTicks={80}
+            cooldownTicks={1}
           />
         </div>
       )}

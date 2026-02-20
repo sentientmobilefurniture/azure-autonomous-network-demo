@@ -1,19 +1,21 @@
 """
 Router: /api/config — runtime configuration and resource graph.
 
-GET  /api/config/current     — return current active configuration
-GET  /api/config/resources   — resource graph (agents, tools, data sources, infra)
-GET  /api/config/scenario    — active scenario metadata
+GET  /api/config/current        — return current active configuration
+GET  /api/config/resources      — resource graph (agents, tools, data sources, infra)
+GET  /api/config/architecture   — static architecture graph from file
+GET  /api/config/scenario       — active scenario metadata
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.paths import PROJECT_ROOT
 from app.agent_ids import load_agent_ids
@@ -301,6 +303,27 @@ def _infra_nodes_only() -> list[dict]:
 async def get_resource_graph():
     """Build and return the nodes+edges resource graph from active scenario."""
     return _build_resource_graph(SCENARIO_CONFIG, SCENARIO_NAME)
+
+
+@router.get("/architecture", summary="Get static architecture graph")
+async def get_architecture():
+    """Return the hand-curated architecture graph from data/architecture_graph.json.
+
+    This shows the complete service architecture including containers, agents,
+    tools, data sources, and infrastructure.  Regenerate the file when the
+    architecture changes or new tools are added.
+    """
+    candidates = [
+        Path("/app/data/architecture_graph.json"),
+        PROJECT_ROOT / "data" / "architecture_graph.json",
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except json.JSONDecodeError as e:
+                raise HTTPException(500, f"Invalid JSON in {p}: {e}")
+    raise HTTPException(404, "architecture_graph.json not found")
 
 
 @router.get("/scenario", summary="Active scenario metadata")

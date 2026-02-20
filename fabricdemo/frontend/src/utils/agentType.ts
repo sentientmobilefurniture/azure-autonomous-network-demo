@@ -35,6 +35,8 @@ export function getVizButtonMeta(agent: string): {
       return { icon: '▧', label: 'View Docs', tooltip: 'View runbook search results' };
     case 'HistoricalTicketAgent':
       return { icon: '▧', label: 'View Docs', tooltip: 'View historical ticket results' };
+    case 'dispatch_field_engineer':
+      return { icon: '⚡', label: 'View Action', tooltip: 'View field dispatch details' };
     default:
       return { icon: '▧', label: 'View Docs', tooltip: 'View results' };
   }

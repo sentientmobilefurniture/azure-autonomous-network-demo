@@ -52,6 +52,47 @@ Network alerts.
 | BitErrorRate | `real` | Normal: < 1e-9. Degraded: > 1e-6 |
 | LatencyMs | `real` | Normal: 2-15 ms. High: > 50 ms |
 
+### SensorReadings (~2000 rows)
+
+Per-sensor time-series readings from individual sensors attached to infrastructure.
+
+**Schema:**
+| Column | Type | Description |
+|---|---|---|
+| ReadingId | string | Unique ID (e.g. RD-20260206-001) |
+| Timestamp | datetime | ISO8601 |
+| SensorId | string | FK to Sensor graph entity (e.g. SENS-SYD-MEL-F1-OPT-002) |
+| SensorType | string | OpticalPower, BitErrorRate, Temperature, Vibration, CPULoad |
+| Value | real | Numeric reading |
+| Unit | string | dBm, ratio, °C, g, % |
+| Status | string | NORMAL, WARNING, CRITICAL |
+
+**Example queries:**
+```kql
+// Latest 20 readings for a specific sensor
+SensorReadings
+| where SensorId == 'SENS-SYD-MEL-F1-OPT-002'
+| top 20 by Timestamp desc
+| project Timestamp, SensorId, SensorType, Value, Unit, Status
+
+// All sensors on a link showing degradation in the last 24 hours
+SensorReadings
+| where SensorId startswith 'SENS-SYD-MEL-F1'
+| where Status != 'NORMAL'
+| top 50 by Timestamp desc
+
+// Trend analysis — hourly averages for a sensor over 72 hours
+SensorReadings
+| where SensorId == 'SENS-SYD-MEL-F1-OPT-002'
+| summarize AvgValue=avg(Value) by bin(Timestamp, 1h), SensorId, SensorType
+| order by Timestamp asc
+
+// All CRITICAL readings across all sensors
+SensorReadings
+| where Status == 'CRITICAL'
+| top 30 by Timestamp desc
+```
+
 ---
 
 ## Example KQL Queries

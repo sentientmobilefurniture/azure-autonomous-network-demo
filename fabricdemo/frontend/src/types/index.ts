@@ -51,6 +51,31 @@ export type VisualizationData =
   | DocumentVisualizationData;
 
 // ---------------------------------------------------------------------------
+// Action types (dispatched by FunctionTool)
+// ---------------------------------------------------------------------------
+
+export interface ActionData {
+  status: string;           // "dispatched"
+  dispatch_id: string;
+  dispatch_time: string;
+  engineer: {
+    name: string;
+    email: string;
+    phone: string;
+  };
+  destination: {
+    description: string;
+    latitude: number;
+    longitude: number;
+    maps_link: string;
+  };
+  urgency: string;          // "CRITICAL" | "HIGH" | "STANDARD"
+  sensor_ids: string[];
+  email_subject: string;
+  email_body: string;
+}
+
+// ---------------------------------------------------------------------------
 // Core event types
 // ---------------------------------------------------------------------------
 
@@ -64,6 +89,9 @@ export interface StepEvent {
   error?: boolean;
   visualization?: VisualizationData;
   reasoning?: string;
+  // Action support
+  is_action?: boolean;       // true when this step is a FunctionTool call
+  action?: ActionData;       // parsed output of the function
 }
 
 export interface ThinkingState {

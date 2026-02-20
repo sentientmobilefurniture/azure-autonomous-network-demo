@@ -5,9 +5,9 @@ interface TabBarProps {
 
 export function TabBar({ activeTab, onTabChange }: TabBarProps) {
   const tabs = [
-    { id: 'investigate' as const, label: '▸ Investigate' },
-    { id: 'resources' as const, label: '◇ Resources' },
-    { id: 'scenario' as const, label: '📋 Scenario' },
+    { id: 'investigate' as const, label: '▸ Investigate', tooltip: '' },
+    { id: 'resources' as const, label: '◇ Resources', tooltip: 'Regenerate data/architecture_graph.json if architecture changes or new tools are added' },
+    { id: 'scenario' as const, label: '📋 Scenario', tooltip: '' },
   ];
 
   return (
@@ -24,6 +24,7 @@ export function TabBar({ activeTab, onTabChange }: TabBarProps) {
               : 'border-transparent text-text-secondary hover:text-text-primary'
           }`}
           onClick={() => onTabChange(tab.id)}
+          title={tab.tooltip || undefined}
         >
           {tab.label}
         </button>

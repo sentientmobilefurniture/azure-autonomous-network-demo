@@ -55,9 +55,11 @@ function ToggleBtn({
 interface HeaderProps {
   showTabs: boolean;
   onToggleTabs: () => void;
+  terminalVisible: boolean;
+  onToggleTerminal: () => void;
 }
 
-export function Header({ showTabs, onToggleTabs }: HeaderProps) {
+export function Header({ showTabs, onToggleTabs, terminalVisible, onToggleTerminal }: HeaderProps) {
   const SCENARIO = useScenario();
   const { theme, toggleTheme } = useTheme();
   const [healthOpen, setHealthOpen] = useState(false);
@@ -116,6 +118,13 @@ export function Header({ showTabs, onToggleTabs }: HeaderProps) {
             onClick={onToggleTabs}
             icon={showTabs ? '👁' : '👁‍🗨'}
             tooltip={showTabs ? HEADER_TOOLTIPS['tabs-hide'] : HEADER_TOOLTIPS['tabs-show']}
+          />
+          <ToggleBtn
+            label="Console"
+            active={terminalVisible}
+            onClick={onToggleTerminal}
+            icon={terminalVisible ? '▣' : '□'}
+            tooltip={terminalVisible ? 'Hide the API terminal / log console' : 'Show the API terminal / log console'}
           />
           <button
             onClick={toggleTheme}

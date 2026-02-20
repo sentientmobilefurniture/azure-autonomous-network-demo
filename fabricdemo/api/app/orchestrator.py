@@ -123,6 +123,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             self.response_text = ""
             self.run_failed = False
             self.run_error_detail = ""
+            self._last_fn_output: dict[str, str] = {}
 
         def _elapsed(self) -> str:
             return f"{time.monotonic() - self.t0:.1f}s"
@@ -168,6 +169,10 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 return name
             elif tc_type == "azure_ai_search":
                 return "AzureAISearch"
+            elif tc_type == "function":
+                fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
+                name = getattr(fn, "name", None) or fn.get("name", "function")
+                return name
             return tc_type
 
         _THINKING_RE = re.compile(
@@ -186,6 +191,24 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             """
             tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
             tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
+            if tc_type == "function":
+                fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
+                args_raw = getattr(fn, "arguments", None) or fn.get("arguments", "")
+                try:
+                    obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    raw = json.dumps(obj, indent=2) if isinstance(obj, dict) else str(obj)
+                except Exception:
+                    raw = str(args_raw)
+                reasoning = ""
+                query = raw
+                match = self._THINKING_RE.search(raw)
+                if match:
+                    reasoning = match.group(1).strip()
+                    if len(reasoning) > 500:
+                        reasoning = reasoning[:500] + "…"
+                    query = raw[:match.start()] + raw[match.end():]
+                    query = query.strip()
+                return query, reasoning
             if tc_type != "connected_agent":
                 return "", ""
             ca = tc.connected_agent if hasattr(tc, "connected_agent") else tc.get("connected_agent", {})
@@ -396,6 +419,43 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     # Extract response (sub-agent output for connected_agent)
                     tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
                     tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
+
+                    # ── Handle function tool calls (actions) ──
+                    if tc_type == "function":
+                        fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
+                        fn_name = getattr(fn, "name", None) or fn.get("name", "function")
+                        fn_output = self._last_fn_output.get(fn_name, "")
+
+                        action_data = {}
+                        try:
+                            action_data = json.loads(fn_output) if isinstance(fn_output, str) and fn_output else {}
+                        except (json.JSONDecodeError, TypeError):
+                            action_data = {"raw_output": str(fn_output)}
+
+                        event_data = {
+                            "step": self.ui_step,
+                            "agent": agent_name,
+                            "duration": duration,
+                            "query": query[:500] if query else "",
+                            "response": f"Action executed: {agent_name}",
+                            "action": action_data,
+                            "is_action": True,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                        if reasoning:
+                            event_data["reasoning"] = reasoning
+
+                        _put("step_start", {"step": self.ui_step, "agent": agent_name})
+                        _put("step_complete", event_data)
+                        _put("action_executed", {
+                            "step": self.ui_step,
+                            "action_name": agent_name,
+                            "action_data": action_data,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
+                        continue
+
+                    # ── Handle connected_agent and other tool calls ──
                     if tc_type == "connected_agent":
                         ca = (
                             tc.connected_agent
@@ -467,6 +527,23 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
             client = _get_project_client()
             with client:
                 agents_client = client.agents
+
+                # Set up FunctionTool auto-execution for dispatch actions
+                from azure.ai.agents.models import FunctionTool as _FnTool, ToolSet
+                from app.dispatch import dispatch_field_engineer
+
+                _fn_output_cache: dict[str, str] = {}
+
+                def _wrapped_dispatch(**kwargs):
+                    result = dispatch_field_engineer(**kwargs)
+                    _fn_output_cache["dispatch_field_engineer"] = result
+                    return result
+
+                _dispatch_fn = _FnTool(functions=[_wrapped_dispatch])
+                _toolset = ToolSet()
+                _toolset.add(_dispatch_fn)
+                agents_client.enable_auto_function_calls(_toolset)
+
                 thread = agents_client.threads.create()
                 agents_client.messages.create(
                     thread_id=thread.id,
@@ -477,6 +554,7 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                 last_error_detail = ""
                 for attempt in range(1, MAX_RUN_ATTEMPTS + 1):
                     handler = SSEEventHandler()
+                    handler._last_fn_output = _fn_output_cache
 
                     if attempt > 1:
                         # Post a recovery message so the orchestrator knows
@@ -669,6 +747,7 @@ async def run_orchestrator_session(
             self.response_text = ""
             self.run_failed = False
             self.run_error_detail = ""
+            self._last_fn_output: dict[str, str] = {}
 
         def _elapsed(self) -> str:
             return f"{time.monotonic() - self.t0:.1f}s"
@@ -707,6 +786,10 @@ async def run_orchestrator_session(
                 return name
             elif tc_type == "azure_ai_search":
                 return "AzureAISearch"
+            elif tc_type == "function":
+                fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
+                name = getattr(fn, "name", None) or fn.get("name", "function")
+                return name
             return tc_type
 
         _THINKING_RE = re.compile(
@@ -717,6 +800,24 @@ async def run_orchestrator_session(
         def _extract_arguments(self, tc) -> tuple[str, str]:
             tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
             tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
+            if tc_type == "function":
+                fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
+                args_raw = getattr(fn, "arguments", None) or fn.get("arguments", "")
+                try:
+                    obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    raw = json.dumps(obj, indent=2) if isinstance(obj, dict) else str(obj)
+                except Exception:
+                    raw = str(args_raw)
+                reasoning = ""
+                query = raw
+                match = self._THINKING_RE.search(raw)
+                if match:
+                    reasoning = match.group(1).strip()
+                    if len(reasoning) > 500:
+                        reasoning = reasoning[:500] + "…"
+                    query = raw[:match.start()] + raw[match.end():]
+                    query = query.strip()
+                return query, reasoning
             if tc_type != "connected_agent":
                 return "", ""
             ca = tc.connected_agent if hasattr(tc, "connected_agent") else tc.get("connected_agent", {})
@@ -898,6 +999,43 @@ async def run_orchestrator_session(
 
                     tc_t = tc.type if hasattr(tc, "type") else tc.get("type", "?")
                     tc_type = tc_t.value if hasattr(tc_t, "value") else str(tc_t)
+
+                    # ── Handle function tool calls (actions) ──
+                    if tc_type == "function":
+                        fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
+                        fn_name = getattr(fn, "name", None) or fn.get("name", "function")
+                        fn_output = self._last_fn_output.get(fn_name, "")
+
+                        action_data = {}
+                        try:
+                            action_data = json.loads(fn_output) if isinstance(fn_output, str) and fn_output else {}
+                        except (json.JSONDecodeError, TypeError):
+                            action_data = {"raw_output": str(fn_output)}
+
+                        event_data = {
+                            "step": self.ui_step,
+                            "agent": agent_name,
+                            "duration": duration,
+                            "query": query[:500] if query else "",
+                            "response": f"Action executed: {agent_name}",
+                            "action": action_data,
+                            "is_action": True,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                        if reasoning:
+                            event_data["reasoning"] = reasoning
+
+                        _put("step_start", {"step": self.ui_step, "agent": agent_name})
+                        _put("step_complete", event_data)
+                        _put("action_executed", {
+                            "step": self.ui_step,
+                            "action_name": agent_name,
+                            "action_data": action_data,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
+                        continue
+
+                    # ── Handle connected_agent and other tool calls ──
                     if tc_type == "connected_agent":
                         ca = (
                             tc.connected_agent
@@ -972,6 +1110,22 @@ async def run_orchestrator_session(
             with client:
                 agents_client = client.agents
 
+                # Set up FunctionTool auto-execution for dispatch actions
+                from azure.ai.agents.models import FunctionTool as _FnTool, ToolSet
+                from app.dispatch import dispatch_field_engineer
+
+                _fn_output_cache: dict[str, str] = {}
+
+                def _wrapped_dispatch(**kwargs):
+                    result = dispatch_field_engineer(**kwargs)
+                    _fn_output_cache["dispatch_field_engineer"] = result
+                    return result
+
+                _dispatch_fn = _FnTool(functions=[_wrapped_dispatch])
+                _toolset = ToolSet()
+                _toolset.add(_dispatch_fn)
+                agents_client.enable_auto_function_calls(_toolset)
+
                 # Thread reuse for multi-turn follow-ups
                 if existing_thread_id:
                     thread_id = existing_thread_id
@@ -997,6 +1151,7 @@ async def run_orchestrator_session(
                         break
 
                     handler = SSEEventHandler()
+                    handler._last_fn_output = _fn_output_cache
 
                     if attempt > 1:
                         recovery_msg = (

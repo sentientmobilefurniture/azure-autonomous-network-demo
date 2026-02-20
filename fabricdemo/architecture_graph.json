@@ -1,0 +1,1000 @@
+{
+  "$schema": "architecture_graph/v1",
+  "title": "AI Incident Investigator — Fabric Demo Architecture",
+  "description": "Complete architecture graph for the Autonomous Network NOC Demo (fabricdemo). Multi-agent AI system for telecom network incident investigation using Azure AI Foundry, Microsoft Fabric, and Azure AI Search.",
+  "version": "2.0",
+  "generated": "2025-02-20",
+
+  "nodes": [
+    {
+      "id": "orchestrator-agent",
+      "label": "Orchestrator Agent",
+      "type": "orchestrator",
+      "description": "Root AI Foundry agent (gpt-4.1) that receives alert storms or user queries and delegates to specialist sub-agents via connected-agent pattern. Streams SSE events to the frontend.",
+      "metadata": {
+        "model": "gpt-4.1",
+        "role": "orchestrator",
+        "is_orchestrator": true,
+        "instructions_file": "prompts/foundry_orchestrator_agent.md",
+        "connected_agents": [
+          "GraphExplorerAgent",
+          "TelemetryAgent",
+          "RunbookKBAgent",
+          "HistoricalTicketAgent"
+        ]
+      }
+    },
+    {
+      "id": "graph-explorer-agent",
+      "label": "Graph Explorer Agent",
+      "type": "agent",
+      "description": "Specialist agent that queries the network topology graph (Fabric GQL) to investigate connectivity, blast radius, physical conduit relationships, and MPLS path routing.",
+      "metadata": {
+        "model": "gpt-4.1",
+        "role": "graph_explorer",
+        "instructions_file": "prompts/graph_explorer/",
+        "compose_with_connector": true,
+        "tool_type": "openapi",
+        "tool_spec_template": "graph",
+        "keep_path": "/query/graph"
+      }
+    },
+    {
+      "id": "telemetry-agent",
+      "label": "Telemetry Agent",
+      "type": "agent",
+      "description": "Specialist agent that executes KQL queries against Fabric Eventhouse telemetry data (AlertStream, LinkTelemetry) to analyze optical power, BER, latency, and CPU utilization metrics.",
+      "metadata": {
+        "model": "gpt-4.1",
+        "role": "telemetry",
+        "instructions_file": "prompts/foundry_telemetry_agent_v2.md",
+        "tool_type": "openapi",
+        "tool_spec_template": "telemetry",
+        "keep_path": "/query/telemetry"
+      }
+    },
+    {
+      "id": "runbook-kb-agent",
+      "label": "Runbook KB Agent",
+      "type": "agent",
+      "description": "Specialist agent that searches the operational runbooks knowledge base via Azure AI Search to find relevant SOPs, troubleshooting procedures, and remediation playbooks.",
+      "metadata": {
+        "model": "gpt-4.1",
+        "role": "runbook",
+        "instructions_file": "prompts/foundry_runbook_kb_agent.md",
+        "tool_type": "azure_ai_search",
+        "index_key": "runbooks"
+      }
+    },
+    {
+      "id": "historical-ticket-agent",
+      "label": "Historical Ticket Agent",
+      "type": "agent",
+      "description": "Specialist agent that searches past incident tickets via Azure AI Search to find similar historical events, resolution patterns, and estimated time-to-resolve.",
+      "metadata": {
+        "model": "gpt-4.1",
+        "role": "ticket",
+        "instructions_file": "prompts/foundry_historical_ticket_agent.md",
+        "tool_type": "azure_ai_search",
+        "index_key": "tickets"
+      }
+    },
+    {
+      "id": "openapi-tool-graph",
+      "label": "Graph Query OpenAPI Tool",
+      "type": "tool",
+      "description": "OpenApiTool spec (graph.yaml) that allows the Graph Explorer Agent to POST GQL queries to /query/graph on the container app.",
+      "metadata": {
+        "spec_template": "graph-query-api/openapi/templates/graph.yaml",
+        "endpoint": "/query/graph",
+        "method": "POST",
+        "query_language": "GQL (Fabric GraphQL)"
+      }
+    },
+    {
+      "id": "openapi-tool-telemetry",
+      "label": "Telemetry Query OpenAPI Tool",
+      "type": "tool",
+      "description": "OpenApiTool spec (telemetry.yaml) that allows the Telemetry Agent to POST KQL queries to /query/telemetry on the container app.",
+      "metadata": {
+        "spec_template": "graph-query-api/openapi/templates/telemetry.yaml",
+        "endpoint": "/query/telemetry",
+        "method": "POST",
+        "query_language": "KQL (Kusto Query Language)"
+      }
+    },
+    {
+      "id": "azure-ai-search-tool-runbooks",
+      "label": "AI Search Tool — Runbooks",
+      "type": "tool",
+      "description": "Built-in Azure AI Search tool (AzureAISearchTool) connected to the runbooks search index. Used by the Runbook KB Agent.",
+      "metadata": {
+        "tool_type": "azure_ai_search",
+        "index_key": "runbooks"
+      }
+    },
+    {
+      "id": "azure-ai-search-tool-tickets",
+      "label": "AI Search Tool — Tickets",
+      "type": "tool",
+      "description": "Built-in Azure AI Search tool (AzureAISearchTool) connected to the tickets search index. Used by the Historical Ticket Agent.",
+      "metadata": {
+        "tool_type": "azure_ai_search",
+        "index_key": "tickets"
+      }
+    },
+    {
+      "id": "ai-foundry",
+      "label": "Azure AI Foundry",
+      "type": "foundry",
+      "description": "Azure AI Foundry account (AIServices kind) hosting the AI project, model deployments (gpt-4.1, text-embedding-3-small), and all Foundry agents.",
+      "metadata": {
+        "bicep_module": "infra/modules/ai-foundry.bicep",
+        "naming_convention": "aif-{resourceToken}",
+        "models": ["gpt-4.1", "text-embedding-3-small"],
+        "endpoint_pattern": "https://{name}.services.ai.azure.com/api/projects/{project}"
+      }
+    },
+    {
+      "id": "ai-foundry-project",
+      "label": "AI Foundry Project",
+      "type": "foundry",
+      "description": "AI Foundry project (child of the foundry account) that scopes agent definitions, connections, and model deployments.",
+      "metadata": {
+        "naming_convention": "proj-{resourceToken}",
+        "parent": "ai-foundry"
+      }
+    },
+    {
+      "id": "azure-ai-search",
+      "label": "Azure AI Search",
+      "type": "search-service",
+      "description": "Azure AI Search service hosting runbook and ticket indexes with vector + keyword hybrid search for RAG retrieval.",
+      "metadata": {
+        "bicep_module": "infra/modules/search.bicep",
+        "naming_convention": "srch-{resourceToken}",
+        "api_version": "2024-07-01"
+      }
+    },
+    {
+      "id": "runbooks-search-index",
+      "label": "Runbooks Search Index",
+      "type": "search-index",
+      "description": "AI Search index containing operational runbooks and SOPs for network incident remediation. Index name is scenario-specific (e.g., telco-noc-runbooks-index, telecom-playground-runbooks-index).",
+      "metadata": {
+        "telco_noc_index": "telco-noc-runbooks-index",
+        "telecom_playground_index": "telecom-playground-runbooks-index",
+        "source_path": "data/knowledge/runbooks",
+        "blob_container": "runbooks"
+      }
+    },
+    {
+      "id": "tickets-search-index",
+      "label": "Tickets Search Index",
+      "type": "search-index",
+      "description": "AI Search index containing historical incident tickets for pattern matching and resolution time estimation. Index name is scenario-specific.",
+      "metadata": {
+        "telco_noc_index": "telco-noc-tickets-index",
+        "telecom_playground_index": "telecom-playground-tickets-index",
+        "source_path": "data/knowledge/tickets",
+        "blob_container": "tickets"
+      }
+    },
+    {
+      "id": "azure-blob-storage",
+      "label": "Azure Blob Storage",
+      "type": "storage",
+      "description": "Azure Storage Account hosting blob containers for runbook documents, ticket documents, and network data used as AI Search data sources.",
+      "metadata": {
+        "bicep_module": "infra/modules/storage.bicep",
+        "naming_convention": "st{resourceToken}",
+        "containers": ["runbooks", "tickets", "network-data"]
+      }
+    },
+    {
+      "id": "blob-container-runbooks",
+      "label": "Runbooks Blob Container",
+      "type": "blob-container",
+      "description": "Blob container storing runbook markdown/PDF documents that are indexed by Azure AI Search.",
+      "metadata": {
+        "container_name": "runbooks",
+        "source_path": "data/knowledge/runbooks"
+      }
+    },
+    {
+      "id": "blob-container-tickets",
+      "label": "Tickets Blob Container",
+      "type": "blob-container",
+      "description": "Blob container storing historical incident ticket documents indexed by Azure AI Search.",
+      "metadata": {
+        "container_name": "tickets",
+        "source_path": "data/knowledge/tickets"
+      }
+    },
+    {
+      "id": "cosmos-db-nosql",
+      "label": "Cosmos DB NoSQL",
+      "type": "datasource",
+      "description": "Azure Cosmos DB NoSQL account used as the interactions store — persists completed investigation records (queries, steps, diagnosis, metadata) for replay and audit.",
+      "metadata": {
+        "bicep_module": "infra/modules/cosmos-nosql.bicep",
+        "naming_convention": "cosmos-nosql-{resourceToken}",
+        "database": "interactions",
+        "container": "interactions",
+        "partition_key": "/scenario",
+        "private_endpoints": true,
+        "private_endpoint_module": "infra/modules/cosmos-private-endpoints.bicep"
+      }
+    },
+    {
+      "id": "fabric-workspace",
+      "label": "Fabric Workspace",
+      "type": "datasource",
+      "description": "Microsoft Fabric workspace (TelcoAutonomousNetwork) containing the Lakehouse, Eventhouse, and Graph Ontology items for network topology and telemetry.",
+      "metadata": {
+        "default_name": "TelcoAutonomousNetwork",
+        "provisioning_script": "scripts/fabric/provision_workspace.py"
+      }
+    },
+    {
+      "id": "fabric-lakehouse",
+      "label": "Fabric Lakehouse",
+      "type": "datasource",
+      "description": "Microsoft Fabric Lakehouse (NetworkTopologyLH) storing network entity dimension and fact tables as Delta tables (CSVs loaded via provisioning).",
+      "metadata": {
+        "default_name": "NetworkTopologyLH",
+        "provisioning_script": "scripts/fabric/provision_lakehouse.py",
+        "entity_tables": [
+          "DimCoreRouter", "DimAggSwitch", "DimBaseStation",
+          "DimTransportLink", "DimMPLSPath", "DimService",
+          "DimSLAPolicy", "DimBGPSession", "DimPhysicalConduit",
+          "DimAmplifierSite", "DimAdvisory", "DimDutyRoster", "DimSensor",
+          "FactAdvisoryMapping", "FactAmplifierMapping",
+          "FactConduitMapping", "FactMPLSPathHops", "FactServiceDependency"
+        ]
+      }
+    },
+    {
+      "id": "fabric-eventhouse",
+      "label": "Fabric Eventhouse",
+      "type": "datasource",
+      "description": "Microsoft Fabric Eventhouse (NetworkTelemetryEH) with KQL database storing real-time telemetry streams: AlertStream and LinkTelemetry.",
+      "metadata": {
+        "default_name": "NetworkTelemetryEH",
+        "provisioning_script": "scripts/fabric/provision_eventhouse.py",
+        "kql_tables": ["AlertStream", "LinkTelemetry"],
+        "query_language": "KQL"
+      }
+    },
+    {
+      "id": "fabric-ontology",
+      "label": "Fabric Graph Ontology",
+      "type": "datasource",
+      "description": "Microsoft Fabric Graph Ontology (NetworkTopologyOntology) defining the network topology graph model (nodes and edges) mapped to the Lakehouse Delta tables.",
+      "metadata": {
+        "default_name": "NetworkTopologyOntology",
+        "provisioning_script": "scripts/fabric/provision_ontology.py",
+        "query_language": "GQL",
+        "graph_names": {
+          "telco-noc": "telco-noc-topology",
+          "telecom-playground": "telecom-playground-topology"
+        }
+      }
+    },
+    {
+      "id": "fabric-capacity",
+      "label": "Fabric Capacity",
+      "type": "datasource",
+      "description": "Azure-managed Fabric capacity resource (F2–F2048 SKU) providing compute for Fabric workspace items. Deployed via Bicep when fabricAdminEmail is provided.",
+      "metadata": {
+        "bicep_module": "infra/modules/fabric.bicep",
+        "naming_convention": "fc{resourceToken}",
+        "default_sku": "F8",
+        "conditional": "Deployed only when fabricAdminEmail is provided"
+      }
+    },
+    {
+      "id": "container-app",
+      "label": "Container App (Unified)",
+      "type": "container-app",
+      "description": "Azure Container App running the unified multi-process container: nginx (:80) serving React SPA + reverse-proxying to API (:8000) and Graph Query API (:8100). Managed identity authenticates to all Azure services.",
+      "metadata": {
+        "bicep_module": "infra/modules/container-app.bicep",
+        "naming_convention": "ca-app-{resourceToken}",
+        "target_port": 80,
+        "external_ingress": true,
+        "min_replicas": 1,
+        "max_replicas": 3,
+        "cpu": "1.0",
+        "memory": "2Gi",
+        "managed_identity": "system-assigned",
+        "processes": ["nginx", "api", "graph-query-api"]
+      }
+    },
+    {
+      "id": "container-apps-environment",
+      "label": "Container Apps Environment",
+      "type": "container-app",
+      "description": "Azure Container Apps Environment with integrated ACR and Log Analytics. Provides the hosting environment, VNet integration, and container registry for the unified app.",
+      "metadata": {
+        "bicep_module": "infra/modules/container-apps-environment.bicep",
+        "naming_convention": "cae-{resourceToken}",
+        "includes": ["Azure Container Registry", "Log Analytics Workspace"],
+        "vnet_integrated": true
+      }
+    },
+    {
+      "id": "vnet",
+      "label": "Virtual Network",
+      "type": "datasource",
+      "description": "Azure VNet with subnets for Container Apps infrastructure and private endpoints (Cosmos DB). Ensures internal traffic stays on the Azure backbone.",
+      "metadata": {
+        "bicep_module": "infra/modules/vnet.bicep",
+        "naming_convention": "vnet-{resourceToken}",
+        "subnets": ["container-apps", "private-endpoints"]
+      }
+    },
+    {
+      "id": "nginx-reverse-proxy",
+      "label": "Nginx Reverse Proxy",
+      "type": "tool",
+      "description": "Nginx process inside the container serving the React SPA at / and reverse-proxying /api/* to the FastAPI backend (:8000) and /query/* to the Graph Query API (:8100). Supports SSE streaming.",
+      "metadata": {
+        "port": 80,
+        "config_file": "nginx.conf",
+        "routes": {
+          "/": "React SPA (static files)",
+          "/api/*": "proxy_pass http://127.0.0.1:8000",
+          "/query/*": "proxy_pass http://127.0.0.1:8100",
+          "/health": "proxy_pass http://127.0.0.1:8000"
+        }
+      }
+    },
+    {
+      "id": "fastapi-backend",
+      "label": "FastAPI Backend (API)",
+      "type": "tool",
+      "description": "FastAPI application (api/app/main.py) on port 8000 serving REST endpoints: alert submission, agent listing, session management, orchestrator streaming, and service health checks.",
+      "metadata": {
+        "port": 8000,
+        "entry_point": "api/app/main.py",
+        "routers": ["alert", "agents", "logs", "config", "sessions"],
+        "endpoints": [
+          "POST /api/alert",
+          "GET /api/agents",
+          "GET /api/services/health",
+          "GET /api/services/models",
+          "GET /health"
+        ]
+      }
+    },
+    {
+      "id": "graph-query-api",
+      "label": "Graph Query API",
+      "type": "tool",
+      "description": "FastAPI micro-service (graph-query-api/main.py) on port 8100 exposing graph (GQL), telemetry (KQL), topology, interactions, replay, and search endpoints. Called by Foundry agents via OpenApiTool and by the frontend directly.",
+      "metadata": {
+        "port": 8100,
+        "entry_point": "graph-query-api/main.py",
+        "routers": ["graph", "telemetry", "topology", "interactions", "replay", "search", "health"],
+        "endpoints": [
+          "POST /query/graph",
+          "POST /query/telemetry",
+          "POST /query/topology",
+          "GET /query/interactions",
+          "POST /query/interactions",
+          "POST /query/replay",
+          "POST /query/search",
+          "GET /query/logs",
+          "GET /query/logs/data-ops",
+          "GET /query/health",
+          "GET /health"
+        ],
+        "backends": ["fabric-gql", "fabric-kql", "mock"]
+      }
+    },
+    {
+      "id": "react-frontend",
+      "label": "React Frontend (SPA)",
+      "type": "tool",
+      "description": "React + TypeScript single-page application (Vite build) providing the NOC dashboard UI: alert input, agent investigation viewer with SSE streaming, network graph visualizer (force-graph-2d), and interaction history.",
+      "metadata": {
+        "framework": "React + TypeScript",
+        "build_tool": "Vite",
+        "styling": "Tailwind CSS",
+        "dev_port": 5173,
+        "served_by": "nginx at /",
+        "key_features": [
+          "Alert storm input",
+          "Real-time SSE streaming of agent investigation",
+          "Network topology graph visualization",
+          "Interaction history and replay",
+          "Service health dashboard",
+          "Scenario selector"
+        ]
+      }
+    },
+    {
+      "id": "supervisord",
+      "label": "Supervisord Process Manager",
+      "type": "tool",
+      "description": "Process manager running inside the container that manages nginx (priority 10), API uvicorn (priority 20), and graph-query-api uvicorn (priority 20) as child processes.",
+      "metadata": {
+        "config_file": "supervisord.conf",
+        "managed_processes": [
+          {"name": "nginx", "command": "nginx -g 'daemon off;'", "priority": 10},
+          {"name": "api", "command": "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000", "priority": 20},
+          {"name": "graph-query-api", "command": "uv run uvicorn main:app --host 127.0.0.1 --port 8100", "priority": 20}
+        ]
+      }
+    },
+    {
+      "id": "agent-provisioner",
+      "label": "Agent Provisioner",
+      "type": "tool",
+      "description": "Python script (scripts/agent_provisioner.py) that creates/updates Foundry agents with OpenAPI specs, AI Search connections, and prompt instructions. Substitutes template placeholders in OpenAPI YAML with runtime values.",
+      "metadata": {
+        "script": "scripts/agent_provisioner.py",
+        "called_by": "scripts/provision_agents.py",
+        "templates": [
+          "graph-query-api/openapi/templates/graph.yaml",
+          "graph-query-api/openapi/templates/telemetry.yaml"
+        ]
+      }
+    },
+    {
+      "id": "scenario-telco-noc",
+      "label": "Scenario: Telco NOC",
+      "type": "datasource",
+      "description": "Fibre-cut incident scenario on the Sydney-Melbourne corridor. Defines graph topology (8 node types), telemetry baselines, search indexes, and agent topology for a focused incident investigation demo.",
+      "metadata": {
+        "scenario_name": "telco-noc",
+        "manifest": "data/scenarios/telco-noc/scenario.yaml",
+        "graph_name": "telco-noc-topology",
+        "node_types": ["CoreRouter", "AggSwitch", "BaseStation", "TransportLink", "MPLSPath", "Service", "SLAPolicy", "BGPSession"],
+        "telemetry_tables": ["AlertStream", "LinkTelemetry"]
+      }
+    },
+    {
+      "id": "scenario-telecom-playground",
+      "label": "Scenario: Telecom Playground",
+      "type": "datasource",
+      "description": "Extended telco demo with additional node types (PhysicalConduit, AmplifierSite, Advisory, DutyRoster, Sensor) for shared-conduit risk discovery, firmware advisory analysis, and duty roster queries.",
+      "metadata": {
+        "scenario_name": "telecom-playground",
+        "manifest": "data/scenarios/telecom-playground/scenario.yaml",
+        "graph_name": "telecom-playground-topology",
+        "node_types": ["CoreRouter", "AggSwitch", "BaseStation", "TransportLink", "MPLSPath", "Service", "SLAPolicy", "BGPSession", "PhysicalConduit", "AmplifierSite", "Advisory"],
+        "additional_entities": ["DimDutyRoster", "DimSensor", "DimAdvisory", "DimPhysicalConduit", "DimAmplifierSite"],
+        "telemetry_tables": ["AlertStream", "LinkTelemetry"],
+        "demo_flows": ["Fibre Cut Incident — Full Root Cause Analysis", "Shared Conduit Risk Discovery", "Firmware Advisory & Proactive Risk"]
+      }
+    },
+    {
+      "id": "rbac-roles",
+      "label": "RBAC Role Assignments",
+      "type": "tool",
+      "description": "Bicep module that assigns Azure RBAC roles to the user principal, container app managed identity, AI Search, and AI Foundry for cross-service authentication (Cognitive Services, Search, Storage, Cosmos DB).",
+      "metadata": {
+        "bicep_module": "infra/modules/roles.bicep",
+        "principals": ["user", "container-app", "ai-search", "ai-foundry"],
+        "resources": ["AI Foundry", "AI Search", "Storage", "Cosmos DB"]
+      }
+    },
+    {
+      "id": "gpt-4-1-deployment",
+      "label": "GPT-4.1 Model Deployment",
+      "type": "foundry",
+      "description": "GPT-4.1 model deployment in AI Foundry used by all five agents (Orchestrator + 4 specialists). Capacity configurable via gptCapacity parameter (default 300K TPM).",
+      "metadata": {
+        "model_name": "gpt-4.1",
+        "type": "llm",
+        "default_capacity": "300K TPM"
+      }
+    },
+    {
+      "id": "embedding-model-deployment",
+      "label": "Text Embedding Model Deployment",
+      "type": "foundry",
+      "description": "text-embedding-3-small model deployment in AI Foundry used for generating embeddings for AI Search vector indexes (1536 dimensions).",
+      "metadata": {
+        "model_name": "text-embedding-3-small",
+        "type": "embedding",
+        "dimensions": 1536
+      }
+    },
+    {
+      "id": "fabric-discovery-module",
+      "label": "Fabric Discovery Module",
+      "type": "tool",
+      "description": "Runtime discovery module (graph-query-api/fabric_discovery.py) that queries the Fabric REST API to resolve workspace items (Graph Model ID, Eventhouse Query URI, KQL DB Name) by convention name. Cached with configurable TTL.",
+      "metadata": {
+        "module": "graph-query-api/fabric_discovery.py",
+        "cache_ttl": 600,
+        "discovered_items": ["Graph Model ID", "Eventhouse Query URI", "KQL Database Name"],
+        "requires": ["FABRIC_WORKSPACE_ID", "FABRIC_ONTOLOGY_NAME", "FABRIC_EVENTHOUSE_NAME"]
+      }
+    }
+  ],
+
+  "edges": [
+    {
+      "source": "orchestrator-agent",
+      "target": "graph-explorer-agent",
+      "type": "delegates_to",
+      "label": "Delegates graph topology queries"
+    },
+    {
+      "source": "orchestrator-agent",
+      "target": "telemetry-agent",
+      "type": "delegates_to",
+      "label": "Delegates telemetry analysis"
+    },
+    {
+      "source": "orchestrator-agent",
+      "target": "runbook-kb-agent",
+      "type": "delegates_to",
+      "label": "Delegates runbook lookup"
+    },
+    {
+      "source": "orchestrator-agent",
+      "target": "historical-ticket-agent",
+      "type": "delegates_to",
+      "label": "Delegates historical ticket search"
+    },
+    {
+      "source": "graph-explorer-agent",
+      "target": "openapi-tool-graph",
+      "type": "uses_tool",
+      "label": "Calls POST /query/graph via OpenApiTool"
+    },
+    {
+      "source": "telemetry-agent",
+      "target": "openapi-tool-telemetry",
+      "type": "uses_tool",
+      "label": "Calls POST /query/telemetry via OpenApiTool"
+    },
+    {
+      "source": "runbook-kb-agent",
+      "target": "azure-ai-search-tool-runbooks",
+      "type": "uses_tool",
+      "label": "Searches runbooks via AzureAISearchTool"
+    },
+    {
+      "source": "historical-ticket-agent",
+      "target": "azure-ai-search-tool-tickets",
+      "type": "uses_tool",
+      "label": "Searches tickets via AzureAISearchTool"
+    },
+    {
+      "source": "openapi-tool-graph",
+      "target": "graph-query-api",
+      "type": "queries",
+      "label": "POST /query/graph"
+    },
+    {
+      "source": "openapi-tool-telemetry",
+      "target": "graph-query-api",
+      "type": "queries",
+      "label": "POST /query/telemetry"
+    },
+    {
+      "source": "azure-ai-search-tool-runbooks",
+      "target": "runbooks-search-index",
+      "type": "queries",
+      "label": "Hybrid search (vector + keyword)"
+    },
+    {
+      "source": "azure-ai-search-tool-tickets",
+      "target": "tickets-search-index",
+      "type": "queries",
+      "label": "Hybrid search (vector + keyword)"
+    },
+    {
+      "source": "runbooks-search-index",
+      "target": "azure-ai-search",
+      "type": "hosted_on",
+      "label": "Index hosted on AI Search service"
+    },
+    {
+      "source": "tickets-search-index",
+      "target": "azure-ai-search",
+      "type": "hosted_on",
+      "label": "Index hosted on AI Search service"
+    },
+    {
+      "source": "runbooks-search-index",
+      "target": "blob-container-runbooks",
+      "type": "indexes_from",
+      "label": "Indexes documents from blob container"
+    },
+    {
+      "source": "tickets-search-index",
+      "target": "blob-container-tickets",
+      "type": "indexes_from",
+      "label": "Indexes documents from blob container"
+    },
+    {
+      "source": "blob-container-runbooks",
+      "target": "azure-blob-storage",
+      "type": "hosted_on",
+      "label": "Container in storage account"
+    },
+    {
+      "source": "blob-container-tickets",
+      "target": "azure-blob-storage",
+      "type": "hosted_on",
+      "label": "Container in storage account"
+    },
+    {
+      "source": "graph-query-api",
+      "target": "fabric-ontology",
+      "type": "queries",
+      "label": "GQL queries via Fabric Graph API"
+    },
+    {
+      "source": "graph-query-api",
+      "target": "fabric-eventhouse",
+      "type": "queries",
+      "label": "KQL queries via Fabric Eventhouse"
+    },
+    {
+      "source": "graph-query-api",
+      "target": "cosmos-db-nosql",
+      "type": "stores_in",
+      "label": "Persists interaction records"
+    },
+    {
+      "source": "graph-query-api",
+      "target": "azure-ai-search",
+      "type": "queries",
+      "label": "Direct search for frontend (POST /query/search)"
+    },
+    {
+      "source": "graph-query-api",
+      "target": "fabric-discovery-module",
+      "type": "uses_tool",
+      "label": "Discovers Fabric resource IDs at runtime"
+    },
+    {
+      "source": "fabric-ontology",
+      "target": "fabric-lakehouse",
+      "type": "queries",
+      "label": "Graph model mapped to Lakehouse Delta tables"
+    },
+    {
+      "source": "fabric-lakehouse",
+      "target": "fabric-workspace",
+      "type": "hosted_on",
+      "label": "Lakehouse item in workspace"
+    },
+    {
+      "source": "fabric-eventhouse",
+      "target": "fabric-workspace",
+      "type": "hosted_on",
+      "label": "Eventhouse item in workspace"
+    },
+    {
+      "source": "fabric-ontology",
+      "target": "fabric-workspace",
+      "type": "hosted_on",
+      "label": "Ontology item in workspace"
+    },
+    {
+      "source": "fabric-workspace",
+      "target": "fabric-capacity",
+      "type": "runs_on",
+      "label": "Workspace backed by Fabric capacity"
+    },
+    {
+      "source": "orchestrator-agent",
+      "target": "ai-foundry-project",
+      "type": "hosted_on",
+      "label": "Agent definition in Foundry project"
+    },
+    {
+      "source": "graph-explorer-agent",
+      "target": "ai-foundry-project",
+      "type": "hosted_on",
+      "label": "Agent definition in Foundry project"
+    },
+    {
+      "source": "telemetry-agent",
+      "target": "ai-foundry-project",
+      "type": "hosted_on",
+      "label": "Agent definition in Foundry project"
+    },
+    {
+      "source": "runbook-kb-agent",
+      "target": "ai-foundry-project",
+      "type": "hosted_on",
+      "label": "Agent definition in Foundry project"
+    },
+    {
+      "source": "historical-ticket-agent",
+      "target": "ai-foundry-project",
+      "type": "hosted_on",
+      "label": "Agent definition in Foundry project"
+    },
+    {
+      "source": "ai-foundry-project",
+      "target": "ai-foundry",
+      "type": "hosted_on",
+      "label": "Project scoped under Foundry account"
+    },
+    {
+      "source": "gpt-4-1-deployment",
+      "target": "ai-foundry",
+      "type": "hosted_on",
+      "label": "Model deployment in Foundry"
+    },
+    {
+      "source": "embedding-model-deployment",
+      "target": "ai-foundry",
+      "type": "hosted_on",
+      "label": "Model deployment in Foundry"
+    },
+    {
+      "source": "orchestrator-agent",
+      "target": "gpt-4-1-deployment",
+      "type": "uses_tool",
+      "label": "Inference via gpt-4.1"
+    },
+    {
+      "source": "graph-explorer-agent",
+      "target": "gpt-4-1-deployment",
+      "type": "uses_tool",
+      "label": "Inference via gpt-4.1"
+    },
+    {
+      "source": "telemetry-agent",
+      "target": "gpt-4-1-deployment",
+      "type": "uses_tool",
+      "label": "Inference via gpt-4.1"
+    },
+    {
+      "source": "runbook-kb-agent",
+      "target": "gpt-4-1-deployment",
+      "type": "uses_tool",
+      "label": "Inference via gpt-4.1"
+    },
+    {
+      "source": "historical-ticket-agent",
+      "target": "gpt-4-1-deployment",
+      "type": "uses_tool",
+      "label": "Inference via gpt-4.1"
+    },
+    {
+      "source": "fastapi-backend",
+      "target": "ai-foundry-project",
+      "type": "queries",
+      "label": "Creates threads, runs orchestrator agent"
+    },
+    {
+      "source": "fastapi-backend",
+      "target": "cosmos-db-nosql",
+      "type": "queries",
+      "label": "Probes Cosmos DB health"
+    },
+    {
+      "source": "fastapi-backend",
+      "target": "graph-query-api",
+      "type": "queries",
+      "label": "Probes Graph Query API health"
+    },
+    {
+      "source": "fastapi-backend",
+      "target": "azure-ai-search",
+      "type": "queries",
+      "label": "Probes AI Search health"
+    },
+    {
+      "source": "nginx-reverse-proxy",
+      "target": "fastapi-backend",
+      "type": "delegates_to",
+      "label": "Proxies /api/* → :8000"
+    },
+    {
+      "source": "nginx-reverse-proxy",
+      "target": "graph-query-api",
+      "type": "delegates_to",
+      "label": "Proxies /query/* → :8100"
+    },
+    {
+      "source": "nginx-reverse-proxy",
+      "target": "react-frontend",
+      "type": "contains",
+      "label": "Serves React SPA static files at /"
+    },
+    {
+      "source": "supervisord",
+      "target": "nginx-reverse-proxy",
+      "type": "contains",
+      "label": "Manages nginx process"
+    },
+    {
+      "source": "supervisord",
+      "target": "fastapi-backend",
+      "type": "contains",
+      "label": "Manages API uvicorn process"
+    },
+    {
+      "source": "supervisord",
+      "target": "graph-query-api",
+      "type": "contains",
+      "label": "Manages graph-query-api uvicorn process"
+    },
+    {
+      "source": "container-app",
+      "target": "supervisord",
+      "type": "contains",
+      "label": "Runs supervisord as container entrypoint"
+    },
+    {
+      "source": "container-app",
+      "target": "container-apps-environment",
+      "type": "runs_on",
+      "label": "App runs in Container Apps Environment"
+    },
+    {
+      "source": "container-apps-environment",
+      "target": "vnet",
+      "type": "runs_on",
+      "label": "Infrastructure subnet integration"
+    },
+    {
+      "source": "cosmos-db-nosql",
+      "target": "vnet",
+      "type": "runs_on",
+      "label": "Private endpoint on VNet"
+    },
+    {
+      "source": "agent-provisioner",
+      "target": "ai-foundry-project",
+      "type": "stores_in",
+      "label": "Creates/updates agent definitions"
+    },
+    {
+      "source": "agent-provisioner",
+      "target": "openapi-tool-graph",
+      "type": "uses_tool",
+      "label": "Renders graph.yaml OpenAPI spec from template"
+    },
+    {
+      "source": "agent-provisioner",
+      "target": "openapi-tool-telemetry",
+      "type": "uses_tool",
+      "label": "Renders telemetry.yaml OpenAPI spec from template"
+    },
+    {
+      "source": "react-frontend",
+      "target": "fastapi-backend",
+      "type": "queries",
+      "label": "REST API calls via /api/*"
+    },
+    {
+      "source": "react-frontend",
+      "target": "graph-query-api",
+      "type": "queries",
+      "label": "Topology, interactions, search via /query/*"
+    },
+    {
+      "source": "rbac-roles",
+      "target": "container-app",
+      "type": "contains",
+      "label": "Assigns managed identity roles"
+    },
+    {
+      "source": "rbac-roles",
+      "target": "ai-foundry",
+      "type": "contains",
+      "label": "Assigns Cognitive Services roles"
+    },
+    {
+      "source": "rbac-roles",
+      "target": "azure-ai-search",
+      "type": "contains",
+      "label": "Assigns Search roles"
+    },
+    {
+      "source": "rbac-roles",
+      "target": "azure-blob-storage",
+      "type": "contains",
+      "label": "Assigns Storage roles"
+    },
+    {
+      "source": "rbac-roles",
+      "target": "cosmos-db-nosql",
+      "type": "contains",
+      "label": "Assigns Cosmos DB roles"
+    },
+    {
+      "source": "scenario-telco-noc",
+      "target": "fabric-ontology",
+      "type": "queries",
+      "label": "Graph: telco-noc-topology"
+    },
+    {
+      "source": "scenario-telco-noc",
+      "target": "fabric-eventhouse",
+      "type": "queries",
+      "label": "Telemetry: AlertStream, LinkTelemetry"
+    },
+    {
+      "source": "scenario-telco-noc",
+      "target": "runbooks-search-index",
+      "type": "queries",
+      "label": "Index: telco-noc-runbooks-index"
+    },
+    {
+      "source": "scenario-telco-noc",
+      "target": "tickets-search-index",
+      "type": "queries",
+      "label": "Index: telco-noc-tickets-index"
+    },
+    {
+      "source": "scenario-telecom-playground",
+      "target": "fabric-ontology",
+      "type": "queries",
+      "label": "Graph: telecom-playground-topology"
+    },
+    {
+      "source": "scenario-telecom-playground",
+      "target": "fabric-eventhouse",
+      "type": "queries",
+      "label": "Telemetry: AlertStream, LinkTelemetry"
+    },
+    {
+      "source": "scenario-telecom-playground",
+      "target": "runbooks-search-index",
+      "type": "queries",
+      "label": "Index: telecom-playground-runbooks-index"
+    },
+    {
+      "source": "scenario-telecom-playground",
+      "target": "tickets-search-index",
+      "type": "queries",
+      "label": "Index: telecom-playground-tickets-index"
+    }
+  ],
+
+  "summary": {
+    "total_nodes": 38,
+    "total_edges": 60,
+    "node_type_counts": {
+      "orchestrator": 1,
+      "agent": 4,
+      "tool": 9,
+      "datasource": 8,
+      "search-index": 2,
+      "blob-container": 2,
+      "foundry": 4,
+      "storage": 1,
+      "search-service": 1,
+      "container-app": 2
+    },
+    "scenarios": ["telco-noc", "telecom-playground"],
+    "azure_services": [
+      "Azure AI Foundry (AIServices)",
+      "Azure AI Search",
+      "Azure Blob Storage",
+      "Azure Cosmos DB NoSQL",
+      "Azure Container Apps",
+      "Azure Container Registry",
+      "Azure Virtual Network",
+      "Microsoft Fabric (Workspace, Lakehouse, Eventhouse, Graph Ontology, Capacity)"
+    ],
+    "deployment_pipeline": [
+      "Step 0: Prerequisites (Python 3.11+, uv, Node.js 20+, az CLI, azd CLI)",
+      "Step 1: Azure environment selection",
+      "Step 2: Configure azure_config.env + generate static topology JSON",
+      "Step 3: Provision Azure infrastructure (Bicep via azd provision)",
+      "Step 4: Provision Fabric resources (workspace, lakehouse, eventhouse, ontology)",
+      "Step 5: Provision data (AI Search indexes + blob upload)",
+      "Step 6: Provision AI Foundry agents",
+      "Step 7: Deploy unified container app (azd deploy)",
+      "Step 8: Health verification",
+      "Step 9: Optional local development services"
+    ]
+  }
+}

@@ -43,7 +43,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('investigate');
   const [showTabs, setShowTabs] = useState(true);
   const [terminalVisible, setTerminalVisible] = useState(true);
-  void setTerminalVisible; // Used by future terminal toggle button
 
   // Trigger Fabric rediscovery (best-effort, non-blocking)
   const triggerRediscovery = async () => {
@@ -74,7 +73,12 @@ export default function App() {
       transition={{ duration: 0.3 }}
     >
       {/* Header — sticky */}
-      <Header showTabs={showTabs} onToggleTabs={() => setShowTabs((v) => !v)} />
+      <Header
+        showTabs={showTabs}
+        onToggleTabs={() => setShowTabs((v) => !v)}
+        terminalVisible={terminalVisible}
+        onToggleTerminal={() => setTerminalVisible((v) => !v)}
+      />
 
       {/* Tab bar — sticky below header */}
       {showTabs && <TabBar activeTab={activeTab} onTabChange={setActiveTab} />}
