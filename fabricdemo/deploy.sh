@@ -587,11 +587,23 @@ info "Creating azure_config.env from template..."
 cp "$CONFIG_TEMPLATE" "$CONFIG_FILE"
 ok "Copied template → azure_config.env"
 
-# Restore previously discovered values into the fresh template
+# Keys explicitly chosen by the user — must not be overwritten by preserved values
+declare -A _USER_KEYS=(
+  [DEFAULT_SCENARIO]=1
+  [FABRIC_WORKSPACE_NAME]=1
+  [FABRIC_LAKEHOUSE_NAME]=1
+  [FABRIC_EVENTHOUSE_NAME]=1
+  [FABRIC_ONTOLOGY_NAME]=1
+)
+
+# Restore previously discovered values into the fresh template,
+# but skip any key that the user explicitly set at the prompts above.
 for key in "${!_PREV_VALS[@]}"; do
-  set_config "$key" "${_PREV_VALS[$key]}"
+  if [[ -z "${_USER_KEYS[$key]+_}" ]]; then
+    set_config "$key" "${_PREV_VALS[$key]}"
+  fi
 done
-unset _PREV_VALS
+unset _PREV_VALS _USER_KEYS
 
 # Write all values known so far into the config immediately
 set_config DEFAULT_SCENARIO "$SCENARIO_NAME"

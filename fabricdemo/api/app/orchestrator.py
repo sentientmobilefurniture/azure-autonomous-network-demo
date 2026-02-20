@@ -539,6 +539,10 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                     _fn_output_cache["dispatch_field_engineer"] = result
                     return result
 
+                # SDK uses __name__ to match the function the agent calls
+                _wrapped_dispatch.__name__ = "dispatch_field_engineer"
+                _wrapped_dispatch.__doc__ = dispatch_field_engineer.__doc__
+
                 _dispatch_fn = _FnTool(functions=[_wrapped_dispatch])
                 _toolset = ToolSet()
                 _toolset.add(_dispatch_fn)
@@ -621,14 +625,18 @@ async def run_orchestrator(alert_text: str) -> AsyncGenerator[dict, None]:
                         break
                     else:
                         # Try to fetch messages — the run may have completed
-                        # but streaming didn't capture the text
+                        # but streaming didn't capture the text.
+                        # Only take the LAST assistant message to avoid
+                        # duplicating previous turns in multi-turn threads.
                         messages = agents_client.messages.list(thread_id=thread.id)
                         text = ""
-                        for msg in reversed(list(messages)):
+                        for msg in messages:
                             if msg.role == "assistant":
+                                text = ""
                                 for block in msg.content:
                                     if hasattr(block, "text"):
                                         text += block.text.value + "\n"
+                                break  # first item is the most recent
                         if text:
                             clean = SSEEventHandler._THINKING_RE.sub('', text).strip()
                             _put("message", {"text": clean})
@@ -1121,6 +1129,10 @@ async def run_orchestrator_session(
                     _fn_output_cache["dispatch_field_engineer"] = result
                     return result
 
+                # SDK uses __name__ to match the function the agent calls
+                _wrapped_dispatch.__name__ = "dispatch_field_engineer"
+                _wrapped_dispatch.__doc__ = dispatch_field_engineer.__doc__
+
                 _dispatch_fn = _FnTool(functions=[_wrapped_dispatch])
                 _toolset = ToolSet()
                 _toolset.add(_dispatch_fn)
@@ -1210,13 +1222,17 @@ async def run_orchestrator_session(
                         _put("message", {"text": clean})
                         break
                     else:
+                        # Only take the LAST assistant message to avoid
+                        # duplicating previous turns in multi-turn threads.
                         messages = agents_client.messages.list(thread_id=thread_id)
                         text = ""
-                        for msg in reversed(list(messages)):
+                        for msg in messages:
                             if msg.role == "assistant":
+                                text = ""
                                 for block in msg.content:
                                     if hasattr(block, "text"):
                                         text += block.text.value + "\n"
+                                break  # first item is the most recent
                         if text:
                             clean = SSEEventHandler._THINKING_RE.sub('', text).strip()
                             _put("message", {"text": clean})

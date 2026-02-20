@@ -13,22 +13,16 @@ export function ResizableTerminal({ children, visible }: ResizableTerminalProps)
   if (!visible) return null;
 
   return (
-    <div className="shrink-0 bg-neutral-bg2 border-t border-border flex flex-col">
-      {/* Drag handle — top edge (outside sized container so always accessible) */}
+    <div className="shrink-0 bg-neutral-bg2 flex flex-col">
+      {/* Drag handle — blends with surroundings, demarcated by borders */}
       <div
-        className="h-4 cursor-row-resize shrink-0
-                   hover:bg-brand/10 active:bg-brand/20 transition-colors z-10
-                   flex items-center justify-center group/handle"
+        className="h-5 cursor-row-resize shrink-0 border-y border-border
+                   hover:bg-neutral-bg3 active:bg-brand/10
+                   transition-colors z-10 flex items-center justify-center group/handle"
         {...handleProps}
       >
-        <svg width="16" height="14" viewBox="0 0 16 14" className="text-text-muted/40 group-hover/handle:text-brand/60 transition-colors">
-          {/* Up chevron */}
-          <polyline points="4,5 8,1.5 12,5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          {/* Center bar */}
-          <rect x="2" y="6" width="12" height="2" rx="1" fill="currentColor" />
-          {/* Down chevron */}
-          <polyline points="4,9 8,12.5 12,9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <div className="w-10 h-1.5 rounded-full bg-text-muted/20
+                        group-hover/handle:bg-brand/40 transition-colors" />
       </div>
       <div style={{ height }} className="overflow-hidden">
         {children}

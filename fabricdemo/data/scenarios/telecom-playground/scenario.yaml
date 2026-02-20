@@ -158,6 +158,7 @@ graph_styles:
     AmplifierSite:   { color: "#10B981", size: 16, icon: "amplifier" }
     Advisory:        { color: "#EF4444", size: 18, icon: "advisory" }
     Sensor:          { color: "#22D3EE", size: 10, icon: "sensor" }
+    Depot:           { color: "#6366F1", size: 16, icon: "depot" }
     DutyRoster:      { color: "#F97316", size: 14, icon: "person" }
 
 # ---------------------------------------------------------------------------

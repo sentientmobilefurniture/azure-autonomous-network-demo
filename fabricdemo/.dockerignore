@@ -26,6 +26,7 @@ frontend/dist
 
 # Scenario data — bulk CSVs/docs excluded, YAML manifests included
 data
+!data/architecture_graph.json
 !data/scenarios/
 !data/scenarios/*/
 !data/scenarios/*/scenario.yaml

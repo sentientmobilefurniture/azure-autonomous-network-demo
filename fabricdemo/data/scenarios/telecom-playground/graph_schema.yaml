@@ -117,11 +117,20 @@ vertices:
       Latitude: Double
       Longitude: Double
 
+  - label: Depot
+    csv_file: DimDepot.csv
+    id_column: DepotId
+    partition_key: depot
+    properties: [DepotId, DepotName, City, Region, DepotType, Latitude, Longitude, ServicedEntityId, ServicedEntityType]
+    property_types:
+      Latitude: Double
+      Longitude: Double
+
   - label: DutyRoster
     csv_file: DimDutyRoster.csv
     id_column: RosterId
     partition_key: dutyroster
-    properties: [RosterId, PersonName, Email, Phone, City, Region, ShiftStart, ShiftEnd, Role, HomeBase, VehicleId]
+    properties: [RosterId, PersonName, Email, Phone, City, Region, ShiftStart, ShiftEnd, Role, HomeBase, VehicleId, DepotId]
 
   - label: Advisory
     csv_file: DimAdvisory.csv
@@ -410,3 +419,45 @@ edges:
       label: AmplifierSite
       property: SiteId
       column: MonitoredEntityId
+
+  # DutyRoster stationed_at Depot
+  - label: stationed_at
+    csv_file: DimDutyRoster.csv
+    source:
+      label: DutyRoster
+      property: RosterId
+      column: RosterId
+    target:
+      label: Depot
+      property: DepotId
+      column: DepotId
+
+  # Depot services CoreRouter
+  - label: services
+    csv_file: DimDepot.csv
+    filter:
+      column: ServicedEntityType
+      value: CoreRouter
+    source:
+      label: Depot
+      property: DepotId
+      column: DepotId
+    target:
+      label: CoreRouter
+      property: RouterId
+      column: ServicedEntityId
+
+  # Depot services AmplifierSite
+  - label: services
+    csv_file: DimDepot.csv
+    filter:
+      column: ServicedEntityType
+      value: AmplifierSite
+    source:
+      label: Depot
+      property: DepotId
+      column: DepotId
+    target:
+      label: AmplifierSite
+      property: SiteId
+      column: ServicedEntityId

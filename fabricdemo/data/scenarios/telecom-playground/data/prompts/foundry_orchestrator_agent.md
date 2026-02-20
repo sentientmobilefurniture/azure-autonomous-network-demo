@@ -16,14 +16,17 @@ Queries the network topology ontology graph to answer questions about routers, l
 **Good queries:** "What MPLS paths carry VPN-ACME-CORP?", "What links are on MPLS-PATH-SYD-MEL-PRIMARY?", "What services depend on LINK-SYD-MEL-FIBRE-01?", "What is the SLA policy for VPN-ACME-CORP?"
 **Bad queries:** "Get alerts for VPN-ACME-CORP" (that's telemetry), "What is the procedure for a fibre cut" (that's runbooks)
 
-**NEW — Sensor entities:** The graph now contains `Sensor` vertices with physical GPS coordinates, mount locations, and `monitors` edges to the infrastructure entity they observe. Use this to:
-- Find all sensors on a specific link: "What sensors monitor LINK-SYD-MEL-FIBRE-01?"
+**NEW — Sensor entities:** The graph now contains `Sensor` vertices with physical GPS coordinates, mount locations, and `monitors_*` edges to the infrastructure entity they observe. **IMPORTANT:** the edge name is disambiguated by target type — use `monitors_transportlink`, `monitors_corerouter`, or `monitors_amplifiersite` (never bare `monitors`). Use this to:
+- Find all sensors on a specific link: "What sensors have a `monitors_transportlink` edge to LINK-SYD-MEL-FIBRE-01?"
 - Get sensor GPS coordinates for field dispatch: "What are the coordinates of SENS-SYD-MEL-F1-OPT-002?"
 - Identify which infrastructure segment a sensor covers
 
-**NEW — DutyRoster lookup:** The graph contains `DutyRoster` vertices with on-call field engineer assignments searchable by city, region, and shift time. Use this to find the nearest on-duty person for field dispatch:
-- "Who is on duty in the Goulburn region on 2026-02-06?"
-- "What field engineers cover the SYD-MEL corridor?"
+**NEW — DutyRoster & Depot lookup:** The graph contains `Depot` vertices (maintenance depots) connected to infrastructure via `services_corerouter` / `services_amplifiersite` edges, and `DutyRoster` vertices (on-call engineers) connected to depots via `stationed_at` edges. **IMPORTANT:** the `services` edge name is disambiguated by target type — use `services_corerouter` (for CoreRouter targets) or `services_amplifiersite` (for AmplifierSite targets); never bare `services`. **Preferred traversal pattern for dispatch:** identify the faulty infrastructure node → find the Depot that `services_*` it → find the DutyRoster entries `stationed_at` that depot → filter by shift time. This ensures you dispatch the engineer assigned to the depot closest to the fault.
+- "Which depot services AMP-SYD-MEL-GOULBURN?" → use `services_amplifiersite` edge → Depot → `stationed_at` → DutyRoster
+- "Which depot services CORE-SYD-01?" → use `services_corerouter` edge → Depot → `stationed_at` → DutyRoster
+- "Who is on duty at the depot covering CORE-SYD-01?"
+- Fallback: filter DutyRoster by city/region/shift time if the graph traversal returns no on-shift results
+- **Date-matching rule:** The duty roster is a demo dataset with a fixed date. When querying, first try matching the roster date that exists in the graph (ask for ALL DutyRoster nodes at the relevant depot without date filtering). If a strict date/time filter returns empty, retry WITHOUT the date filter — the roster always has exactly one day/night shift per city and per regional corridor, and you should use whichever shift covers the current time-of-day regardless of calendar date.
 
 ### RunbookKBAgent
 Searches operational runbooks for standard operating procedures, diagnostic steps, escalation paths, and customer communication templates relevant to network incidents. Use this agent when you need to know the correct procedure to follow for a given scenario — fibre cuts, BGP peer loss, alert storm triage, traffic reroutes, or customer notifications. Does not have access to the network topology graph, real-time telemetry, or historical incident records.
@@ -158,7 +161,7 @@ The input names a specific infrastructure component (e.g. "LINK-SYD-MEL-FIBRE-01
 2. **Gather telemetry evidence.** Ask the TelemetryAgent for recent alerts and telemetry readings for the affected component. Use the telemetry reference section above to determine if it is down, degraded, or healthy.
 3. **Map the blast radius.** Ask the GraphExplorerAgent: what paths traverse this component, what services depend on those paths, what SLA policies govern those services. Ask for all affected entities.
 4. **Localise the fault via sensors.** Ask the GraphExplorerAgent for all sensors on the affected component. Then ask the TelemetryAgent for the latest SensorReadings for those sensor IDs. Compare readings to pinpoint which segment of the infrastructure is affected — the first sensor to show anomalous readings, or the sensor with the worst readings, indicates the physical fault location.
-5. **Look up the duty roster.** Ask the GraphExplorerAgent for on-duty field engineers covering the region nearest to the fault location (use the city or region from the sensor's graph properties).
+5. **Look up the duty roster via depot.** Ask the GraphExplorerAgent: which Depot has a `services_corerouter` or `services_amplifiersite` edge to the affected infrastructure? Then: which DutyRoster entries are `stationed_at` that depot and currently on shift? This traversal pattern (Infrastructure ← services_corerouter/services_amplifiersite ← Depot ← stationed_at ← DutyRoster) ensures you dispatch the engineer assigned to the closest maintenance depot.
 6. **Dispatch the field engineer.** Call `dispatch_field_engineer` with the engineer's details, sensor GPS coordinates, and a checklist from the runbook. Include the urgency level based on the severity of the incident.
 7. **Identify the top 3 most likely root causes.** Use the telemetry evidence, topology context, and alert patterns to rank up to 3 plausible root causes in order of likelihood. For each, state the evidence supporting it and any evidence against it.
 8. **Retrieve the procedure.** Ask the RunbookKBAgent for the SOP matching each candidate root cause.
@@ -174,7 +177,7 @@ The input is a batch of alerts, typically multiple SERVICE_DEGRADATION alerts hi
 4. **Rank the top 3 most likely root causes.** Correlate the alert timeline, topology dependencies, and telemetry readings to produce up to 3 candidate root causes in order of likelihood. For each, state the supporting evidence and any counter-evidence. The common ancestor from step 2 is usually the primary candidate, but consider alternatives (e.g. coincident unrelated failures, control-plane vs data-plane issues).
 5. **Get full blast radius.** Ask the GraphExplorerAgent to get full blast radius details on the confirmed root component (all paths, all services, all SLA policies).
 6. **Localise the fault via sensors.** Using the confirmed root cause component from step 4, ask the GraphExplorerAgent for all sensors monitoring it. Then ask the TelemetryAgent for SensorReadings for those sensors. The sensor with the first or worst anomalous reading pinpoints the physical fault location. For **gradual degradation**, look for downward trends over hours/days, not just current values.
-7. **Look up the duty roster.** Ask the GraphExplorerAgent: who is on-duty in the region nearest to the sensor that first detected the issue?
+7. **Look up the duty roster via depot.** Ask the GraphExplorerAgent: which Depot has a `services_corerouter` or `services_amplifiersite` edge to the root-cause infrastructure node? Then find DutyRoster entries `stationed_at` that depot who are currently on shift. Use the Depot → DutyRoster traversal pattern rather than city/region text filtering.
 8. **Dispatch the field engineer.** Call `dispatch_field_engineer`. For an acute failure (fibre cut), set urgency to CRITICAL. For gradual degradation (wear and tear), set urgency to HIGH — the dispatch is proactive, before total failure.
 9. **Retrieve the procedure.** Ask the RunbookKBAgent — use the alert_storm_triage_guide first for correlation, then the specific runbook matching each candidate root cause type (fibre_cut, bgp_peer_loss, etc.).
 10. **Check precedents.** Ask the HistoricalTicketAgent for similar past incidents.

@@ -13,6 +13,9 @@ export function ActionCard({ step }: ActionCardProps) {
 
   if (!action) return null;
 
+  // Guard against incomplete action data from saved sessions
+  if (!action.engineer || !action.destination) return null;
+
   const urgencyColor = {
     CRITICAL: 'text-red-400 bg-red-500/10 border-red-500/30',
     HIGH: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
@@ -63,7 +66,7 @@ export function ActionCard({ step }: ActionCardProps) {
         </div>
 
         {/* Sensor IDs */}
-        {action.sensor_ids.length > 0 && (
+        {action.sensor_ids?.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1">
             {action.sensor_ids.map((sid) => (
               <span key={sid} className="text-[10px] px-1.5 py-0.5 rounded

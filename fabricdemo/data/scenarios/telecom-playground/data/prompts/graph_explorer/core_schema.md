@@ -314,56 +314,105 @@ monitors a specific entity, and has GPS coordinates for field dispatch.
 | SENS-AMP-ALBURY-VIB-001 | Vibration | AMP-SYD-MEL-ALBURY | AmplifierSite | Amplifier housing vibration monitor | -36.074, 146.914 |
 
 ### Relationships
-- `(Sensor)-[monitors]->(TransportLink|CoreRouter|AmplifierSite)` — which infrastructure this sensor observes
+- `(Sensor)-[monitors_transportlink]->(TransportLink)` — sensor observes a transport link
+- `(Sensor)-[monitors_corerouter]->(CoreRouter)` — sensor observes a core router
+- `(Sensor)-[monitors_amplifiersite]->(AmplifierSite)` — sensor observes an amplifier site
+
+**IMPORTANT:** In the Fabric GQL graph, the `monitors` relationship is **disambiguated by target type**. You MUST use the suffixed edge name (`monitors_transportlink`, `monitors_corerouter`, or `monitors_amplifiersite`) — a bare `monitors` edge will return zero results.
 
 ### Key query patterns
-- "What sensors are on LINK-SYD-MEL-FIBRE-01?" → find all Sensor nodes with `monitors` edge to that link
+- "What sensors are on LINK-SYD-MEL-FIBRE-01?" → `MATCH (s:Sensor)-[:monitors_transportlink]->(tl:TransportLink {LinkId:'LINK-SYD-MEL-FIBRE-01'}) RETURN s.SensorId, s.SensorType, s.MountLocation, s.Latitude, s.Longitude`
 - "Where is sensor SENS-SYD-MEL-F1-OPT-002 located?" → return Latitude, Longitude, MountLocation
 - "What sensors are near Goulburn?" → filter by Latitude/Longitude proximity or MountLocation text
+
+---
+
+### Depot (6 instances)
+
+Maintenance depots where field engineers are stationed. Each depot services a specific network infrastructure entity (a CoreRouter or an AmplifierSite). City hub depots service the city's core router; regional depots service amplifier sites along inter-city corridors.
+
+| Column | Type | Purpose | Example Value |
+|---|---|---|---|
+| **DepotId** | String | **Primary key.** | `DEPOT-SYD-CAMPBELLTOWN` |
+| DepotName | String | Human-readable depot name. | `Sydney Campbelltown Hub` |
+| City | String | City where the depot is located. | `Sydney` |
+| Region | String | State / region. | `NSW` |
+| DepotType | String | `CityHub` (metro) or `RegionalDepot` (inter-city corridor). | `CityHub` |
+| Latitude | Double | GPS latitude (WGS84). | `-34.0650` |
+| Longitude | Double | GPS longitude (WGS84). | `150.8140` |
+| ServicedEntityId | String | FK to the infrastructure entity this depot services. | `CORE-SYD-01` |
+| ServicedEntityType | String | Type of serviced entity: `CoreRouter` or `AmplifierSite`. | `CoreRouter` |
+
+**All instances:**
+
+| DepotId | DepotName | City | DepotType | ServicedEntityId | ServicedEntityType |
+|---|---|---|---|---|---|
+| DEPOT-SYD-CAMPBELLTOWN | Sydney Campbelltown Hub | Sydney | CityHub | CORE-SYD-01 | CoreRouter |
+| DEPOT-MEL-CLAYTON | Melbourne Clayton Hub | Melbourne | CityHub | CORE-MEL-01 | CoreRouter |
+| DEPOT-BNE-EAGLEFARM | Brisbane Eagle Farm Hub | Brisbane | CityHub | CORE-BNE-01 | CoreRouter |
+| DEPOT-GOULBURN | Goulburn Regional Depot | Goulburn | RegionalDepot | AMP-SYD-MEL-GOULBURN | AmplifierSite |
+| DEPOT-ALBURY | Albury Regional Depot | Albury | RegionalDepot | AMP-SYD-MEL-ALBURY | AmplifierSite |
+| DEPOT-COFFS | Coffs Harbour Regional Depot | Coffs Harbour | RegionalDepot | AMP-SYD-BNE-COFFS | AmplifierSite |
+
+### Relationships
+- `(DutyRoster)-[stationed_at]->(Depot)` — which depot the engineer works from
+- `(Depot)-[services_corerouter]->(CoreRouter)` — depot maintains a core router
+- `(Depot)-[services_amplifiersite]->(AmplifierSite)` — depot maintains an amplifier site
+
+**IMPORTANT:** In the Fabric GQL graph, the `services` relationship is **disambiguated by target type**. You MUST use `services_corerouter` or `services_amplifiersite` — a bare `services` edge will return zero results.
+
+### Key query patterns
+- "Which depot covers the Goulburn amplifier?" → `MATCH (d:Depot)-[:services_amplifiersite]->(a:AmplifierSite {SiteId:'AMP-SYD-MEL-GOULBURN'}) RETURN d`
+- "Which depot covers CORE-SYD-01?" → `MATCH (d:Depot)-[:services_corerouter]->(cr:CoreRouter {RouterId:'CORE-SYD-01'}) RETURN d`
+- "Who is stationed at the depot that services CORE-SYD-01?" → `MATCH (dr:DutyRoster)-[:stationed_at]->(d:Depot)-[:services_corerouter]->(cr:CoreRouter {RouterId:'CORE-SYD-01'}) RETURN dr.PersonName, dr.Email, dr.Phone`
+- "Fault at AMP-SYD-MEL-ALBURY — who can respond?" → `MATCH (dr:DutyRoster)-[:stationed_at]->(d:Depot)-[:services_amplifiersite]->(a:AmplifierSite {SiteId:'AMP-SYD-MEL-ALBURY'}) RETURN dr.PersonName, dr.Email, dr.Phone`
 
 ---
 
 ### DutyRoster (8 instances)
 
 On-call field engineer assignments. Searchable by city/region and shift time (ShiftStart/ShiftEnd).
-DutyRoster is a disconnected entity — no edges to other entities. It is a lookup table for field dispatch.
+Each engineer is stationed at a Depot, which in turn services a CoreRouter or AmplifierSite.
 
 | Column | Type | Purpose | Example Value |
 |---|---|---|---|
-| **RosterId** | String | **Primary key.** | `DUTY-SYD-2026-02-06-DAY` |
+| **RosterId** | String | **Primary key.** | `DUTY-SYD-2026-02-20-DAY` |
 | PersonName | String | Full name of the engineer. | `Marcus Chen` |
 | Email | String | Email address. | `marcus.chen@austtelco.com.au` |
 | Phone | String | Phone number. | `+61-412-555-101` |
 | City | String | Assignment city. | `Sydney` |
 | Region | String | State/region. | `NSW` |
-| ShiftStart | String | ISO8601 shift start time. | `2026-02-06T06:00:00Z` |
-| ShiftEnd | String | ISO8601 shift end time. | `2026-02-06T18:00:00Z` |
+| ShiftStart | String | ISO8601 shift start time. | `2026-02-20T06:00:00Z` |
+| ShiftEnd | String | ISO8601 shift end time. | `2026-02-20T18:00:00Z` |
 | Role | String | `FieldEngineer` (city) or `RegionalFieldEngineer` (inter-city corridors). | `FieldEngineer` |
 | HomeBase | String | Depot location with lat/long. | `Campbelltown Depot -34.0650 150.8140` |
 | VehicleId | String | Assigned vehicle ID. | `VEH-SYD-03` |
+| DepotId | String | FK to Depot this engineer is stationed at. | `DEPOT-SYD-CAMPBELLTOWN` |
 
 **All instances:**
 
-| RosterId | PersonName | City | Region | Role | ShiftStart | ShiftEnd |
-|---|---|---|---|---|---|---|
-| DUTY-SYD-2026-02-06-DAY | Marcus Chen | Sydney | NSW | FieldEngineer | 06:00 | 18:00 |
-| DUTY-SYD-2026-02-06-NIGHT | Sarah O'Brien | Sydney | NSW | FieldEngineer | 18:00 | 06:00+1 |
-| DUTY-MEL-2026-02-06-DAY | James Nguyen | Melbourne | VIC | FieldEngineer | 06:00 | 18:00 |
-| DUTY-MEL-2026-02-06-NIGHT | Priya Sharma | Melbourne | VIC | FieldEngineer | 18:00 | 06:00+1 |
-| DUTY-BNE-2026-02-06-DAY | Tom Williams | Brisbane | QLD | FieldEngineer | 06:00 | 18:00 |
-| DUTY-REGIONAL-SYD-MEL-2026-02-06 | Dave Mitchell | Goulburn | NSW | RegionalFieldEngineer | 06:00 | 18:00 |
-| DUTY-REGIONAL-SYD-MEL-2026-02-06-SOUTH | Karen Lee | Albury | NSW | RegionalFieldEngineer | 06:00 | 18:00 |
-| DUTY-REGIONAL-SYD-BNE-2026-02-06 | Paul Jacobs | Coffs Harbour | NSW | RegionalFieldEngineer | 06:00 | 18:00 |
+| RosterId | PersonName | City | Region | Role | DepotId | ShiftStart | ShiftEnd |
+|---|---|---|---|---|---|---|---|
+| DUTY-SYD-2026-02-20-DAY | Marcus Chen | Sydney | NSW | FieldEngineer | DEPOT-SYD-CAMPBELLTOWN | 06:00 | 18:00 |
+| DUTY-SYD-2026-02-20-NIGHT | Sarah O'Brien | Sydney | NSW | FieldEngineer | DEPOT-SYD-CAMPBELLTOWN | 18:00 | 06:00+1 |
+| DUTY-MEL-2026-02-20-DAY | James Nguyen | Melbourne | VIC | FieldEngineer | DEPOT-MEL-CLAYTON | 06:00 | 18:00 |
+| DUTY-MEL-2026-02-20-NIGHT | Priya Sharma | Melbourne | VIC | FieldEngineer | DEPOT-MEL-CLAYTON | 18:00 | 06:00+1 |
+| DUTY-BNE-2026-02-20-DAY | Tom Williams | Brisbane | QLD | FieldEngineer | DEPOT-BNE-EAGLEFARM | 06:00 | 18:00 |
+| DUTY-REGIONAL-SYD-MEL-2026-02-20 | Dave Mitchell | Goulburn | NSW | RegionalFieldEngineer | DEPOT-GOULBURN | 06:00 | 18:00 |
+| DUTY-REGIONAL-SYD-MEL-2026-02-20-SOUTH | Karen Lee | Albury | NSW | RegionalFieldEngineer | DEPOT-ALBURY | 06:00 | 18:00 |
+| DUTY-REGIONAL-SYD-BNE-2026-02-20 | Paul Jacobs | Coffs Harbour | NSW | RegionalFieldEngineer | DEPOT-COFFS | 06:00 | 18:00 |
 
 ### Properties
 - `Email`, `Phone` — contact details for dispatch
 - `HomeBase` — depot location with lat/long for proximity matching
 - `VehicleId` — assigned vehicle ID
+- `DepotId` — FK to the Depot this engineer is stationed at
 
 ### Key query patterns
 - "Who is on duty in Goulburn region?" → filter by City or Region
 - "What field engineers cover the SYD-MEL corridor?" → filter by Role == RegionalFieldEngineer and Region == NSW
-- "Who is on duty at 14:31 on 2026-02-06?" → filter ShiftStart <= timestamp <= ShiftEnd
+- "Who is on duty at 14:31 on 2026-02-20?" → filter ShiftStart <= timestamp <= ShiftEnd
+- "Fault at AMP-SYD-MEL-GOULBURN — who can respond?" → `MATCH (dr:DutyRoster)-[:stationed_at]->(d:Depot)-[:services_amplifiersite]->(a:AmplifierSite {SiteId:'AMP-SYD-MEL-GOULBURN'}) RETURN dr.PersonName, dr.Email, dr.Phone`
 
 ---
 
@@ -417,6 +466,30 @@ An optical amplifier site boosts the signal on a transport link. Long-haul links
 
 A vendor advisory affects a router running a vulnerable firmware version. Pre-mapped from Advisory.AffectedVersions matching CoreRouter.FirmwareVersion. Query pattern: "Are any of our routers running firmware affected by known advisories?" and "Could the OSPF flaps on CORE-SYD-01 be caused by a known bug?"
 
-### monitors: Sensor → TransportLink | CoreRouter | AmplifierSite
+### monitors_transportlink: Sensor → TransportLink
+### monitors_corerouter: Sensor → CoreRouter
+### monitors_amplifiersite: Sensor → AmplifierSite
 
-A sensor physically monitors an infrastructure entity. The edge's target type depends on `MonitoredEntityType` in DimSensor.csv. Query pattern: "What sensors monitor LINK-SYD-MEL-FIBRE-01?" → find all Sensor nodes with `monitors` edge to that link. "Where is the closest sensor to the Goulburn amplifier?" → find Sensor nodes monitoring AMP-SYD-MEL-GOULBURN.
+A sensor physically monitors an infrastructure entity. The relationship name is **disambiguated by target type** in Fabric GQL — always use the suffixed name.
+
+| If monitored entity is... | Use edge name | Example |
+|---|---|---|
+| TransportLink | `monitors_transportlink` | `MATCH (s:Sensor)-[:monitors_transportlink]->(tl:TransportLink {LinkId:'LINK-SYD-MEL-FIBRE-01'}) RETURN s` |
+| CoreRouter | `monitors_corerouter` | `MATCH (s:Sensor)-[:monitors_corerouter]->(cr:CoreRouter {RouterId:'CORE-SYD-01'}) RETURN s` |
+| AmplifierSite | `monitors_amplifiersite` | `MATCH (s:Sensor)-[:monitors_amplifiersite]->(a:AmplifierSite {SiteId:'AMP-SYD-MEL-GOULBURN'}) RETURN s` |
+
+### stationed_at: DutyRoster → Depot
+
+A field engineer is stationed at a maintenance depot. Query pattern: "Who is stationed at DEPOT-GOULBURN?" → find all DutyRoster nodes with `stationed_at` edge to that depot.
+
+### services_corerouter: Depot → CoreRouter
+### services_amplifiersite: Depot → AmplifierSite
+
+A depot services a specific infrastructure entity. City hub depots service CoreRouters; regional depots service AmplifierSites. The relationship name is **disambiguated by target type** in Fabric GQL — always use the suffixed name.
+
+| If serviced entity is... | Use edge name | Example |
+|---|---|---|
+| CoreRouter | `services_corerouter` | `MATCH (d:Depot)-[:services_corerouter]->(cr:CoreRouter {RouterId:'CORE-SYD-01'}) RETURN d` |
+| AmplifierSite | `services_amplifiersite` | `MATCH (d:Depot)-[:services_amplifiersite]->(a:AmplifierSite {SiteId:'AMP-SYD-MEL-GOULBURN'}) RETURN d` |
+
+**KEY TRAVERSAL PATTERN:** To find the right engineer for a fault: `(Infrastructure) ←[:services_corerouter or :services_amplifiersite]- (Depot) ←[:stationed_at]- (DutyRoster)`.

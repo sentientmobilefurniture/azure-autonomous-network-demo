@@ -94,70 +94,67 @@ export default function App() {
           }} />
         ) : (
           /* ---- Investigate tab ---- */
-          <div className="flex-1 flex flex-col min-h-0">
-            {/* Top: Graph + Chat + Sidebar (fills available space) */}
-            <div className="flex-1 flex min-h-0">
-              {/* Main content column: graph (resizable) + chat (scrollable) */}
-              <main className="flex-1 min-w-0 flex flex-col min-h-0">
-                {/* Graph topology — resizable from bottom edge */}
-                <ResizableGraph>
-                  <MetricsBar />
-                </ResizableGraph>
+          <div className="flex-1 flex min-h-0">
+            {/* Left column: graph + chat + terminal */}
+            <main className="flex-1 min-w-0 flex flex-col min-h-0">
+              {/* Graph topology — resizable from bottom edge */}
+              <ResizableGraph>
+                <MetricsBar />
+              </ResizableGraph>
 
-                {/* Chat section — scroll area + pinned input */}
-                <div className="flex-1 min-h-0 flex flex-col">
-                  {/* Scrollable chat thread */}
-                  <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-                    <ChatPanel
-                      messages={messages}
-                      currentThinking={thinking}
-                    />
-                  </div>
-
-                  {/* Chat input — pinned at bottom of chat section */}
-                  <ChatInput
-                    onSubmit={handleSubmit}
-                    onCancel={cancelSession}
-                    running={running}
-                    exampleQuestions={SCENARIO.exampleQuestions}
+              {/* Chat section — scroll area + pinned input */}
+              <div className="flex-1 min-h-0 flex flex-col">
+                {/* Scrollable chat thread */}
+                <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+                  <ChatPanel
+                    messages={messages}
+                    currentThinking={thinking}
                   />
                 </div>
-              </main>
 
-              {/* Session sidebar — resizable from left edge */}
-              {!sidebarCollapsed ? (
-                <ResizableSidebar>
-                  <SessionSidebar
-                    sessions={sessions}
-                    loading={sessionsLoading}
-                    onSelect={(id) => viewSession(id)}
-                    onDelete={(id) => deleteSession(id)}
-                    onNewSession={handleNewSession}
-                    activeSessionId={activeSessionId}
-                    collapsed={sidebarCollapsed}
-                    onToggleCollapse={() => setSidebarCollapsed(v => !v)}
-                  />
-                </ResizableSidebar>
-              ) : (
-                <aside className="w-8 shrink-0">
-                  <SessionSidebar
-                    sessions={sessions}
-                    loading={sessionsLoading}
-                    onSelect={(id) => viewSession(id)}
-                    onDelete={(id) => deleteSession(id)}
-                    onNewSession={handleNewSession}
-                    activeSessionId={activeSessionId}
-                    collapsed={sidebarCollapsed}
-                    onToggleCollapse={() => setSidebarCollapsed(v => !v)}
-                  />
-                </aside>
-              )}
-            </div>
+                {/* Chat input — pinned at bottom of chat section */}
+                <ChatInput
+                  onSubmit={handleSubmit}
+                  onCancel={cancelSession}
+                  running={running}
+                  exampleQuestions={SCENARIO.exampleQuestions}
+                />
+              </div>
 
-            {/* Bottom: Terminal — resizable from top edge */}
-            <ResizableTerminal visible={terminalVisible}>
-              <TerminalPanel />
-            </ResizableTerminal>
+              {/* Terminal — resizable from top edge, aligned with chat */}
+              <ResizableTerminal visible={terminalVisible}>
+                <TerminalPanel />
+              </ResizableTerminal>
+            </main>
+
+            {/* Session sidebar — full height, resizable from left edge */}
+            {!sidebarCollapsed ? (
+              <ResizableSidebar>
+                <SessionSidebar
+                  sessions={sessions}
+                  loading={sessionsLoading}
+                  onSelect={(id) => viewSession(id)}
+                  onDelete={(id) => deleteSession(id)}
+                  onNewSession={handleNewSession}
+                  activeSessionId={activeSessionId}
+                  collapsed={sidebarCollapsed}
+                  onToggleCollapse={() => setSidebarCollapsed(v => !v)}
+                />
+              </ResizableSidebar>
+            ) : (
+              <aside className="w-8 shrink-0">
+                <SessionSidebar
+                  sessions={sessions}
+                  loading={sessionsLoading}
+                  onSelect={(id) => viewSession(id)}
+                  onDelete={(id) => deleteSession(id)}
+                  onNewSession={handleNewSession}
+                  activeSessionId={activeSessionId}
+                  collapsed={sidebarCollapsed}
+                  onToggleCollapse={() => setSidebarCollapsed(v => !v)}
+                />
+              </aside>
+            )}
           </div>
         )}
       </div>

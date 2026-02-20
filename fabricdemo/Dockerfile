@@ -57,6 +57,9 @@ COPY azure_config.env /app/azure_config.env
 # ── Scenario data (YAML manifests for runtime config) ─────────────
 COPY data/scenarios/ /app/data/scenarios/
 
+# ── Architecture graph (static resource diagram for Resources tab) ─
+COPY data/architecture_graph.json /app/data/architecture_graph.json
+
 # ── Frontend static files ─────────────────────────────────────────
 COPY --from=frontend-build /build/dist /usr/share/nginx/html
 

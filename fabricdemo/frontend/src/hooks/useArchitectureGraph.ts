@@ -25,7 +25,11 @@ export function useArchitectureGraph(): ArchitectureGraphData {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/config/architecture');
+      // Try static architecture file first, fall back to dynamic resource graph
+      let res = await fetch('/api/config/architecture');
+      if (res.status === 404) {
+        res = await fetch('/api/config/resources');
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setNodes(data.nodes ?? []);
