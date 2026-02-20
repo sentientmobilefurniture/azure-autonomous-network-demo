@@ -64,6 +64,12 @@ class SessionManager:
                     params={"limit": 200},
                 )
                 resp.raise_for_status()
+            # Guard against empty response body (graph-query-api may return
+            # 200 with no body if Cosmos is not yet initialised).
+            body = resp.text.strip()
+            if not body:
+                logger.info("Session recovery: empty response from graph-query-api (no sessions)")
+                return
             sessions = resp.json().get("sessions", [])
             for s in sessions:
                 if s.get("status") == "in_progress":

@@ -32,12 +32,6 @@ param storageAccountName string
 @description('Name of the blob container for runbooks')
 param storageContainerName string
 
-@description('Resource ID of the Cosmos DB NoSQL account')
-param cosmosAccountId string
-
-@description('Name of the Cosmos DB NoSQL account')
-param cosmosAccountName string
-
 @description('GPT model capacity in 1K TPM units (e.g. 10 = 10K tokens/min)')
 param gptCapacity int = 10
 
@@ -146,46 +140,6 @@ resource storageConnection 'Microsoft.CognitiveServices/accounts/connections@202
 }
 
 // ---------------------------------------------------------------------------
-// Connection — Azure Storage Account (required by Capability Hosts)
-// Capability hosts reject AzureBlob; they need AzureStorageAccount category.
-// ---------------------------------------------------------------------------
-
-resource storageAccountConnection 'Microsoft.CognitiveServices/accounts/connections@2025-06-01' = {
-  parent: foundry
-  name: 'storage-account-connection'
-  properties: {
-    authType: 'AAD'
-    category: 'AzureStorageAccount'
-    target: 'https://${storageAccountName}.blob.${environment().suffixes.storage}'
-    isSharedToAll: true
-    metadata: {
-      AccountName: storageAccountName
-      ResourceId: storageAccountId
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Connection — Cosmos DB NoSQL (required by Capability Hosts for vector store)
-// vectorStoreConnections requires a CosmosDB-category connection.
-// ---------------------------------------------------------------------------
-
-resource cosmosConnection 'Microsoft.CognitiveServices/accounts/connections@2025-06-01' = {
-  parent: foundry
-  name: 'cosmos-connection'
-  properties: {
-    authType: 'AAD'
-    category: 'CosmosDb'
-    target: 'https://${cosmosAccountName}.documents.azure.com:443/'
-    isSharedToAll: true
-    metadata: {
-      AccountName: cosmosAccountName
-      ResourceId: cosmosAccountId
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // AI Foundry Project (child of the Foundry resource)
 // ---------------------------------------------------------------------------
 
@@ -204,37 +158,34 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
 }
 
 // ---------------------------------------------------------------------------
-// Capability Host (account-level) — required to initialise the Agent Service
-// data plane. Without this, the project exists in ARM but the SDK returns 404
+// Capability Hosts — required to initialise the Agent Service data plane.
+// Without these, the project exists in ARM but the SDK returns 404
 // "Project not found" for all agent / assistant operations.
 //
-// The account-level caphost is sufficient — the project inherits access.
-// A project-level caphost is NOT required and has undocumented validation
-// rules that differ from the account level, causing silent failures.
-//
-// All three connection arrays must be provided together:
-//   storageConnections      → AzureStorageAccount (blob/file storage)
-//   vectorStoreConnections  → CosmosDb (vector database)
-//   threadStorageConnections → CosmosDb (conversation thread storage)
+// Using 2025-04-01-preview: the caphost auto-configures its own storage,
+// vector, and thread backends. The 2025-06-01 GA API requires explicit
+// connection arrays with strict category validation that is unreliable.
 // ---------------------------------------------------------------------------
 
-resource accountCapabilityHost 'Microsoft.CognitiveServices/accounts/capabilityHosts@2025-06-01' = {
+resource accountCapabilityHost 'Microsoft.CognitiveServices/accounts/capabilityHosts@2025-04-01-preview' = {
   name: '${foundryName}-caphost'
   parent: foundry
   properties: {
     capabilityHostKind: 'Agents'
-    storageConnections: [
-      storageAccountConnection.name
-    ]
-    vectorStoreConnections: [
-      cosmosConnection.name
-    ]
-    threadStorageConnections: [
-      cosmosConnection.name
-    ]
   }
   dependsOn: [
     project
+  ]
+}
+
+resource projectCapabilityHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-04-01-preview' = {
+  name: '${projectName}-caphost'
+  parent: project
+  properties: {
+    capabilityHostKind: 'Agents'
+  }
+  dependsOn: [
+    accountCapabilityHost
   ]
 }
 
