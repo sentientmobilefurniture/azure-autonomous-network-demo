@@ -1,7 +1,8 @@
 # SOTA Implementation Plan v2 — Microsoft Agent Framework Migration
 
-> **Date**: 2026-02-21  
+> **Date**: 2026-02-21 (updated)  
 > **Framework**: `agent-framework` (`1.0.0rc1`)  
+> **Hosting**: Azure Web App (replacing Container Apps)  
 > **Principle**: Replace ALL custom orchestration code with the official Microsoft Agent Framework  
 > **Source code**: `/home/hanchoong/microsoft_skills/agent-framework/python/`
 
@@ -9,45 +10,100 @@
 
 ## Executive Summary
 
-v1 of the SOTA plan proposed `ImageBasedHostedAgentDefinition` + custom containers. This v2 takes a fundamentally different approach: **adopt `microsoft/agent-framework` as the runtime layer** and eliminate ALL custom orchestration plumbing.
+v1 of the SOTA plan proposed `ImageBasedHostedAgentDefinition` + custom containers. This v2 takes a fundamentally different approach: **adopt `microsoft/agent-framework` as the runtime layer**, **merge graph-query-api into a single FastAPI process**, and **deploy on Azure Web App** instead of Container Apps.
 
 The agent-framework already provides:
 - `AzureAIAgentsProvider` → wraps our Foundry agents as `Agent` instances
 - `HandoffOrchestrator` / `GroupChatOrchestrator` → replaces our custom `ConnectedAgentTool` orchestration loop
-- `AgentFunctionApp` → one-line Azure Functions hosting (or `from_agent_framework` for Hosted Agents)
-- `AG-UI` protocol → replaces our custom SSE bridge
-- `AgentSession` + `InMemoryHistoryProvider` → replaces our `session_manager.py`
 - `FunctionTool` → replaces our manual `FunctionToolDefinition` + `enable_auto_function_calls` wiring
-- `MCPTool` → native MCP support
 - Streaming via `agent.run(stream=True)` → replaces our 771-line `orchestrator.py`
 
-**Net result**: ~2,100 lines of backend Python eliminated, replaced by ~300 lines of framework integration.
+The infrastructure simplification:
+- **Merge** `graph-query-api/` into `api/` → single FastAPI process
+- **Delete** nginx, supervisord, multi-process Dockerfile
+- **Replace** Container App with Azure Web App → simpler deployment, no container registry
+- **Delete** OpenAPI proxy routers → FabricTool handles graph/telemetry queries natively
+
+**Net result**: ~2,400 lines of backend Python eliminated, ~200 lines of infra config eliminated, replaced by ~300 lines of framework integration. Single-process Web App deployment.
 
 ---
 
 ## Architecture: Before vs After
 
-### BEFORE (Current — 2,483 lines of custom code)
+### BEFORE (Current — Container App, 2 processes, nginx, supervisord)
 
 ```
-Container App
-├── api/ (FastAPI)
-│   ├── orchestrator.py (771 lines)
-│   │   ├── SSEEventHandler (custom AgentEventHandler subclass)
-│   │   ├── asyncio.Queue bridge (thread → async)
-│   │   ├── _parse_structured_output() (response parsing)
-│   │   ├── _run_in_thread() (background thread lifecycle)
-│   │   └── run_orchestrator_session() (async generator)
-│   ├── session_manager.py (367 lines)
-│   │   ├── Session lifecycle management
-│   │   ├── Multi-turn thread reuse
-│   │   └── Cosmos DB persistence
-│   ├── sessions.py (156 lines)
-│   │   ├── Session dataclass
-│   │   └── Subscriber fan-out (asyncio.Queue per SSE client)
-│   ├── agent_ids.py (235 lines)
-│   │   ├── TTL-cached agent discovery
-│   │   └── Foundry API polling
+Container App (single container, supervisord + nginx)
+├── nginx (:80) — reverse proxy + SPA static files
+├── api/ (:8000 — FastAPI process #1)
+│   ├── orchestrator.py (771 lines) — SSE bridge
+│   ├── session_manager.py (367 lines) — session lifecycle
+│   ├── sessions.py (156 lines) — session dataclass
+│   ├── agent_ids.py (235 lines) — agent discovery
+│   ├── dispatch.py (139 lines) — FunctionTool
+│   └── routers/sessions.py (219 lines) — REST/SSE endpoints
+│
+├── graph-query-api/ (:8100 — FastAPI process #2)
+│   ├── router_graph.py (76) — GQL proxy for agents
+│   ├── router_telemetry.py (74) — KQL proxy for agents
+│   ├── router_sessions.py (190) — Cosmos session CRUD
+│   ├── router_search.py (168) — AI Search for frontend viz
+│   ├── router_topology.py (174) — Fabric topology for graph viewer
+│   ├── router_health.py (216) — health + rediscovery
+│   ├── router_interactions.py (119) — frontend interactions
+│   ├── router_replay.py (89) — session replay
+│   ├── cosmos_helpers.py (143) — Cosmos DB helpers
+│   ├── fabric_discovery.py (301) — Fabric workspace discovery
+│   ├── config.py (172) — configuration
+│   ├── models.py (114) — data models
+│   └── log_broadcaster.py (96) — log streaming
+│
+├── supervisord.conf — multi-process orchestration
+├── nginx.conf — reverse proxy config
+└── Dockerfile — multi-stage (node build + python + nginx + supervisord)
+```
+
+### AFTER (Web App — single FastAPI process, zero infra plumbing)
+
+```
+Azure Web App (single process, `gunicorn app.main:app`)
+├── app/ (unified FastAPI)
+│   ├── main.py — single FastAPI app, all routes
+│   │
+│   │ ── Agent layer (agent-framework) ──
+│   ├── agents.py (~80 lines) — AzureAIAgentsProvider, get_orchestrator_agent()
+│   ├── streaming.py (~120 lines) — agent.run(stream=True) → SSE translation
+│   ├── dispatch.py (139 lines) — dispatch_field_engineer (kept)
+│   │
+│   │ ── Session layer ──
+│   ├── session_manager.py (~250 lines) — simplified, calls agent.run()
+│   ├── sessions.py (156 lines) — session dataclass (kept)
+│   │
+│   │ ── Data layer (merged from graph-query-api) ──
+│   ├── routers/
+│   │   ├── sessions.py (~150 lines) — REST/SSE endpoints
+│   │   ├── topology.py — Fabric topology for graph viewer (moved)
+│   │   ├── search.py — AI Search for frontend viz (moved)
+│   │   ├── health.py — health checks (moved)
+│   │   ├── interactions.py — frontend interactions (moved)
+│   │   └── replay.py — session replay (moved)
+│   ├── cosmos_helpers.py — Cosmos DB helpers (moved)
+│   ├── fabric_discovery.py — Fabric workspace discovery (moved)
+│   └── models.py — data models (moved)
+│
+├── static/ — React build output (served by FastAPI StaticFiles)
+└── startup.sh — `gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker`
+
+DELETED:
+├── graph-query-api/ (entire directory — merged into app/)
+├── supervisord.conf
+├── nginx.conf
+├── Dockerfile (replaced by Web App deployment)
+├── orchestrator.py (771 lines → 0)
+├── agent_ids.py (235 lines → 0)
+├── router_graph.py (76 lines → 0, FabricTool)
+├── router_telemetry.py (74 lines → 0, FabricTool)
+```
 │   ├── dispatch.py (139 lines)
 │   │   └── dispatch_field_engineer FunctionTool
 │   └── routers/sessions.py (219 lines)
@@ -69,33 +125,7 @@ Container App
 ### AFTER (Agent Framework — ~300 lines of integration)
 
 ```
-Container App
-├── api/ (FastAPI)
-│   ├── agents.py (~80 lines) — NEW
-│   │   ├── AzureAIAgentsProvider setup
-│   │   ├── Agent creation (5 agents)
-│   │   └── HandoffOrchestrator wiring
-│   ├── endpoints.py (~40 lines) — NEW
-│   │   ├── AG-UI endpoint OR
-│   │   └── SSE proxy via agent.run(stream=True)
-│   ├── sessions.py (~80 lines) — SIMPLIFIED
-│   │   ├── AgentSession integration
-│   │   └── Cosmos persistence (kept)
-│   ├── dispatch.py (139 lines) — KEPT (moved to FunctionTool)
-│   └── routers/sessions.py (~100 lines) — SIMPLIFIED
-│
-│   DELETED:
-│   ├── orchestrator.py (771 lines → 0)
-│   ├── agent_ids.py (235 lines → 0)
-│
-├── scripts/
-│   └── provision_agents.py (~120 lines) — SIMPLIFIED
-│       ├── AzureAIAgentsProvider.create_agent()
-│       └── No more OpenAPI loading, ConnectedAgentTool wiring
-│
-└── graph-query-api/ (REDUCED)
-    ├── router_graph.py — DELETED (FabricTool)
-    └── router_telemetry.py — DELETED (FabricTool)
+(See diagram above — unified Web App)
 ```
 
 ---
@@ -635,84 +665,257 @@ for await (const event of stream) {
 
 ## Phase 6: Orchestration Upgrade — Handoff Pattern (Day 3-4)
 
-### Current vs Framework Orchestration
-
-**Current**: The Orchestrator agent has `ConnectedAgentTool` references to sub-agents. Foundry's server-side agent loop decides when to call which sub-agent. Our code has no control over orchestration order — it's all in the LLM's prompt.
-
-**Framework alternative**: Use `HandoffOrchestrator` for explicit agent-to-agent routing with state management.
-
-```python
-from agent_framework_orchestrations import HandoffOrchestrator, HandoffConfiguration
-
-orchestrator = HandoffOrchestrator.build(
-    agents=[graph_agent, telemetry_agent, runbook_agent, ticket_agent],
-    handoffs={
-        graph_agent: [
-            HandoffConfiguration(target=telemetry_agent, description="Hand off to telemetry for alert data"),
-            HandoffConfiguration(target=runbook_agent, description="Hand off to runbook for procedures"),
-        ],
-        telemetry_agent: [
-            HandoffConfiguration(target=graph_agent, description="Hand off to graph for topology"),
-            HandoffConfiguration(target=ticket_agent, description="Hand off to tickets for history"),
-        ],
-        # ... each agent can hand off to any other
-    },
-)
-```
-
-**Cross-ref**: `agent-framework/python/packages/orchestrations/agent_framework_orchestrations/_handoff.py`:
-- `HandoffConfiguration(target=..., description=...)` — defines routing ✅
-- `_AutoHandoffMiddleware` — intercepts handoff tool calls ✅
-- Agents decide routing via tool calls (same as `ConnectedAgentTool`) ✅
-
-**Assessment**: This is architecturally elegant but **does not add value for our demo** because:
-1. Our orchestration is already handled server-side by Foundry's `ConnectedAgentTool`
-2. The Handoff pattern runs the orchestration **client-side** (in our Container App), which means MORE network round-trips
-3. Our agents are server-side Foundry agents, not local
-
-**Decision**: **Skip Handoff orchestration for now.** Keep ConnectedAgentTool server-side orchestration. The framework's `get_agent()` + `agent.run(stream=True)` pattern is sufficient. The Handoff pattern would only make sense if we moved to local agent execution.
+> **Skipped** — see assessment below.
 
 ---
 
-## Phase 7: Hosting Options (Day 4-5)
+## Phase 6: Merge graph-query-api into api/ (Day 3-4)
 
-### Option A: Container App + agent.run() (RECOMMENDED)
+### Rationale
 
-Keep the existing Container App. Replace the orchestrator bridge with `agent.run(stream=True)`. Minimal infrastructure change.
+With FabricTool handling graph/telemetry queries natively, the graph-query-api's agent-facing routers are deleted. The remaining routers serve the **frontend** only (topology viewer, search results, session CRUD, health). These belong in the main `api/` process.
 
-### Option B: Azure Functions with AgentFunctionApp
+Merging eliminates:
+- `supervisord.conf` — no more multi-process orchestration
+- `nginx.conf` — no more reverse proxy (FastAPI serves static files + API)
+- Two separate `pyproject.toml` / `uv.lock` dependency sets
+- Port 8100 internal routing
+
+### Step 6.1 — Move routers into api/app/routers/
+
+| Source (graph-query-api/) | Destination (api/app/routers/) | Lines |
+|--------------------------|-------------------------------|-------|
+| `router_sessions.py` | `routers/data_sessions.py` | 190 |
+| `router_search.py` | `routers/search.py` | 168 |
+| `router_topology.py` | `routers/topology.py` | 174 |
+| `router_health.py` | `routers/health.py` | 216 |
+| `router_interactions.py` | `routers/interactions.py` | 119 |
+| `router_replay.py` | `routers/replay.py` | 89 |
+
+Rename `router_sessions.py` → `data_sessions.py` to avoid collision with the existing `routers/sessions.py` (agent session SSE endpoints).
+
+### Step 6.2 — Move shared modules into api/app/
+
+| Source (graph-query-api/) | Destination (api/app/) | Lines |
+|--------------------------|------------------------|-------|
+| `cosmos_helpers.py` | `app/cosmos_helpers.py` | 143 |
+| `fabric_discovery.py` | `app/fabric_discovery.py` | 301 |
+| `models.py` | `app/data_models.py` | 114 |
+| `log_broadcaster.py` | `app/log_broadcaster.py` | 96 |
+| `config.py` | Merge into `app/paths.py` | 172 |
+
+### Step 6.3 — Update imports and route prefixes
+
+All moved routers currently mount at `/query/*`. After merge, re-mount them under the same prefix to avoid frontend changes:
 
 ```python
-from agent_framework.azure import AgentFunctionApp
+# api/app/main.py
+from app.routers import topology, search, data_sessions, health, interactions, replay
 
-app = AgentFunctionApp(agents=[orchestrator_agent], enable_health_check=True)
+app.include_router(topology.router, prefix="/query")
+app.include_router(search.router, prefix="/query")
+app.include_router(data_sessions.router, prefix="/query")
+app.include_router(health.router, prefix="/query")
+app.include_router(interactions.router, prefix="/query")
+app.include_router(replay.router, prefix="/query")
 ```
 
-**Cross-ref**: `agent-framework/python/samples/04-hosting/azure_functions/01_single_agent/function_app.py`:
+**Frontend impact**: Zero — routes stay at `/query/*`.
+
+### Step 6.4 — Update session_manager.py internal URL
+
 ```python
-app = AgentFunctionApp(agents=[_create_agent()], enable_health_check=True, max_poll_retries=50)
+# BEFORE — talks to graph-query-api on localhost:8100
+_GQ_BASE = os.getenv("GRAPH_QUERY_API_URI", "http://localhost:8100")
+
+# AFTER — no network hop, import directly
+from app.cosmos_helpers import cosmos_upsert_session, cosmos_list_sessions
 ```
 
-**Assessment**: Would require rewriting the entire API surface from FastAPI to Azure Functions triggers. **Not recommended** — too much churn for no real benefit. Our Container App already handles scaling.
+This eliminates the `httpx` internal HTTP calls between the two processes. Direct function calls instead.
 
-### Option C: Hosted Agents with from_agent_framework
+### Step 6.5 — Merge dependencies
+
+Merge `graph-query-api/pyproject.toml` dependencies into `api/pyproject.toml`. The graph-query-api has:
+- `azure-cosmos` — for Cosmos DB
+- `azure-kusto-data` — for Fabric KQL queries (topology/search)
+- `fabric-client` or REST calls — for Fabric API
+
+### Step 6.6 — Add static file serving to FastAPI
 
 ```python
-from azure.ai.agentserver.agentframework import from_agent_framework
+# api/app/main.py
+from fastapi.staticfiles import StaticFiles
 
-agent = AzureOpenAIChatClient(credential=DefaultAzureCredential()).as_agent(...)
-from_agent_framework(agent).run()
+# Serve React build at root
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 ```
 
-**Cross-ref**: `agent-framework/python/samples/05-end-to-end/hosted_agents/agent_with_hosted_mcp/main.py`:
-```python
-from azure.ai.agentserver.agentframework import from_agent_framework
-from_agent_framework(agent).run()
+The React build output goes to `api/static/` instead of nginx's `/usr/share/nginx/html`.
+
+### Step 6.7 — Delete graph-query-api directory
+
+```bash
+rm -rf graph-query-api/
+rm supervisord.conf
+rm nginx.conf
 ```
 
-**Assessment**: This is the v1 SOTA plan's `ImageBasedHostedAgentDefinition` approach, but via the framework. Same trade-offs (beta, ACR, container image). **Not recommended for now.**
+### Step 6.8 — Delete OpenAPI proxy files (already dead after FabricTool)
 
-**Decision**: **Option A — Container App + agent.run().**
+```bash
+rm graph-query-api/router_graph.py
+rm graph-query-api/router_telemetry.py
+rm graph-query-api/openapi/
+```
+
+---
+
+## Phase 7: Migrate to Azure Web App (Day 4-5)
+
+### Step 7.1 — Create new Bicep module: web-app.bicep
+
+```bicep
+@description('Name of the Web App')
+param webAppName string
+
+@description('Azure region')
+param location string
+
+@description('Resource tags')
+param tags object = {}
+
+@description('App Service Plan SKU')
+param skuName string = 'B1'
+
+// App Service Plan
+resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
+  name: '${webAppName}-plan'
+  location: location
+  tags: tags
+  kind: 'linux'
+  sku: {
+    name: skuName
+  }
+  properties: {
+    reserved: true  // Linux
+  }
+}
+
+// Web App
+resource webApp 'Microsoft.Web/sites@2024-04-01' = {
+  name: webAppName
+  location: location
+  tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    serverFarmId: plan.id
+    siteConfig: {
+      linuxFxVersion: 'PYTHON|3.12'
+      appCommandLine: 'gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000'
+      alwaysOn: true
+      ftpsState: 'Disabled'
+      appSettings: [
+        // All env vars from azure_config.env injected here
+        { name: 'PROJECT_ENDPOINT', value: projectEndpoint }
+        { name: 'MODEL_DEPLOYMENT_NAME', value: 'gpt-4.1' }
+        { name: 'COSMOS_NOSQL_ENDPOINT', value: cosmosEndpoint }
+        // ... etc
+      ]
+    }
+    httpsOnly: true
+  }
+}
+
+output webAppName string = webApp.name
+output webAppUrl string = 'https://${webApp.properties.defaultHostName}'
+output webAppPrincipalId string = webApp.identity.principalId
+```
+
+### Step 7.2 — Delete Container App Bicep module
+
+```bash
+rm infra/modules/container-app.bicep
+```
+
+Update `infra/main.bicep` to reference `web-app.bicep` instead.
+
+### Step 7.3 — Replace Dockerfile with Web App deployment
+
+**Delete**:
+- `Dockerfile` (multi-stage, nginx, supervisord)
+- `supervisord.conf`
+- `nginx.conf`
+
+**Create**: `startup.sh`
+```bash
+#!/bin/bash
+# Build frontend at deploy time (or pre-build in CI)
+cd /home/site/wwwroot
+gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+```
+
+### Step 7.4 — Update deploy.sh
+
+Replace the `az containerapp up` / `az acr build` deployment with:
+
+```bash
+# Build frontend
+cd frontend && npm ci && npm run build && cd ..
+# Copy build to static/
+cp -r frontend/dist api/static/
+# Deploy to Web App
+cd api && az webapp up --name "$WEB_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --runtime "PYTHON:3.12"
+```
+
+Or use `azd` with the new Web App target in `azure.yaml`.
+
+### Step 7.5 — Update azure.yaml for azd
+
+```yaml
+name: autonomous-network-demo
+services:
+  api:
+    host: appservice
+    project: ./api
+    language: python
+    hooks:
+      prepackage:
+        shell: bash
+        run: cd ../frontend && npm ci && npm run build && cp -r dist ../api/static/
+```
+
+### Step 7.6 — Update role assignments
+
+The Web App's system-assigned managed identity needs the same roles the Container App had:
+- Cosmos DB: `Cosmos DB Built-in Data Contributor`
+- AI Foundry: `Cognitive Services User`
+- AI Search: `Search Index Data Reader`
+- Storage: `Storage Blob Data Reader`
+
+The Bicep `roleAssignments` resource references change from `containerApp.outputs.principalId` to `webApp.outputs.webAppPrincipalId`.
+
+---
+
+## Phase 8: Hosting Options Assessment (DECIDED)
+
+> Container App vs Web App vs Azure Functions — **Web App selected.**
+
+| Aspect | Container App (current) | Web App (selected) | Azure Functions |
+|--------|------------------------|-------------------|-----------------|
+| Process model | Multi-process (supervisord) | Single process (gunicorn) | Per-function |
+| Static files | nginx proxy | FastAPI `StaticFiles` | Not applicable |
+| Config complexity | Dockerfile + nginx + supervisord | `startup.sh` | host.json + bindings |
+| Deployment | `az acr build` + `az containerapp up` | `az webapp up` or `azd deploy` | `func azure functionapp publish` |
+| SSE streaming | ✅ | ✅ | ⚠️ (limited) |
+| Scale to zero | ✅ (free) | ❌ (B1 ~$13/mo min) | ✅ (Consumption) |
+| Cold start | ~5-10s | ~3-5s (always-on) | ~10-30s |
+| Bicep complexity | 127 lines (ingress, secrets, env) | ~60 lines (plan + site) | ~40 lines |
+| CI/CD | Container build pipeline | `az webapp up` (no registry) | `func deploy` |
+
+**Decision**: Web App. Simpler deployment, no container registry, no multi-process orchestration, familiar `az webapp up` workflow. The ~$13/mo cost is negligible for a demo.
 
 ---
 
@@ -724,11 +927,32 @@ from_agent_framework(agent).run()
 |------|-------|--------|
 | `api/app/orchestrator.py` | 772 | Framework handles streaming, tool execution, thread management |
 | `api/app/agent_ids.py` | 236 | `AzureAIAgentsProvider.get_agent()` replaces discovery |
-| `graph-query-api/router_graph.py` | 76 | FabricTool replaces OpenAPI proxy (future) |
-| `graph-query-api/router_telemetry.py` | 74 | FabricTool replaces OpenAPI proxy (future) |
-| `graph-query-api/openapi/templates/graph.yaml` | 61 | No more OpenAPI specs |
-| `graph-query-api/openapi/templates/telemetry.yaml` | 61 | No more OpenAPI specs |
-| **Total deleted** | **1,280** | |
+| `graph-query-api/router_graph.py` | 76 | FabricTool replaces OpenAPI proxy |
+| `graph-query-api/router_telemetry.py` | 74 | FabricTool replaces OpenAPI proxy |
+| `graph-query-api/openapi/templates/*.yaml` | 122 | No more OpenAPI specs |
+| `graph-query-api/main.py` | 193 | Merged into api/app/main.py |
+| `graph-query-api/config.py` | 172 | Merged into api/app/paths.py |
+| `supervisord.conf` | 40 | Single process — no multi-process orchestration |
+| `nginx.conf` | 55 | FastAPI serves static files directly |
+| `Dockerfile` | 75 | Web App deployment — no container build |
+| `infra/modules/container-app.bicep` | 127 | Replaced by web-app.bicep |
+| **Total deleted** | **~1,942** | |
+
+### Files MOVED (graph-query-api → api/app/)
+
+| Source | Destination | Lines |
+|--------|------------|-------|
+| `graph-query-api/router_sessions.py` | `api/app/routers/data_sessions.py` | 190 |
+| `graph-query-api/router_search.py` | `api/app/routers/search.py` | 168 |
+| `graph-query-api/router_topology.py` | `api/app/routers/topology.py` | 174 |
+| `graph-query-api/router_health.py` | `api/app/routers/health.py` | 216 |
+| `graph-query-api/router_interactions.py` | `api/app/routers/interactions.py` | 119 |
+| `graph-query-api/router_replay.py` | `api/app/routers/replay.py` | 89 |
+| `graph-query-api/cosmos_helpers.py` | `api/app/cosmos_helpers.py` | 143 |
+| `graph-query-api/fabric_discovery.py` | `api/app/fabric_discovery.py` | 301 |
+| `graph-query-api/models.py` | `api/app/data_models.py` | 114 |
+| `graph-query-api/log_broadcaster.py` | `api/app/log_broadcaster.py` | 96 |
+| **Total moved** | | **1,610** |
 
 ### Files CREATED
 
@@ -736,28 +960,33 @@ from_agent_framework(agent).run()
 |------|-------|---------|
 | `api/app/agents.py` | ~80 | AzureAIAgentsProvider singleton, get_orchestrator_agent() |
 | `api/app/streaming.py` | ~120 | agent.run(stream=True) → SSE event translation |
-| **Total created** | **~200** | |
+| `infra/modules/web-app.bicep` | ~60 | App Service Plan + Web App |
+| `startup.sh` | ~5 | gunicorn command |
+| **Total created** | **~265** | |
 
 ### Files MODIFIED
 
 | File | Before | After | Delta |
 |------|--------|-------|-------|
-| `api/pyproject.toml` | 18 | 18 | Dependencies change |
-| `pyproject.toml` | 27 | 27 | Dependencies change |
-| `api/app/session_manager.py` | 367 | ~250 | -117 (no thread bridge) |
-| `scripts/agent_provisioner.py` | 416 | ~120 | -296 (framework does the heavy lifting) |
-| `scripts/provision_agents.py` | 183 | ~100 | -83 (simplified) |
-| `api/app/routers/sessions.py` | 219 | ~150 | -69 (simplified) |
-| `graph-query-api/main.py` | 193 | ~160 | -33 (remove graph/telemetry routers) |
+| `api/pyproject.toml` | 18 | ~25 | Deps change + graph-query-api deps merged |
+| `api/app/main.py` | ~50 | ~100 | Mount merged routers + static files |
+| `api/app/session_manager.py` | 367 | ~250 | −117 (no thread bridge, direct cosmos calls) |
+| `scripts/agent_provisioner.py` | 416 | ~120 | −296 (framework does the heavy lifting) |
+| `scripts/provision_agents.py` | 183 | ~100 | −83 (simplified) |
+| `api/app/routers/sessions.py` | 219 | ~150 | −69 (simplified) |
+| `infra/main.bicep` | ~300 | ~280 | Swap container-app for web-app module |
+| `deploy.sh` | ~900 | ~850 | Remove container build, add `az webapp up` |
+| `azure.yaml` | ~20 | ~15 | Change host to `appservice` |
 
 ### Net Code Change
 
 | Category | Lines |
 |----------|-------|
-| Deleted | −1,280 |
-| Simplified | −598 |
-| Created | +200 |
-| **Net** | **−1,678** |
+| Deleted (files removed) | −1,942 |
+| Simplified (modifications) | −565 |
+| Created (new files) | +265 |
+| Moved (neutral — same code, new location) | 0 |
+| **Net** | **−2,242** |
 
 ---
 
@@ -787,9 +1016,17 @@ The `agent-framework-azure-ai` package pins `azure-ai-agents==1.2.0b5`. Our code
 
 ## Infrastructure Changes
 
-### Bicep — No changes required
+### Bicep — Container App → Web App
 
-The framework operates against the same Foundry project endpoint, same agents, same tools. No new Azure resources needed.
+| Change | Detail |
+|--------|--------|
+| **Delete** `infra/modules/container-app.bicep` (127 lines) | No more Container App |
+| **Create** `infra/modules/web-app.bicep` (~60 lines) | App Service Plan (B1 Linux) + Web App (Python 3.12) |
+| **Update** `infra/main.bicep` | Swap module reference, update role assignment principal ID |
+| **Delete** Container App Environment Bicep (if separate) | No longer needed |
+| Role assignments | Change `containerApp.outputs.principalId` → `webApp.outputs.webAppPrincipalId` |
+
+No changes to: AI Foundry, Cosmos DB, AI Search, Storage — all stay the same.
 
 ### Environment Variables — One addition
 
@@ -797,19 +1034,15 @@ The framework operates against the same Foundry project endpoint, same agents, s
 ORCHESTRATOR_AGENT_ID=<id>   # Set by provision_agents.py after creation
 ```
 
-This replaces the dynamic agent discovery in `agent_ids.py`. After provisioning writes the ID, the Container App reads it at startup.
+This replaces the dynamic agent discovery in `agent_ids.py`. After provisioning writes the ID, the Web App reads it at startup.
 
 ---
 
 ## Frontend Impact
 
-### Option A: Zero frontend changes
+### Zero frontend changes
 
-The `streaming.py` module translates framework events → the same SSE schema (`tool_call.start`, `message.delta`, etc.) that the frontend already consumes. **No frontend changes.**
-
-### Option B: AG-UI protocol (future)
-
-Replace `useConversation.ts` SSE parser with AG-UI client library. The AG-UI protocol is a standardized streaming format that the framework emits natively. This would eliminate the custom SSE line parser.
+The `streaming.py` module translates framework events → the same SSE schema (`tool_call.start`, `message.delta`, etc.) that the frontend already consumes. Routes stay at `/api/*` and `/query/*`. **No frontend changes.**
 
 ---
 
@@ -821,8 +1054,8 @@ Replace `useConversation.ts` SSE parser with AG-UI client library. The AG-UI pro
 | 2 | 3 | Rewrite provisioner, provision agents | Low |
 | 2-3 | 4 | Create streaming.py, update session_manager to use it | Medium |
 | 3 | 5 | Delete orchestrator.py + agent_ids.py, test end-to-end | High |
-| 4 | 6 (skip) | Evaluate Handoff orchestration — likely skip | N/A |
-| 5 | 7 | Delete graph/telemetry OpenAPI proxies (if FabricTool works) | Medium |
+| 3-4 | 6 | Merge graph-query-api into api/, delete OpenAPI proxies | Medium |
+| 4-5 | 7 | Create web-app.bicep, delete container-app.bicep, deploy | Medium |
 
 ### Total: 5 working days
 
@@ -837,27 +1070,31 @@ Replace `useConversation.ts` SSE parser with AG-UI client library. The AG-UI pro
 | `agent.run(stream=True)` event format differs from our SSE schema | **High** | **Medium** | `streaming.py` translation layer absorbs the difference |
 | Framework async patterns conflict with our sync/thread bridge | **Low** | **Medium** | Framework is fully async — we drop the thread bridge entirely |
 | `AzureAIAgentClient` doesn't expose ConnectedAgentTool step details | **Medium** | **Medium** | Test streaming output format; may need to parse RunStep events |
-| Performance regression (framework overhead) | **Low** | **Low** | Framework uses same SDK under the hood |
+| Web App SSE timeout at 230s | **Low** | **Medium** | Set `WEBSITE_RUN_FROM_PACKAGE` and `FUNCTIONS_REQUEST_TIMEOUT` |
+| graph-query-api merge breaks import paths | **Low** | **Low** | All routes re-mounted at same `/query/*` prefix |
+| Web App cold start latency | **Low** | **Low** | `alwaysOn: true` on B1 plan |
 
 ---
 
-## Comparison: v1 (Hosted Agents) vs v2 (Agent Framework)
+## Comparison: v1 (Hosted Agents) vs v2 (Agent Framework + Web App)
 
 | Aspect | v1 (SOTA_DESIGN_IMPLEMENTATION_PLAN.md) | v2 (This document) |
 |--------|----------------------------------------|---------------------|
-| **Approach** | ImageBasedHostedAgentDefinition + custom container | Agent Framework as runtime layer |
+| **Approach** | ImageBasedHostedAgentDefinition + custom container | Agent Framework + Azure Web App |
 | **SDK** | `azure-ai-projects>=2.0.0b4` (beta) | `agent-framework>=1.0.0rc1` (RC) |
-| **Stability** | Early beta, undocumented RESPONSES protocol | RC → GA soon, active development, Microsoft official |
-| **ACR required** | Yes (new infrastructure) | No |
-| **Container image** | Must build, push, version | No |
-| **CI/CD changes** | New image build pipeline | None |
-| **Bicep changes** | ACR, enablePublicHostingEnvironment, Fabric connection | None |
-| **Lines eliminated** | ~1,169 net | ~1,678 net |
-| **New code** | ~320 lines (container + scripts) | ~200 lines (agents.py + streaming.py) |
-| **Frontend changes** | SSE event mapping (container emits different format) | None (or AG-UI protocol future) |
-| **Time estimate** | ~18 working days (7 phases) | ~5 working days |
-| **Fallback** | Restore orchestrator.py | Restore orchestrator.py |
-| **Community** | No framework community | Microsoft-backed open-source framework |
+| **Hosting** | Container Apps (kept) | **Azure Web App** (simplified) |
+| **Process model** | 2 processes + nginx + supervisord | **Single process** (gunicorn + FastAPI) |
+| **Stability** | Early beta, undocumented RESPONSES protocol | RC → GA soon, active development |
+| **ACR required** | Yes (new infrastructure) | **No** |
+| **Container image** | Must build, push, version | **No** (`az webapp up`) |
+| **CI/CD changes** | New image build pipeline | **Simplified** (zip deploy) |
+| **Bicep complexity** | 127 lines (container-app) + ACR | **~60 lines** (web-app) |
+| **Lines eliminated** | ~1,169 net | **~2,242 net** |
+| **New code** | ~320 lines | **~265 lines** |
+| **Frontend changes** | SSE event mapping | **None** |
+| **Time estimate** | ~18 working days (7 phases) | **~5 working days** |
+| **Infrastructure files removed** | 0 | **3** (Dockerfile, nginx.conf, supervisord.conf) |
+| **Fallback** | Restore orchestrator.py | Restore orchestrator.py + re-deploy Container App |
 
 ---
 
