@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import type { StepEvent } from '../types';
+import type { ToolCall } from '../types/conversation';
 import { ActionEmailModal } from './ActionEmailModal';
 
 interface ActionCardProps {
-  step: StepEvent;
+  toolCall: ToolCall;
 }
 
-export function ActionCard({ step }: ActionCardProps) {
+export function ActionCard({ toolCall }: ActionCardProps) {
   const [modalOpen, setModalOpen] = useState(false);
-  const action = step.action;
+  const action = toolCall.action;
 
   if (!action) return null;
 
@@ -35,7 +35,7 @@ export function ActionCard({ step }: ActionCardProps) {
           <div className="flex items-center gap-2">
             <span className="text-amber-400 text-sm">⚡</span>
             <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
-              Action — {step.agent}
+              Action — {toolCall.agent}
             </span>
             <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${urgencyColor}`}>
               {action.urgency}
@@ -45,8 +45,8 @@ export function ActionCard({ step }: ActionCardProps) {
               DISPATCHED ✓
             </span>
           </div>
-          {step.duration && (
-            <span className="text-xs text-text-muted">{step.duration}</span>
+          {toolCall.duration && (
+            <span className="text-xs text-text-muted">{toolCall.duration}</span>
           )}
         </div>
 

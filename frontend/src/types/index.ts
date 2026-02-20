@@ -180,3 +180,10 @@ export interface SessionDetail {
   thread_id: string | null;
   turn_count: number;
 }
+
+// Re-export conversation types for convenience
+export type {
+  Message, UserMessage, AssistantMessage,
+  ToolCall, ToolCallStatus, SubStep,
+  ConversationState, ConversationAction,
+} from './conversation';

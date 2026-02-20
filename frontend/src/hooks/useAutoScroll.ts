@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ChatMessage, ThinkingState } from '../types';
+import type { Message } from '../types/conversation';
 
 /**
  * Auto-scroll hook for the chat thread.
  *
- * Targets the chat scroll container (the overflow-y-auto div wrapping ChatPanel).
+ * Targets the chat scroll container (the overflow-y-auto div wrapping the conversation panel).
  * Returns a ref to attach to that container.
  */
-export function useAutoScroll(messages: ChatMessage[], currentThinking: ThinkingState | null) {
+export function useAutoScroll(messages: Message[]) {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -36,7 +36,7 @@ export function useAutoScroll(messages: ChatMessage[], currentThinking: Thinking
     if (isNearBottom) {
       scrollToBottom();
     }
-  }, [messages, currentThinking, isNearBottom, scrollToBottom]);
+  }, [messages, isNearBottom, scrollToBottom]);
 
   return { isNearBottom, scrollToBottom, scrollRef };
 }

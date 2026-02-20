@@ -2,9 +2,9 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
-import type { StepEvent, VisualizationData } from '../../types';
+import type { ToolCall } from '../../types/conversation';
+import type { VisualizationData } from '../../types';
 import { getVizButtonMeta } from '../../utils/agentType';
-import { ThinkingDots } from '../ThinkingDots';
 import { GraphResultView } from './GraphResultView';
 import { TableResultView } from './TableResultView';
 import { DocumentResultView } from './DocumentResultView';
@@ -12,7 +12,7 @@ import { DocumentResultView } from './DocumentResultView';
 interface StepVisualizationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  step: StepEvent;
+  toolCall: ToolCall;
   vizData: VisualizationData[];
   loading: boolean;
   error: string | null;
@@ -42,7 +42,7 @@ type ModalTab = 'visualization' | 'summary';
 export function StepVisualizationModal({
   isOpen,
   onClose,
-  step,
+  toolCall,
   vizData,
   loading,
   error,
@@ -50,7 +50,7 @@ export function StepVisualizationModal({
 }: StepVisualizationModalProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
-  const { icon, tooltip } = getVizButtonMeta(step.agent);
+  const { icon, tooltip } = getVizButtonMeta(toolCall.agent);
 
   // Active viz item for multi-query tabs
   const [activeVizIndex, setActiveVizIndex] = useState(0);
@@ -137,7 +137,7 @@ export function StepVisualizationModal({
             className="fixed inset-0 z-50 flex items-center justify-center p-6"
             role="dialog"
             aria-modal="true"
-            aria-label={`${step.agent} ${tooltip}`}
+            aria-label={`${toolCall.agent} ${tooltip}`}
             {...panelVariants}
             transition={{ duration: 0.2, ease: 'easeOut' }}
             onKeyDown={handleKeyDown}
@@ -147,7 +147,7 @@ export function StepVisualizationModal({
               <div className="flex items-center justify-between bg-neutral-bg2 border-b border-border px-4 py-3 shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm">{icon}</span>
-                  <span className="text-sm font-medium text-text-primary">{step.agent}</span>
+                  <span className="text-sm font-medium text-text-primary">{toolCall.agent}</span>
                   <span className="text-xs text-text-muted">— {title}</span>
                 </div>
                 <button
@@ -163,7 +163,7 @@ export function StepVisualizationModal({
               </div>
 
               {/* Tab toggle for graph/table views */}
-              {hasStructuredViz && step.response && (
+              {hasStructuredViz && toolCall.response && (
                 <div className="flex gap-1 px-4 pt-3 pb-0 shrink-0">
                   <div className="flex gap-1 p-0.5 bg-neutral-bg3 rounded-lg w-fit">
                     <button
@@ -220,10 +220,15 @@ export function StepVisualizationModal({
               <div className="flex-1 overflow-auto min-h-[300px]">
                 {loading && (
                   <div className="flex flex-col items-center justify-center h-64 gap-3">
-                    <ThinkingDots
-                      agent={step.agent}
-                      status={`Loading ${step.agent === 'GraphExplorerAgent' ? 'graph' : 'telemetry'} data...`}
-                    />
+                    <div className="flex items-center gap-2">
+                      <svg className="animate-spin h-5 w-5 text-brand" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <span className="text-sm text-text-muted">
+                        Loading {toolCall.agent === 'GraphExplorerAgent' ? 'graph' : 'telemetry'} data…
+                      </span>
+                    </div>
                   </div>
                 )}
 
@@ -254,10 +259,10 @@ export function StepVisualizationModal({
                     )}
 
                     {/* Agent Summary tab */}
-                    {activeTab === 'summary' && step.response && (
+                    {activeTab === 'summary' && toolCall.response && (
                       <div className="p-4">
                         <div className="text-sm prose prose-sm max-w-none">
-                          <ReactMarkdown>{step.response}</ReactMarkdown>
+                          <ReactMarkdown>{toolCall.response}</ReactMarkdown>
                         </div>
                       </div>
                     )}

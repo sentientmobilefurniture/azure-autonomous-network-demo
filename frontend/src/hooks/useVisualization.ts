@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import type { StepEvent, VisualizationData } from '../types';
+import type { ToolCall } from '../types/conversation';
+import type { VisualizationData } from '../types';
 
 /**
  * Hook for loading visualization data for a step.
@@ -15,9 +16,8 @@ export function useVisualization() {
   const [error, setError] = useState<string | null>(null);
 
   const getVisualization = useCallback(
-    async (step: StepEvent): Promise<VisualizationData[]> => {
-      // Backward compat: merge v18 visualizations[] and legacy visualization
-      const vizArray = step.visualizations ?? (step.visualization ? [step.visualization] : []);
+    async (tc: ToolCall): Promise<VisualizationData[]> => {
+      const vizArray = tc.visualizations ?? [];
 
       // 1. Primary path: use persisted structured visualization data (graph/table types)
       if (vizArray.length) {
@@ -30,15 +30,15 @@ export function useVisualization() {
       }
 
       // 2. For AI Search agents: query the index directly to get raw results
-      const isSearchAgent = ['RunbookKBAgent', 'HistoricalTicketAgent', 'AzureAISearch'].includes(step.agent);
-      if (isSearchAgent && step.query) {
+      const isSearchAgent = ['RunbookKBAgent', 'HistoricalTicketAgent', 'AzureAISearch'].includes(tc.agent);
+      if (isSearchAgent && tc.query) {
         setLoading(true);
         setError(null);
         try {
           const res = await fetch('/query/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent: step.agent, query: step.query, top: 10 }),
+            body: JSON.stringify({ agent: tc.agent, query: tc.query, top: 10 }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const result = await res.json();
@@ -49,8 +49,8 @@ export function useVisualization() {
             const searchViz: VisualizationData = {
               type: 'documents',
               data: {
-                content: step.response ?? '',
-                agent: step.agent,
+                content: tc.response ?? '',
+                agent: tc.agent,
                 citations: vizArray[0]?.type === 'documents' ? vizArray[0].data.citations : undefined,
                 searchHits: result.hits,
                 indexName: result.index_name,
@@ -74,12 +74,12 @@ export function useVisualization() {
       }
 
       // 4. Fallback: show response text as documents view
-      if (step.response) {
+      if (tc.response) {
         const docFallback: VisualizationData = {
           type: 'documents',
           data: {
-            content: step.response,
-            agent: step.agent,
+            content: tc.response,
+            agent: tc.agent,
           },
         };
         setData([docFallback]);

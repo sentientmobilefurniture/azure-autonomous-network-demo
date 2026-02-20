@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { ChatMessage } from '../types';
+import type { UserMessage as UserMessageType } from '../types/conversation';
 
 interface UserMessageProps {
-  message: ChatMessage;
+  message: UserMessageType;
 }
 
 function formatTime(iso: string): string {
@@ -15,7 +15,7 @@ function formatTime(iso: string): string {
 
 export function UserMessage({ message }: UserMessageProps) {
   const [expanded, setExpanded] = useState(false);
-  const text = message.text ?? '';
+  const text = message.text;
   const isLong = text.length > 200;
 
   return (

@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { SubStepEvent } from '../types';
+import type { SubStep } from '../types/conversation';
 
 interface SubStepListProps {
-  subSteps: SubStepEvent[];
+  subSteps: SubStep[];
   agentName: string;
 }
 
@@ -42,7 +42,7 @@ export function SubStepList({ subSteps, agentName }: SubStepListProps) {
             {isOpen && (
               <div className="px-2.5 pb-2 text-[11px]">
                 <div className="bg-neutral-bg3 rounded p-2 text-text-muted whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-                  {ss.result_summary}
+                  {ss.resultSummary}
                 </div>
                 {ss.agent && ss.agent !== agentName && (
                   <span className="text-[10px] text-text-muted mt-1 block">
